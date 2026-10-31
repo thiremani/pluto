@@ -85,9 +85,9 @@ da1, da2  # use before overwrite
 da1, da2 = da1, da1
 da1, da2
 
-# A heap value transferred or copied into a binding the solver typed static
-# is still that binding's to release: the read after the transfer borrows it,
-# and replacing it with a static string releases it.
+# A binding that takes over or copies a widened binding's heap value stores
+# heap like it: the read after the transfer borrows it, and replacing it with a
+# static string copies the string and releases the old value.
 text = "old"
 text, otherText = text ⊕ "!", text
 copy = otherText

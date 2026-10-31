@@ -45,3 +45,8 @@ res = ResetTable(prev, x)
     res = x > -1 [
       : Name("") Score(0)
     ]
+
+# A call that prints when it runs.
+res = Loud(x)
+    "called -x"
+    res = x

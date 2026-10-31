@@ -29,9 +29,9 @@ ownership are shared across its outputs, so individual slots cannot migrate
 independently. An *argument* whose conditional or checked failure remains
 unresolved (`MayYield`) likewise defers the whole call to Step 6 — row 6c is a
 cross-cutting override of every call row, whatever the target or value kind:
-the failure is resolved at the invocation boundary, and strict source-order
-argument evaluation (plan §3) is the Step 6 behavior change that makes the
-combination migratable. A fallback that resolves every failure leaves the
+the failure is resolved at the invocation boundary, and checks-first
+evaluation (plan §3), which Step 6 builds, is what makes the combination
+migratable. A fallback that resolves every failure leaves the
 argument `MustYield` and outside this rule, though the router may still defer
 it until its node is supported.
 
@@ -50,9 +50,9 @@ disposition, and cutover step are identical across a range of values.
 
 Print has **no gate axis**: `ast.PrintStatement` carries only an expression, so
 its conditionality comes entirely from cond-expressions inside its arguments.
-A gated print (`arr[oob] val1, val2`) is scheduled syntax that does not
-parse today; it gets its own axis value and rows when it lands, in its own
-required PR before Step 6.
+A gated print (`arr[oob] val1, val2`) does not parse today and is no
+longer scheduled (plan §9); it would get its own axis value and rows if it
+lands.
 
 **Domain-role note.** `LoopInside` is the callee's flag, and the call site owns
 the loop when it is *false*: `compileCallExpression` selects
@@ -108,7 +108,7 @@ two together rather than treating any single row as a deletion trigger.
 | 5g | ranged | ordinary, call | scalar, heap | blank (`_`) | shared gate | both | R (sink shipped, §4) | 7 |
 | 6 | none | call | scalar (direct return) | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
 | 6b | none | call | heap, multi-output (indirect return) | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
-| 6c | none | call, conditional or checked (unresolved argument) | any call value kind | any call target | — | both | **S (eager argument evaluation, plan §3; cross-cutting override of every call row)** | 6 |
+| 6c | none | call, conditional or checked (unresolved argument) | any call value kind | any call target | — | both | **S (checks-first argument evaluation, plan §3; cross-cutting override of every call row)** | 6 |
 | 7 | none | checked | scalar, heap | local | — | — | R | 5 |
 | 7b | none | checked, conditional (fallback) | scalar, heap | local | — | — | **S (decided behavior change; semantics doc "Checked-access fallback")** | 5 |
 | 7c | none | checked, conditional (fallback, propagated) | scalar, multi-output | local | — | both (call form) | **S (decided; semantics doc)** | 6 |
@@ -170,8 +170,8 @@ two together rather than treating any single row as a deletion trigger.
 - **5g** — as 5f under a ranged gate: a rejected point produces no value to discard. *Missing:* **uncovered**: blank under a ranged gate. *Helpers:* `compileCondRangedStatement`
 - **6** — `compileCallExpression` → `compileCallInner`. *Tests:* `math/rec.spt`, `math/div`
 - **6b** — destination-seeded output slots via `compileIndirectCallIntoStagedOutputs`. *Tests:* `const_args/*`, `output_refinement`, `mem/mem.spt`
-- **6c** — an argument whose conditional or checked failure remains unresolved makes the invocation `MayYield` (call-merge, plan §9) regardless of callee effect, so the whole call defers to Step 6 even when every output is `MustWrite`; this overrides every call row above — 5c, 6, 6b, 8b, 35d, 36d, and the function-output and ranged call rows — whatever the target or value kind. An inner fallback that resolves every failure leaves the argument `MustYield` and outside this row. Today `compileCondOperands` evaluates the extracted conditions first and the sibling arguments only on the success branch, so `r = Pair(Loud(a), c > 5)` never runs `Loud`; plan §3 makes argument evaluation strict in source order. *Missing:* **uncovered** — regressions `F(sideEffect(), failingArg)` and `F(failingArg, sideEffect())` land with Step 6. *Helpers:* `compileCondOperands`
-- **7** — `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr`. *Tests:* `array/oob_skip`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
+- **6c** — an argument whose conditional or checked failure remains unresolved makes the invocation `MayYield` (call-merge, plan §9) regardless of callee effect, so the whole call defers to Step 6 even when every output is `MustWrite`; this overrides every call row above — 5c, 6, 6b, 8b, 35d, 36d, and the function-output and ranged call rows — whatever the target or value kind. An inner fallback that resolves every failure leaves the argument `MustYield` and outside this row. Today `compileCondOperands` evaluates the extracted conditions first and the sibling arguments only on the success branch, so `r = Pair(Loud(a), c > 5)` never runs `Loud`; plan §3 keeps that order, stops at the first failed check (today `a, b = Pair(1 > 2, Loud(7) > 0)` still calls `Loud`), and makes a checked argument a check too. *Missing:* **uncovered** — regressions `F(sideEffect(), failingArg)` and `F(failingArg, sideEffect())`, neither of which runs the side effect, land with Step 6. *Helpers:* `compileCondOperands`
+- **7** — `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr`. Migrates in today's order: the bounds bit is tested where the read happens, so `y = Loud(1) + arr[oob]` still calls `Loud`; Step 6 revisits the plan to test it first (plan §3). *Tests:* `array/oob_skip`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
 - **7b** — **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates`. *Missing:* regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"`. *Helpers:* condLHS spine
 - **7c** — comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver. *Missing:* regressions when implemented. *Helpers:* condLHS spine
 - **7e** — ranged checked fallback: the fallback resolves per iteration inside the loop nest. *Missing:* regressions when implemented. *Helpers:* condLHS spine, ranged staging
@@ -196,9 +196,9 @@ two together rather than treating any single row as a deletion trigger.
 - **17** — `compileCondStatement` + `aliasCondDests`. *Tests:* `tests/cond/expr_forms`. *Helpers:* `aliasCondDests`
 - **18** — `compileCondStatement` → ordinary collector inside the IF block. *Tests:* `mem/cache_reuse/cache_reuse.pt`. *Missing:* scalar-gated heap collector. *Helpers:* collector rewrite
 - **19** — `compileCondExprStatement` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `cond/expr_forms`, `math/func.spt`. *Helpers:* `compileCondExprStatement`
-- **20** — `compileCondExprStatement` → `compilePerSlotAssign`. *Tests:* `cond/value_cond_expr`, `cond/logical_and`. *Helpers:* `compilePerSlotAssign`
-- **21** — `compileCondExprStatement` + bounds guard. *Tests:* `array/oob_skip`, `cond/logical_and`. *Helpers:* condLHS spine
-- **22** — `compileCondExprStatement` → `stageCondRangedExpr`. *Tests:* `cond/logical_and:143,413`. *Helpers:* ranged staging
+- **20** — `compileCondExprStatement` → `compilePerSlotAssign`. *Tests:* `cond/value_cond_expr`, `cond/logical_ops`. *Helpers:* `compilePerSlotAssign`
+- **21** — `compileCondExprStatement` + bounds guard. *Tests:* `array/oob_skip`, `cond/logical_ops`. *Helpers:* condLHS spine
+- **22** — `compileCondExprStatement` → `stageCondRangedExpr`. *Tests:* `cond/logical_ops:143,413`. *Helpers:* ranged staging
 - **23** — `compileCondRangedStatement` → `stageCondRangedAssignments`. *Tests:* `array/cond_accum`, `cond/condition_boundary`. *Helpers:* `compileCondRangedStatement`
 - **24** — `compileCondRangedStatement` → `newStatementArrayCollector`. *Tests:* `array/cond_accum`, `cond/domain_activation`. *Helpers:* `statementArrayCollector` trio
 - **25** — `compileCondRangedIteration` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `array/array_expr`. *Helpers:* `compileCondExprValue`
@@ -224,7 +224,7 @@ two together rather than treating any single row as a deletion trigger.
 | 29 | — | ordinary | scalar, heap | none | — | — | S | 6 |
 | 29b | — | call | scalar (direct return) | none | — | all-`MustWrite` after #123; no validity variant | R | 6 |
 | 29c | — | call | heap, multi-output (indirect return) | none | — | both; indirect outputs already carry write flags — no variant needed | R | 6 |
-| 30 | — | conditional | scalar, heap | none | — | — | **S (suppression outcome retained; eager sibling evaluation is a behavior change, §5)** | 6 |
+| 30 | — | conditional | scalar, heap | none | — | — | **S (suppression outcome retained; checks now stop at the first failure, §5)** | 6 |
 | 31 | — | checked | scalar | none | — | — | **S (behavior changes, §5)** | 5, 6 |
 | 31b | — | checked, ranged | scalar, heap | none | call-site loop | — | **S (behavior changes, §5)** | 5, 6, 8 |
 | 32 | — | ranged | scalar | none | call-site loop | — | S | 8 |
@@ -242,9 +242,9 @@ two together rather than treating any single row as a deletion trigger.
 - **29** — `compilePrintStatement` direct arm. *Tests:* `helloworld`, `str`, `1.2-report`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
 - **29b** — non-ranged direct call argument in print. A call that runs writes every output (#123), so no `{value, didWrite}` variant is needed. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
 - **29c** — non-ranged indirect call argument in print. *Missing:* **uncovered**: multi-output and heap call results printed directly
-- **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* side-effecting or owned-heap sibling of a failed conditional (add with Step 6). *Helpers:* `compileCondOperands`
+- **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* a side-effecting or owned-heap sibling of a failed conditional, which must not run or allocate (add with Step 6). *Helpers:* `compileCondOperands`
 - **31** — no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline. *Tests:* `array/oob_print`. *Missing:* a suppressed invocation whose arguments own heap temporaries (add with Step 6). *Helpers:* §5
-- **31b** — `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration after Step 6. *Tests:* `array/oob_print`. *Missing:* heap-valued checked+ranged print. *Helpers:* `withCollectorPreparedLoopNest`
+- **31b** — `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration once this path migrates in Step 8. *Tests:* `array/oob_print`. *Missing:* heap-valued checked+ranged print. *Helpers:* `withCollectorPreparedLoopNest`
 - **32** — `withCollectorPreparedLoopNest` wraps the print in the argument's loop nest. *Tests:* `print_range`, `math/range.spt`. *Helpers:* `withCollectorPreparedLoopNest`
 - **33** — a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false. *Tests:* `math/print_func` (scalar direct only). *Missing:* heap and multi-output ranged calls in print — uncovered; same Step 6 (invocation gating) prerequisite as rows 29b/29c. *Helpers:* `withCollectorPreparedLoopNest`
 - **33b** — a print statement **inside a function body** whose `Range` parameter drives the body; the print runs once per admitted point of the function-level domain. *Tests:* `math/range.pt` (`Triple`; both call sites are Range-driven), `math/acc_fmt.pt`
@@ -357,22 +357,24 @@ successful value, so `a, "", "", b` emits `a` and `b` separated by three
 spaces, distinguishable from suppression. The atomic unit is the invocation —
 one emission group — not necessarily one physical line.
 
-The suppression outcome for a failed conditional matches today, but
-evaluation becomes **eager**: today `compileCondOperands` evaluates the
-conditions first and compiles sibling arguments only on the success branch,
-while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
-changes two observable things — the OOB materialized zero becomes invocation
-suppression, and sibling side effects now occur even on a suppressed
-invocation. Row 30's suppression outcome is retained while its lowering
-reroutes off `compileCondOperands` and its siblings become eagerly evaluated;
-the baseline for both failure kinds is pinned in `tests/array/oob_print.spt`.
+The suppression outcome for a failed conditional matches today, and so does
+most of its order: `compileCondOperands` evaluates the conditions first and
+compiles sibling arguments only on the success branch, and `PrintPlan` runs
+every argument's checks first too (plan §3). Step 6 changes three things:
+checks stop at the first failure, where today every condition runs before any
+is tested (`"print", 1 > 2, Loud(8) > 0` stops calling `Loud`); an OOB read
+becomes a check, so its materialized zero becomes invocation suppression and
+its siblings no longer run; and work beside a failed check inside a
+comparison, an `&&` right side or an `||` left side stops running
+(`value_cond_expr`'s `PosPrint` lines). Row 30's outcome is retained while
+its lowering reroutes off `compileCondOperands`; the baseline for both
+failure kinds is pinned in `tests/array/oob_print.spt`.
 
 Per-slot printing (a failed slot omitting only itself) was considered and
 rejected in favor of the call rule: print is a call, and calls merge lanes.
-Line-level suppression that skips *evaluating* siblings would instead belong
-to a **gated print** (`arr[oob] val1, val2`) — scheduled syntax that
-does not parse today (`PrintStatement` has no gate field) and lands in its
-own required PR before Step 6, with semantics-doc entry and capability rows.
+Checks first already skips *evaluating* the siblings of a failed argument,
+so the **gated print** (`arr[oob] val1, val2`), which does not parse today
+(`PrintStatement` has no gate field), is no longer scheduled (plan §9).
 
 A direct `I64`/`F64` result carries no validity bit, and none is needed:
 #123 removed the unwritten direct return instead of adding a

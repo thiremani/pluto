@@ -64,9 +64,38 @@ s, t = Swap(x, y)
     s = y
     t = x
 
+a, b = Split(x)
+    a = x
+    b = x + 1
+
+# Whether both of Split's results pass their checks, as one value per call.
+ok = Both(x)
+    a, b = Split(x)
+    ok = 0
+    ok = a > 1 && b > 2 1
+
 r = Cat(a, b)
     r = a ⊕ b
 
 r = LoudCat(a, b)
     "called -a -b"
     r = a ⊕ b
+
+# A repeated && side copies the binding's stored string into a slot typed by
+# the binding's storage, which the later widening makes heap.
+p, q = WidenedRepeat(n)
+    s = "a"
+    p = "p"
+    q = "q"
+    p, q = Pair(n, n) >= 0 && s
+    s = s ⊕ "b"
+    p = p ⊕ s
+
+# A copy of a widened binding stores heap like it, so a call on the copy takes
+# heap storage.
+p = WidenedTarget(n)
+    s = "a"
+    t = s
+    p = Id(t)
+    s = s ⊕ "b"
+    p = n >= 0 p ⊕ s

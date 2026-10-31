@@ -47,4 +47,15 @@ v1, arr[j]
 k = 0:5
 v1, (k > 3) + 0, v2
 
+"--call with oob argument--"
+# A call whose argument reads out of bounds does not run; its zero prints.
+v1, Loud(arr[9] + 0), v2
+
+"--ranged call with oob argument--"
+# Only the in-bounds iterations run the call, plain, wrapped in another call,
+# or under arithmetic.
+v1, Loud(arr[j] + 0)
+v1, Identity(Loud(arr[j] + 0))
+v1, Loud(arr[j] + 0) + 1
+
 "--end--"

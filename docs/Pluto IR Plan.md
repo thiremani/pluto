@@ -98,12 +98,13 @@ A print plan is its own side-effecting plan type, **`PrintPlan`**, modeling
 **one N-ary intrinsic invocation**. Print is a call, and the ordinary
 call-merge rule applies to it: any unresolved argument suppresses the
 complete invocation, exactly as an OOB argument keeps `Id(arr[oob])`'s whole
-output tuple old. For each admitted point, `PrintPlan` evaluates and finishes
-every flattened argument outcome, ANDs their yielded bits, and invokes print
-**exactly once, only if every slot yielded** — an unresolved argument emits
-neither content nor newline. A `fallback` resolves before this boundary, so
-`a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
-`a, arr[oob], arr2[oob], b` emits nothing at all.
+output tuple old. For each admitted point, `PrintPlan` runs every argument's
+checks first, in source order (evaluation order, below); the first failure
+suppresses the invocation, and only when every check passes does it finish
+the remaining argument outcomes and invoke print **exactly once** — an
+unresolved argument emits neither content nor newline. A `fallback` resolves
+before this boundary, so `a, arr[oob] || -1, arr2[oob] || -2, b` emits
+`a -1 -2 b`, while `a, arr[oob], arr2[oob], b` emits nothing at all.
 Zero-filling a failed slot instead was rejected: print has no target whose
 keep-old rule could resolve the missing outcome (`y = 7` then `y = c > 5`
 leaves `y` at 7; only a fresh target shows the zero seed), so the only value
@@ -129,26 +130,46 @@ itself is the terminal consumer, and it consumes the group's owned
 temporaries — formatted strings, materialized cells — on the suppressed path
 too, where elaboration derives their releases.
 
-The suppression *outcome* for a failed conditional matches today, but the
-model is **eager**: `PrintPlan` evaluates and finishes every argument in
-source order before ANDing the yielded bits, whereas today
-`compileCondOperands` evaluates the extracted conditions first and compiles
-the sibling arguments only on the success branch. Sibling evaluation is
-therefore a Step 6 **behavior change**: a sibling with observable effects — a
-callee that itself prints, an owned heap temporary — now runs, and is
-released, even when the invocation is suppressed. The other Step 6 change is
-the OOB case, whose materialized zero becomes suppression under the same
-call-level validity rule (§9).
+**Evaluation order: checks first.** A *failure scope* is the region one
+resolver closes — an RHS slot, a print invocation, a collector cell, a
+`fallback`'s left side — and its *checks* are the comparisons and checked
+accesses whose failure reaches that resolver. Each scope runs its checks
+first, in source order, each with the operands it needs evaluated by the same
+rule, and a slot stops at its first failed check. The scope's other work then
+runs in source order, only for the slots that passed, reusing what the checks
+computed; a call that feeds several slots runs when any of them passed, and a
+suppressed scope releases what its checks allocated. So
+`r = Pair(Loud(a), c > 5)` runs `Loud` only when `c > 5`,
+`x = F(io(), arr[oob])` runs neither `io()` nor `F`, and in a body that sets
+`res = 1` first, `res = Fact(n - 1) * (n > 1)` stops recursing at `n = 1`: a
+comparison guards the work beside it wherever it is written, as a gate or an
+`&&` left side does. The builder makes the order explicit, emitting a scope's
+checks first and placing the rest of its work in a `require` region on them
+(§4).
 
-Argument evaluation is **strict** for every invocation, print included: an
-argument's side effects — including I/O once the language has it — happen
-in source order whether or not the invocation is suppressed, for
-`x = F(io(), arr[oob])` exactly as for a print. Suppression is a property of
-the invocation's output, never of argument evaluation. This is a Step 6
-behavior change for ordinary calls as much as for print: today both evaluate
-the extracted conditions first and their sibling arguments only on the
-success branch, so `r = Pair(Loud(a), c > 5)` currently never runs `Loud`.
-The regressions in §17 pin both together.
+Today's lowering already evaluates comparisons before the other operands in
+a single-slot value, a call's arguments, a cell and a print:
+`compileCondExprValue` and `compileCondOperands` evaluate every extracted
+condition first and compile the other operands only on the success branch.
+The rest of the order is a **behavior change**:
+
+- Checks stop at the first failure. Today every extracted condition runs
+  before any is tested, so `a, b = Pair(1 > 2, Loud(7) > 0)` and
+  `"print", 1 > 2, Loud(8) > 0` call `Loud`; afterward neither does.
+- A checked access becomes a check, so `Loud(1) + arr[oob]` stops calling
+  `Loud`, and an OOB print argument suppresses the invocation instead of
+  printing its materialized zero (§9).
+- Work beside a failed check inside a comparison's operands, an `&&` right
+  side, a `fallback`'s left side or multi-slot arithmetic stops running, so
+  `(1 > 0) && ((1 > 2) + Loud(1))` stops calling `Loud`.
+
+Step 6 makes these changes for non-ranged statements and prints, including
+the checked-only assignments Step 5 migrates in today's order; ranged
+statements and collector cells take the order when they migrate in Steps 7
+and 8. Effects follow the same order: a check's calls run before the work it
+gates, so `x = io() + (io() > 0)` runs the second `io()` first, and a
+statement boundary keeps text order (`v = io()`, then `x = v + (v > 0)`). The
+regressions in §17 pin each change.
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -164,7 +185,7 @@ machinery's last consumer is gone.
 | `collector` | Declare a logical collection result before its domains (`prepare`) |
 | `domain` | Execute a region once per point in one resolved range domain |
 | `gate` | Admit or reject one shared statement iteration for its whole region |
-| `require` | Lazily evaluate a local value region only when its left outcome yields (the value-position `&&`, as `fallback` is the value-position `||`) |
+| `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the value-position `&&`'s right side (as `fallback` is the value-position `||`), and the work a failure scope's checks gate (§3) |
 | `fallback` | Lazily evaluate an alternative for missing outcomes |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
@@ -440,6 +461,8 @@ still be lowered incorrectly.
 One rule governs both: **a gate admits or rejects its entire region; a failure
 inside an admitted region propagates to its nearest resolver, which by default
 is its own outcome slot.** A rejected gate does not evaluate its region at all.
+Inside an admitted region, each failure scope runs its checks before its other
+work (§3), so a failed check skips the work beside it as well as its result.
 An enclosing gate that already admitted the region does not reach back to
 resolve a later failure inside it.
 
@@ -452,27 +475,27 @@ call, so an argument failure that no closer `||` resolves suppresses the
 complete invocation and all of its output, by the same call-merge rule that
 keeps `Id(arr[oob])`'s tuple old. A failed *conditional* argument already
 suppresses the emission today — every argument's conditions are ANDed into
-one gate around it — and that **outcome is retained**, but evaluation becomes
-eager (§3): today the gate also skips *evaluating* the sibling arguments,
-while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
-changes two observable things: the OOB case — today `arr[oob], val1, val2`
-prints `0 val1 val2`, afterward nothing — and sibling side effects, which now
-occur even on a suppressed invocation. The suppression is silent by design;
-whether a debug build should report a suppressed invocation is a language
-decision outside this plan, which neither requires nor precludes it.
+one gate around it, evaluated before the sibling arguments — and that
+**outcome is retained**, as is evaluating conditions before siblings, except
+that checks now stop at the first failure (§3). Step 6 also changes the OOB
+case: today `arr[oob], val1, val2` evaluates its siblings and prints
+`0 val1 val2`; afterward the read is a check, so the line evaluates nothing
+else and prints nothing. The suppression is silent by design; whether a
+debug build should report a suppressed invocation is a language decision
+outside this plan, which neither requires nor precludes it.
 
 A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
-evaluating the siblings — is **scheduled syntax, not current language**: it
-lands in its own PR before Step 6 (§16).
-It does not parse: the parser builds a `PrintStatement` only from a plain
-expression list, and the solver rejects an OOB read as a statement condition.
-Adding it is a parser/AST/solver feature with its own semantics-doc entry,
-tests, and capability rows, and it must specify that the gate tests the
-access's yielded/in-bounds bit rather than its value, so an in-bounds zero
-still admits the region.
-Once print arguments are strict (§3), the gate is the only spelling of "do
-not evaluate the rest", and it gives print the same gate-versus-value pair
-that assignments already have.
+evaluating the siblings — was scheduled before Step 6 so that print kept a
+lazy spelling once arguments became strict. With checks first (§3),
+`arr[oob], val1, val2` already evaluates nothing beside the failed read, so
+the gated print is **no longer scheduled**: it would only spell a condition
+the line doesn't print, which `c > 5 && a, b` already does. It does not
+parse: the parser builds a `PrintStatement` only from a plain expression
+list, and the solver rejects an OOB read as a statement condition. If it
+lands later, it is a parser/AST/solver feature with its own semantics-doc
+entry, tests, and capability rows, and its gate must test the access's
+yielded/in-bounds bit rather than its value, so an in-bounds zero still
+admits the region.
 
 | Failure site | PIR action |
 | --- | --- |
@@ -753,6 +776,11 @@ The validator rejects a plan unless:
     every textual reference is unambiguous; a named node exposes its
     allocated name to validation. Names are display labels that lowering
     never parses.
+25. In every failure scope, the checks run in source order, every `eval`
+    that runs before a check supplies that check or an earlier one, and the
+    scope's other work runs only after its checks pass (§3). Enforced from
+    Step 6, which revisits the checked-only plans Step 5 builds in today's
+    order; later steps build their plans this way from the start.
 
 Validator failures are ICEs and include the source statement and the smallest
 relevant PIR excerpt.
@@ -1089,9 +1117,9 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2 is complete.** Gated print syntax is a required
-separate feature PR before Step 6 (§9, §16); any other language change
-likewise gets its own PR with its semantics-doc and rejection-test updates.
+and ranges. **Step 2 is complete.** Gated print syntax is no longer
+scheduled (§9); any language change gets its own PR with its semantics-doc
+and rejection-test updates.
 
 ### Step 2: Write effects on settled specializations (~1-2 weeks)
 
@@ -1163,7 +1191,7 @@ both); suite output is unchanged.
   the write markers from functions without a range parameter, so every
   non-ranged callee is all-`MustWrite`. An argument whose conditional or
   checked failure remains unresolved still makes the invocation `MayYield`,
-  which needs Step 6's strict argument evaluation (§3). So Step 4 migrates
+  which needs Step 6's checks-first evaluation (§3). So Step 4 migrates
   calls whose arguments are all `MustYield`; any other call defers **as a
   whole** to Step 6, because argument evaluation, tuple failure, and
   ownership are shared across its outputs and individual slots cannot migrate
@@ -1183,7 +1211,7 @@ follows the binding's **effective storage**, the type of the value held
 now: after `text = "old"` the read solves as a static string while the
 binding stores a materialized heap copy, and a heap value moved, copied, or
 transferred into a binding declared static keeps its flavor, so that
-binding holds heap state its declared type does not show — and every local
+binding can hold heap state its declared type does not show — and every local
 target with its merged target type (`TypeOwnsHeap`: that type requires
 heap cleanup, so an unmanaged value stored here is copied), whether it
 is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
@@ -1195,9 +1223,15 @@ state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility
 relation; the lowerer implements the recorded transfers and releases and
 decides nothing; a plan lowered wrongly is the leak-checked suite's to
-catch, the runtime backstop §8 names. The transitive case —
-transfer a widened binding into another, then read and replace the second —
-is pinned end to end in `tests/mem/mem.spt` for strings. Heap swaps show two transfers and zero copies, a duplicate
+catch, the runtime backstop §8 names. Elaboration of a target declared
+static that holds heap is pinned on hand-built plans by `pir`'s
+`TestElaborate`. No fixture reaches it from source, because #150 types a
+binding that copies or takes over a widened binding as heap, like the binding
+it copies (Step 9b's `yieldedStorage`). The transitive case — transfer a
+widened binding into another, then read and replace the second — is pinned
+end to end in `tests/mem/mem.spt` for strings and by
+`TestPlanGoldenEffectiveStorage`: the second binding is declared heap, so
+replacing it copies the static literal and releases the old value. Heap swaps show two transfers and zero copies, a duplicate
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
@@ -1222,6 +1256,10 @@ append.
   (`compileExprAssigns`) whose failure selects keep-old versus commit
   (`commitAssignmentsPerExpr`). Plans record explicit OOB scopes (§9), and the
   bounds-bit idiom reduces to generic guard emission driven by them.
+- Checked accesses migrate here in today's order, as the matrix's row 7
+  retains it: an out-of-bounds read is still tested where it is read, so
+  `y = Loud(1) + arr[oob]` still calls `Loud`. Testing it first needs Step 6's
+  `require` regions, so Step 6 revisits these plans (§3).
 - Checked-access fallback becomes legal here (decided; see the semantics doc):
   `x = arr[oob] || -1` assigns `-1`, the fallback testing the yielded bit and
   never the value. The solver currently rejects the spelling —
@@ -1244,28 +1282,58 @@ append.
 
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 
-- Prerequisite, in its own PR before this step: gated print syntax
-  (`c > 5 a, b`, §9), so the lazy form keeps a spelling when value-position
-  print arguments become strict — a gate rejects the line without
-  evaluating it; a failed argument suppresses the line after its siblings
-  ran.
 - `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
-  of `eval`.
+  of `eval` and emitting each failure scope's checks before the work they
+  gate (§3), including in the checked-only plans Step 5 migrated.
+- Ownership of `require`, `fallback` and repeated values comes from
+  elaboration (§8), as for every other outcome: each side stays a borrow of
+  its binding or an owned temporary, and nothing is copied where the sides
+  merge. A consumer that stores the value (a commit) copies a borrow and moves
+  an owned value; one that only reads it (an `eval` operand, a print
+  argument) uses either in place; and each region releases only the owned
+  values no consumer took on that path. Legacy lowering instead copies each
+  borrowed value into an owned result slot (`storeLogicalValue`,
+  `resolveRepeatedSide`), which caused #116 and #130 and copies once per
+  operator in a chain. Acceptance tests, with `s` and `t` heap strings that
+  outlive the statement (a static string's copy count depends on its target,
+  and a borrow of an owner the statement replaces can be promoted to a move):
+  `out = n > 0 && s || t` copies `s` once, at the commit (legacy lowering
+  copies it into the `&&` slot and again into the `||` slot); printing
+  `c > 0 && s` copies nothing; `(c > 0 && s) ⊕ "!"` copies `s` only into the
+  concatenation's result; and `x = c > 0 && s || F()` copies `s` when the
+  left side yields and moves `F()`'s result otherwise, choosing by the yield
+  flags rather than a runtime ownership bit.
+- Need through comparison operands, the rest of #148's rule 3: an `&&` or `||`
+  passes the slots its context needs into a comparison's operands, which lower
+  slot by slot, so a slot nothing needs is never computed. Legacy lowering
+  stops need at a comparison, because it computes every operand slot at once.
+  Acceptance tests, with `A` standing for `Pair(1, 2) > Pair(0, 5)`, which
+  fails its second slot, and `G` printing its argument:
+  `x, y = A && ((A || G(7)) > 0)` calls no `G`, and
+  `x, y = A && ((Pair(10, 10) ÷ (A || Pair(G(7), G(8)))) > 0)` calls no `G`
+  and doesn't divide by the slot the `||` leaves empty. `logical_ops`'s
+  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here.
 - Calls with an argument whose conditional or checked failure remains
-  unresolved (matrix row 6c), which gain strict source-order argument
-  evaluation (§3) with the `F(sideEffect(), failingArg)` and
-  `F(failingArg, sideEffect())` regressions. After #123 no non-ranged call
-  defers here for its callee's write effects.
+  unresolved (matrix row 6c), which gain checks-first evaluation (§3) with
+  regressions: neither `F(sideEffect(), failingArg)` nor
+  `F(failingArg, sideEffect())` runs the side effect, and
+  `F(sideEffect(), passingArg)` runs it once. After #123 no non-ranged call
+  defers here for its callee's write effects. `value_cond_expr`'s `Pos` blocks
+  pin today's evaluation beside a failed comparison, in values, calls, cells
+  and prints, so their `.exp` changes here: no call beside a failed check
+  runs, so every `called` line in the `Pos` blocks goes, as does
+  `NegationCalls`' `called 1`.
 - All non-ranged prints lower as `PrintPlan`s (§3), including call
   arguments: a call that runs writes every output, so a call argument fails
   only through its own arguments or invocation.
-  The conditional suppression outcome is retained, but sibling evaluation
-  becomes eager and the OOB materialized zero becomes invocation suppression
-  (§3, §9). Update `tests/array/oob_print.exp` in the same PR, with
-  regressions for a side-effecting or owned-heap sibling of a failed
-  conditional and for a failed sibling suppressing a complete multi-line
-  `Struct` emission.
+  The conditional suppression outcome is retained, checks now stop at the
+  first failure, and an OOB read becomes a check, so its materialized zero
+  becomes invocation suppression (§3, §9). Update
+  `tests/array/oob_print.exp` in the same PR, with regressions for a
+  side-effecting or owned-heap sibling of a failed conditional or OOB read,
+  which never runs or allocates, and for a failed sibling suppressing a
+  complete multi-line `Struct` emission.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
@@ -1273,7 +1341,11 @@ append.
   simultaneous advance per §7.
 - Then ranged gates and ranged conditional combinations, including the ranged
   logical trees `compileCondExprStatement` routes to staging today; `continue`
-  versus `skip` scopes become explicit.
+  versus `skip` scopes become explicit. Each iteration's failure scopes take
+  §3's checks-first order here.
+- Step 6's need through comparison operands, for ranged conditionals. Over
+  `i = 0:3`, `x, y = Pair(i, 1) > Pair(0, 5) && ((Pair(i, 1) > Pair(0, 5) ||
+  G(i)) > 0)` calls `G` on no iteration (legacy lowering calls it on 1 and 2).
 - Extend ownership elaboration to carries. Loop emission (`withLoopNest`,
   `createLoopCore`) stays as generic mechanics driven by `domain` regions.
 - Callee-owned domains under #123. Zero iterations mean no assignment,
@@ -1296,7 +1368,14 @@ append.
 
 - Collector initialization, cell skip policies, finalization, and nested
   collectors as plan nodes per §10; collector cells join ownership
-  elaboration.
+  elaboration and take §3's checks-first order.
+- Array-valued cells drop the copy legacy lowering makes of each row into a
+  cell slot (#150): a named row is borrowed and a fresh row (a call, a mask,
+  an `&&` or `||` copy) moves in, so `x = [a b]` copies the rows' elements
+  into `x` and nothing else. A borrowed row still skips with its cell: with
+  `a = [1]` and `row = [1 2]`, `x = a[5] + [row (1 > 0 && row)]` keeps `x`,
+  whereas reading `row` past the failed `a[5]` would leave the rows' shapes
+  unequal and abort the shape check.
 - The remaining ranged and collector print paths migrate. After this step no
   statement form needs the legacy conditional or collector machinery.
 - Collectors join the name allocator and invariant 24: collector nodes
@@ -1351,6 +1430,13 @@ infix, prefix, calls, array indexing, and array-literal cells:
 - the collector rewrite machinery — all of `collect.go`
 - mask sweeps and consumed-temporary marking, gated on leak checks passing
   with cleanup emitted solely from derived release obligations
+- `yieldedStorage` and its uses, with #114: call arguments, `&&` and `||`
+  operands and assignment targets (#150) take the whole-body storage of the
+  binding they copy, so a binding that copies a widened one is typed heap and a
+  later static store into it copies the literal. Elaboration reads what each
+  binding holds now (`storedType`) instead; the rule is planned to be removed
+  once every consumer does and #114's per-statement ownership replaces the
+  whole-body join.
 
 ### Step 10: Affine versioning and final sweep (~1-2 weeks)
 
@@ -1513,18 +1599,37 @@ immediate deletion at the last consumer.
   zero emits `0`
 - empty strings are successful values, distinguishable from suppression:
   `a, "", "", b` emits `a` and `b` separated by three spaces
-- a failed conditional argument retains today's whole-invocation suppression,
-  but its siblings are now evaluated eagerly: a side-effecting callee runs
-  and an owned-heap sibling is allocated and released while the line stays
-  suppressed
+- a failed conditional or OOB argument suppresses the whole invocation before
+  its siblings run: a side-effecting callee beside it never runs and an
+  owned-heap sibling is never allocated, while a heap value a check computed
+  is released
 - a failed sibling suppresses a complete multi-line `Struct` emission
 - a ranged print emits one emission group per fully-yielded point; OOB
   iterations emit nothing
 - a suppressed invocation still releases its owned temporaries (leak-checked)
-- ordinary calls evaluate arguments strictly too: `F(sideEffect(), failingArg)`
-  runs the side effect and `F(failingArg, sideEffect())` still evaluates the
-  argument after the failed one, while the output tuple keeps its old values
-  (§3)
+- ordinary calls check first too (§3): neither `F(sideEffect(), failingArg)`
+  nor `F(failingArg, sideEffect())` runs the side effect, and the output tuple
+  keeps its old values; `F(sideEffect(), passingArg)` runs it once; in a
+  passing statement a check's call runs first, so
+  `x = Loud(1) + (Loud(2) > 0)` prints `called 2` before `called 1`; and a
+  recursion guarded by a comparison beside its call terminates
+  (`res = Fact(n - 1) * (n > 1)`)
+- checks stop at the first failure and otherwise keep source order:
+  `a, b = Pair(1 > 2, Loud(7) > 0)` and `"print", 1 > 2, Loud(8) > 0` call no
+  `Loud`; `y = (Loud(1) > 0) + (Loud(2) > 0)` prints `called 1` before
+  `called 2`; a later failed check releases what earlier checks allocated
+  (`"p", ("x" ⊕ s) > "a", 1 > 2`, leak-checked); and sibling right-hand
+  sides stay separate scopes, so `c, d = 3 > 5, Loud(10)` calls `Loud` and
+  sets `d` (§3)
+- a check's dependencies run once: `y = (Loud(1) > 0) + 1` calls `Loud` once
+  and adds 1 to its result, and with `Wrap` returning a heap string,
+  `"p", Wrap(s) > "a", 1 > 2` releases `Wrap`'s result when the later check
+  fails (leak-checked)
+- failures stay in their scope: a failure an `||` resolves is no check of the
+  scope around it, so `x = Loud(1) + ((1 > 2) || 5)` calls `Loud` and gives
+  6, and a call a surviving slot needs still runs, so
+  `u, v = (Pair(1, 2) > Pair(5, 0)) + Pair(Loud(2), Loud(3))` calls both,
+  keeps `u` and sets `v` to 5
 
 ### Cutover and backend tests
 
