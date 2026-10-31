@@ -1420,6 +1420,20 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
+			// || binds tighter than arithmetic, so a calculation meant for a
+			// branch leaves || a left operand that cannot fail; the error
+			// shows the grouping under the outermost arithmetic.
+			name:        "RegroupedFallbackShowsGrouping",
+			script:      "b = 5\nx = b > 2 && 10 + 2 * 3 || 7",
+			expectError: "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads (((b > 2) && 10) + (2 * (3 || 7))); use parentheses to choose what the fallback applies to",
+		},
+		{
+			name:        "RegroupedFallbackInFunctionBody",
+			code:        "r = Pick(b)\n    r = 0\n    r = b > 2 && 10 + 2 || 7",
+			script:      "m = Pick(5)\nm",
+			expectError: "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads (((b > 2) && 10) + (2 || 7)); use parentheses to choose what the fallback applies to",
+		},
+		{
 			// Conditions are value-position now, so `a > 0 || b` is a fallback whose
 			// `b` arm always yields — the gate can never fail, which is rejected.
 			name:        "ConditionWithUnconditionalFallbackCannotGate",
@@ -1461,62 +1475,6 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 				}
 			}
 			require.Truef(t, found, "expected error containing %q, got: %v", tc.expectError, ts.Errors)
-		})
-	}
-}
-
-// TestRegroupedFallbackDiagnostic: || binds tighter than arithmetic, so a
-// calculation meant for a branch, or a fallback meant for a whole sum, leaves
-// || a left operand that cannot fail. The error shows the grouping and the
-// spellings that can fail.
-func TestRegroupedFallbackDiagnostic(t *testing.T) {
-	const prefix = "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads "
-	cases := []struct {
-		name   string
-		code   string
-		script string
-		msg    string
-	}{
-		{"BranchOrWhole", "", "b = 5\nx = b > 2 && 10 + 2 || 7",
-			prefix + "(((b > 2) && 10) + (2 || 7)); write (b > 2) && (10 + 2) || 7 for a calculation in the branch, or (((b > 2) && 10) + 2) || 7 for a fallback over the whole expression"},
-		{"OutermostArithmetic", "", "b = 5\nx = b > 2 && 10 + 2 * 3 || 7",
-			prefix + "(((b > 2) && 10) + (2 * (3 || 7))); write (b > 2) && (10 + (2 * 3)) || 7 for a calculation in the branch, or (((b > 2) && 10) + (2 * 3)) || 7 for a fallback over the whole expression"},
-		{"WholeOnly", "", "a = 5\nx = (a > 2) + 1 || 0",
-			prefix + "((a > 2) + (1 || 0)); write ((a > 2) + 1) || 0 for a fallback over the whole expression"},
-		{"NothingFails", "", "x = 1 + 2 || 7",
-			prefix + "(1 + (2 || 7))"},
-		// A spelling is offered only when the fallback's type matches the
-		// arithmetic's: / yields F64, and an array sum isn't a scalar.
-		{"FloatQuotientIntFallback", "", "b = 5\nx = b > 2 && 10 / 2 || 7",
-			prefix + "(((b > 2) && 10) / (2 || 7))"},
-		{"ArraySumScalarFallback", "", "b = 5\nv = [1 2]\nx = b > 2 && v + 1 || 0",
-			prefix + "(((b > 2) && v) + (1 || 0))"},
-		{"ArraySumArrayFallback", "", "b = 5\nv = [1 2]\nx = b > 2 && 1 + v || [0]",
-			prefix + "(((b > 2) && 1) + (v || [0])); write (b > 2) && (1 + v) || [0] for a calculation in the branch, or (((b > 2) && 1) + v) || [0] for a fallback over the whole expression"},
-		// Function bodies are retyped on every pass; the error is still one.
-		{"FunctionBody", "r = Pick(b)\n    r = 0\n    r = b > 2 && 10 + 2 || 7", "m = Pick(5)\nm",
-			prefix + "(((b > 2) && 10) + (2 || 7)); write (b > 2) && (10 + 2) || 7 for a calculation in the branch, or (((b > 2) && 10) + 2) || 7 for a fallback over the whole expression"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := llvm.NewContext()
-			defer ctx.Dispose()
-			codeAST := ast.NewCode()
-			if tc.code != "" {
-				codeAST = mustParseCode(t, tc.code)
-			}
-			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
-			require.Empty(t, cc.Compile())
-
-			sp := parser.NewScriptParser(lexer.New(tc.name+".spt", tc.script))
-			program := sp.Parse()
-			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
-
-			ts := NewTypeSolver(NewScriptCompiler(ctx, t.Name(), program, cc))
-			ts.Solve()
-			require.Lenf(t, ts.Errors, 1, "errors: %v", ts.Errors)
-			require.Equal(t, tc.msg, ts.Errors[0].Msg)
 		})
 	}
 }

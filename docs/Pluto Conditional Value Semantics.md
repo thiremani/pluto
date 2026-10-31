@@ -234,9 +234,9 @@ c && (3x^2) || 0            # a whole term in the branch
 
 When arithmetic leaves a fallback's left side unable to fail, as in
 `b > 2 && 10 + 2 || 7`, which reads `(b > 2 && 10) + (2 || 7)`, the error shows
-that grouping. When the fallback's type matches the arithmetic's, it also
-offers both spellings: `b > 2 && (10 + 2) || 7` for a calculation in the
-branch, and `(b > 2 && 10 + 2) || 7` for a fallback over the whole sum.
+that grouping and asks for parentheses. Where they go depends on what was
+meant: `b > 2 && (10 + 2) || 7` puts the calculation in the branch, and
+`(b > 2 && 10 + 2) || 7` gives the whole sum the fallback.
 
 Tightest to loosest:
 
