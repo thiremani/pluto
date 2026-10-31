@@ -155,3 +155,79 @@ bangSource = "ab" ⊕ "cd"
 bangCopy = Bang(bangSource)
 bangSource = Bang(bangSource)
 "Bang:", bangCopy, bangSource
+
+# Ranged heap swaps: each iteration swaps the previous iteration's values,
+# whether the callee or the caller runs the loop.
+swapLeft, swapRight = [1], [2]
+swapLeft, swapRight = SwapEach(swapLeft, swapRight, 1:3)
+"RangedSwap:", swapLeft, swapRight
+loopLeft, loopRight = [1], [2]
+loopLeft, loopRight = SwapEach(loopLeft, loopRight, (1:3) + 0)
+"CallerRangedSwap:", loopLeft, loopRight
+
+# Both inputs share the destination, for heap and scalar values.
+both = [0]
+both = AppendBoth(both, both, 1:3)
+"SharedBothArray:", both
+bothScalar = 10
+bothScalar = AddBoth(bothScalar, bothScalar, 1:3)
+"SharedBothScalar:", bothScalar
+
+# Several drivers: nested inside the callee, and a cartesian domain the caller
+# runs.
+drivers = 10
+drivers, driversSeen = FoldAfterBoth(drivers, 1:3, 1:3)
+"Drivers:", drivers, driversSeen
+driverArray = [0]
+driverArray, driverArraySeen = ArrayAfterBoth(driverArray, 1:3, 1:3)
+"DriverArray:", driverArray, driverArraySeen
+cartesian = 10
+cartesian, cartesianSeen = FoldAfter(cartesian, (1:3) + (1:3))
+"Cartesian:", cartesian, cartesianSeen
+
+# A failed argument skips its call, and an out-of-bounds element skips its
+# iteration, wherever the loop runs.
+short = [5 6]
+failed = 10
+failedSeen = 0
+failed, failedSeen = FoldAfter(failed, short[7])
+"FailedArgument:", failed, failedSeen
+calleeSkip = 10
+calleeSkip, calleeSkipSeen = FoldAfter(calleeSkip, short[0:4])
+"CalleeSkip:", calleeSkip, calleeSkipSeen
+callerSkip = 10
+callerSkip, callerSkipSeen = FoldAfter(callerSkip, short[(0:4) + 0])
+"CallerSkip:", callerSkip, callerSkipSeen
+names = ["b" "c"]
+heapSkip = "a" ⊕ ""
+heapSkip, heapSkipSeen = ConcatAfter(heapSkip, names[(0:4) + 0])
+"HeapCallerSkip:", heapSkip, heapSkipSeen
+
+# An empty range, or one with no element in bounds, runs no iteration and
+# keeps every destination.
+emptyText = "a" ⊕ ""
+emptyTextSeen = "keep"
+emptyText, emptyTextSeen = ConcatAfter(emptyText, names[0:0])
+"EmptyHeap:", emptyText, emptyTextSeen
+outside = "a" ⊕ ""
+outsideSeen = "keep"
+outside, outsideSeen = ConcatAfter(outside, names[5:7])
+"OutOfBounds:", outside, outsideSeen
+callerOutside = "a" ⊕ ""
+callerOutsideSeen = "keep"
+callerOutside, callerOutsideSeen = ConcatAfter(callerOutside, names[(5:7) + 0])
+"CallerOutOfBounds:", callerOutside, callerOutsideSeen
+
+# The destination's own array drives the loop: each iteration's input reads
+# the previous result while the driver walks the elements.
+driven = [1 2]
+driven, drivenSeen = ArrayAfter(driven, driven[0:2])
+"OwnDriver:", driven, drivenSeen
+callerDriven = [1 2]
+callerDriven, callerDrivenSeen = ArrayAfter(callerDriven, callerDriven[(0:2) + 0])
+"CallerOwnDriver:", callerDriven, callerDrivenSeen
+
+# A conditional ranged call shares through its synthetic destinations.
+gatedRange = 10
+gatedRange, gatedRangeSeen = 1 > 0 FoldAfter(gatedRange, 1:3)
+"GatedRange:", gatedRange, gatedRangeSeen

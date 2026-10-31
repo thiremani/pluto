@@ -146,3 +146,25 @@ out, left, right = ResetPair(first, second)
 out = Bang(current)
     out = current ⊕ "!"
     "storage: -current%p -out%p"
+
+# Every output shares the other output's input, so each iteration swaps the
+# previous iteration's heap values.
+a, b = SwapEach(x, y, item)
+    a = y ⊕ [item]
+    b = x
+
+# Both inputs share one output, and each iteration reads the previous result
+# through both.
+out = AppendBoth(first, second, item)
+    out = first ⊕ [item]
+    out = out ⊕ second
+
+# Two drivers nest inside the callee, and the input is stable within each of
+# their iterations.
+out, after = FoldAfterBoth(current, i, j)
+    out = current + i * j
+    after = current
+
+out, after = ArrayAfterBoth(current, i, j)
+    out = current ⊕ [i * j]
+    after = current

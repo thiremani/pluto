@@ -43,3 +43,20 @@ CondCount: 11 10 lr
 re:storage: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
 re:storage: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
 Bang: abcd! abcd!
+RangedSwap: [1 2] [2 1]
+CallerRangedSwap: [1 2] [2 1]
+SharedBothArray: [0 1 0 2 0 1 0]
+SharedBothScalar: 95
+Drivers: 19 15
+DriverArray: [0 1 2 2 4] [0 1 2 2]
+Cartesian: 22 18
+FailedArgument: 10 0
+CalleeSkip: 21 15
+CallerSkip: 21 15
+HeapCallerSkip: abc ab
+EmptyHeap: a keep
+OutOfBounds: a keep
+CallerOutOfBounds: a keep
+OwnDriver: [1 2 1 2] [1 2 1]
+CallerOwnDriver: [1 2 1 2] [1 2 1]
+GatedRange: 13 11
