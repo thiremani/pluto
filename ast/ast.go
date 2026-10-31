@@ -155,8 +155,13 @@ func (ls *LetStatement) String() string {
 	out.WriteString(printVec(toExpressionVec(ls.Name)))
 	out.WriteString(" = ")
 
-	if len(ls.Condition) > 0 {
-		out.WriteString(printVec(ls.Condition))
+	// The parser flattens a gate's top-level && chain into its conditions.
+	conds := make([]string, len(ls.Condition))
+	for i, cond := range ls.Condition {
+		conds[i] = cond.String()
+	}
+	if len(conds) > 0 {
+		out.WriteString(strings.Join(conds, " && "))
 		out.WriteString(" ")
 	}
 

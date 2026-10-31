@@ -678,7 +678,7 @@ func TestConditionListBesideArithmetic(t *testing.T) {
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 	stmt := requireOnlyLetStmt(t, program)
-	require.Equal(t, "res = ((a + 1) > 0), (b > 1) (c + 1)", stmt.String())
+	require.Equal(t, "res = ((a + 1) > 0) && (b > 1) (c + 1)", stmt.String())
 
 	// Unparenthesized, it takes the whole && chain as its operand, and the
 	// result is not a condition.
