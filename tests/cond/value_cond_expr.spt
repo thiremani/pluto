@@ -558,10 +558,11 @@ arithGateHeapKeep = agS1 ⊕ agS2 > "zzz"
 # A fallback || may attach to a left operand that WRAPS its condition in
 # arithmetic, not only to a bare conditional: the whole value is gated on the
 # nested condition (matching value-position propagation / zero-fill), and || just
-# swaps its fallback in for the zero. So `(i > 2 < 8) ^ 2 || -1.0` is i^2 when
-# 2 < i < 8 and -1 otherwise (including i >= 8) — the natural one-liner. Multiple
-# nested conditions are ANDed; the fallback fires if any fail. (Heap arms below
-# are leak-checked, including the value computed before a failed gate.)
+# swaps its fallback in for the zero. So `((i > 2 < 8) ^ 2) || -1.0` is i^2 when
+# 2 < i < 8 and -1 otherwise (including i >= 8); the parentheses keep the power
+# on the || left side, since || binds tighter than arithmetic. Multiple nested
+# conditions are ANDed; the fallback fires if any fail. (Heap arms below are
+# leak-checked, including the value computed before a failed gate.)
 owI = 0:10
 orWrapPow = [((owI > 2 < 8) ^ 2) || -1.0]
 "OrWrapPow: -orWrapPow"
@@ -582,15 +583,16 @@ orWrapHeapCell = [((MkStr(owI) > "s6") ⊕ "!") || "def"]
 # are ANDed (here identical, so equivalent to one). This gives integer i^2 (vs
 # the float ^) with a -1 fallback. The condition must stay inline: factoring it
 # into a variable (`t = owI > 2 < 8`) resolves it to a value with no live
-# condition, so `[t * t || -1]` has nothing for the || to attach to.
+# condition, so `[(t * t) || -1]` has nothing for the || to attach to.
 orWrapRepeatedCond = [((owI > 2 < 8) * (owI > 2 < 8)) || -1]
 "OrWrapRepeatedCond: -orWrapRepeatedCond"
 
 # A complicated per-element/piecewise function is one chain of cond && value
 # || ... || default, evaluated in order with the first matching branch winning —
 # one pass, in order, and length-preserving (no splitting the domain and
-# concatenating filtered pieces); && binds tighter than ||, so no parens needed.
-# Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
+# concatenating filtered pieces). && binds tighter than ||, so the chain needs
+# no parentheses, but a branch's calculation does, since both bind tighter than
+# arithmetic. Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
 owPiecewise = [owI < 2 && -10 || owI < 5 && 0 || owI < 8 && (owI * owI) || 999]
 "OwPiecewise: -owPiecewise"
 

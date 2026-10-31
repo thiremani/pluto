@@ -599,3 +599,29 @@ _, nxA = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(5, 5) || Pair(Loud(7), Lo
 nkA, nkB = [9], 9
 nkA, nkB = Pair(1, 2) > Pair(0, 5) && (Pair([1 5], 3) > Pair(2, 5) || Pair([0], Loud(9)))
 "NeedMaskSlot: -nkA -nkB"
+
+# Comparisons, && and || bind tighter than arithmetic, so a condition and its
+# fallback form one term: 1 + p > 2 && 10 || 7 is 1 + ((p > 2 && 10) || 7).
+pcP = 5
+pcQ = 2
+pcR = 1
+pcA = 1 + pcP > 2 && 10 || 7
+pcB = 1 + pcQ > 2 && 10 || 7
+pcC = 1 + pcR > 2 && 10 || 7
+"PrecedenceTerm:", pcA, pcB, pcC
+
+# Each condition takes the operand next to it, so a sum of conditional terms
+# needs no parentheses, and the fallback covers only the term it ends. A
+# failing first term fails the sum.
+pcD = pcP > 2 && 10 + pcP > 3 && 2 || 7
+pcE = pcP > 2 && 10 + pcR > 3 && 2 || 7
+pcF = 9
+pcF = pcR > 2 && 10 + pcP > 3 && 2 || 7
+"PrecedenceTerms:", pcD, pcE, pcF
+
+# A fallback after arithmetic covers the nearest term, and a concatenation
+# after a fallback applies to the whole choice.
+pcG = (pcP > 2) + (pcR > 3) || -1
+pcH = "b" > "c" || "z" ⊕ "?"
+pcI = "d" > "c" || "z" ⊕ "?"
+"PrecedenceNearest:", pcG, pcH, pcI

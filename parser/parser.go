@@ -13,21 +13,23 @@ import (
 	"github.com/thiremani/pluto/token"
 )
 
-// Precedence levels - using floats to allow inserting any intermediate level
+// Precedence levels - using floats to allow inserting any intermediate level.
+// Comparisons, && and || bind tighter than arithmetic, so a condition applies
+// to the operand next to it: 1 + b > 2 && 10 || 7 is 1 + ((b > 2 && 10) || 7).
 const (
 	LOWEST      = 0.0 + iota // iota works with floats when used in a float expression
 	ASSIGN                   // =
 	COMMA                    // ,
-	COND_OR                  // ||
-	COND_AND                 // && (binds tighter than ||: c && v || w == (c && v) || w)
 	BITWISE_OR               // |
-	BITWISE_XOR              // ⊕
+	BITWISE_XOR              // ⊻
 	BITWISE_AND              // &
 	SHIFT                    // << >> >>>
-	SUM                      // + -
+	SUM                      // + - ⊕
 	PRODUCT                  // * / ÷ %
 	EXP                      // ^
 	IMPLICIT                 // ⋅ (implicit multiplication)
+	COND_OR                  // ||
+	COND_AND                 // && (binds tighter than ||: c && v || w == (c && v) || w)
 	COLON                    // :
 	LESSGREATER              // < > == != <= >=
 	PREFIX                   // -X !X √X
