@@ -778,7 +778,9 @@ The validator rejects a plan unless:
     never parses.
 25. In every failure scope, the checks run in source order, every `eval`
     that runs before a check supplies that check or an earlier one, and the
-    scope's other work runs only after its checks pass (§3).
+    scope's other work runs only after its checks pass (§3). Enforced from
+    Step 6, which revisits the checked-only plans Step 5 builds in today's
+    order; later steps build their plans this way from the start.
 
 Validator failures are ICEs and include the source statement and the smallest
 relevant PIR excerpt.
@@ -1619,6 +1621,15 @@ immediate deletion at the last consumer.
   (`"p", ("x" ⊕ s) > "a", 1 > 2`, leak-checked); and sibling right-hand
   sides stay separate scopes, so `c, d = 3 > 5, Loud(10)` calls `Loud` and
   sets `d` (§3)
+- a check's dependencies run once: `y = (Loud(1) > 0) + 1` calls `Loud` once
+  and adds 1 to its result, and with `Wrap` returning a heap string,
+  `"p", Wrap(s) > "a", 1 > 2` releases `Wrap`'s result when the later check
+  fails (leak-checked)
+- failures stay in their scope: a failure an `||` resolves is no check of the
+  scope around it, so `x = Loud(1) + ((1 > 2) || 5)` calls `Loud` and gives
+  6, and a call a surviving slot needs still runs, so
+  `u, v = (Pair(1, 2) > Pair(5, 0)) + Pair(Loud(2), Loud(3))` calls both,
+  keeps `u` and sets `v` to 5
 
 ### Cutover and backend tests
 
