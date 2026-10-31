@@ -24,7 +24,7 @@ const (
 	BITWISE_XOR              // ⊻
 	BITWISE_AND              // &
 	SHIFT                    // << >> >>>
-	SUM                      // + - ⊕
+	SUM                      // + -
 	PRODUCT                  // * / ÷ %
 	EXP                      // ^
 	IMPLICIT                 // ⋅ (implicit multiplication)
@@ -50,7 +50,7 @@ var leftBindingPower = map[string]float64{
 	token.SYM_ASR:      SHIFT,
 	token.SYM_ADD:      SUM,
 	token.SYM_SUB:      SUM,
-	token.SYM_CONCAT:   SUM, // ⊕ array concatenation
+	token.SYM_CONCAT:   SUM - 0.5, // ⊕ just below + and -: a + 1 ⊕ b + 2 is (a + 1) ⊕ (b + 2)
 	token.SYM_MUL:      PRODUCT,
 	token.SYM_DIV:      PRODUCT,
 	token.SYM_QUO:      PRODUCT,

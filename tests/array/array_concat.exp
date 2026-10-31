@@ -10,3 +10,4 @@ String concat: helloworld
 Left empty concat: world
 Right empty concat: hello
 Both empty str concat: 
+ConcatPrecedence: [11 21 32 42] [9 19 28 38] [11 21 31 41] [10 20 30 40 55]

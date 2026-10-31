@@ -250,7 +250,8 @@ Tightest to loosest:
 | fallback | `\|\|` |
 | powers, implicit multiplication | `^`, `3x` (`3x^2` is `3(x^2)`, and `2^3x` is `2^(3x)`) |
 | multiplicative | `*`, `/`, `÷`, `%` |
-| additive | `+`, `-`, `⊕` |
+| additive | `+`, `-` |
+| concatenation | `⊕` |
 | shifts | `<<`, `>>`, `>>>` |
 | bitwise and | `&` |
 | bitwise xor | `⊻` |
@@ -258,7 +259,9 @@ Tightest to loosest:
 
 Ranges sit between comparisons and `&&`, so `0:n > 2` is a range with a
 conditional bound, and `c && 0:n` puts the whole range on the `&&`'s right
-side.
+side. `⊕` sits just below `+` and `-`, so arithmetic builds each piece before
+the join: `a + 1 ⊕ b + 2` is `(a + 1) ⊕ (b + 2)`, and `(a ⊕ b) + 1` adds to the
+joined array.
 
 ## Parentheses are pure grouping
 
