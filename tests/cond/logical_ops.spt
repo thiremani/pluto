@@ -47,7 +47,7 @@ cvDeep = 2 * (a > 2 && 10) + (b > 0 && 3)
 "CvDeep: -cvDeep"
 
 # Value is an arbitrary expression.
-cvExprValue = a > 2 && a + 100
+cvExprValue = a > 2 && (a + 100)
 "CvExprValue: -cvExprValue"
 
 # Fallback ||: condition true keeps the value (&& binds tighter than ||).
@@ -103,11 +103,11 @@ cvFloat = a > 2 && f
 # of the branch/seed/fallback arms (no leak, no double-free).
 sl = "hello"
 sm = " world"
-cvStrTrue = a > 2 && sl ⊕ sm
+cvStrTrue = a > 2 && (sl ⊕ sm)
 "CvStrTrue: -cvStrTrue"
-cvStrFalse = b > 2 && sl ⊕ sm
+cvStrFalse = b > 2 && (sl ⊕ sm)
 "CvStrFalse: -cvStrFalse"
-cvStrFb = b > 2 && sl ⊕ sm || "fallback"
+cvStrFb = b > 2 && (sl ⊕ sm) || "fallback"
 "CvStrFb: -cvStrFb"
 
 # Multi-return value gated by one scalar condition: the condition broadcasts
@@ -137,7 +137,7 @@ cvOrFalse = (b > 2 || b > 5) && 10
 gi = 0:5
 cvRangeArr = [gi > 2 && gi]
 "CvRangeArr: -cvRangeArr"
-cvRangeArrCustom = [gi > 2 && gi * 10]
+cvRangeArrCustom = [gi > 2 && (gi * 10)]
 "CvRangeArrCustom: -cvRangeArrCustom"
 cvRangeRoot = gi > 2 && gi
 "CvRangeRoot: -cvRangeRoot"
@@ -164,14 +164,14 @@ cvRangeOob = gi >= 0 && cvBounds[gi]
 # the value may be an arbitrary expression.
 cvArrCellOob = [gi >= 0 && cvBounds[gi]]
 "CvArrCellOob: -cvArrCellOob"
-cvArrCellOobExpr = [gi >= 0 && cvBounds[gi] * 2]
+cvArrCellOobExpr = [gi >= 0 && (cvBounds[gi] * 2)]
 "CvArrCellOobExpr: -cvArrCellOobExpr"
 
 # && nested in arithmetic inside a collector, with a scalar condition gating a
 # range-driven value: 2 + 2*gi per iteration.
 cvX = 2
 cvA = 4
-cvCellRangeVal = [cvX + (cvA > 3 && 2gi)]
+cvCellRangeVal = [cvX + (cvA > 3 && (2gi))]
 "CvCellRangeVal: -cvCellRangeVal"
 
 # Multi-driver: the condition ranges on one driver and the value on another, so
@@ -180,12 +180,12 @@ cvCellRangeVal = [cvX + (cvA > 3 && 2gi)]
 # zero-fills — the `cvX +` never lands on a failed cell. (The old form fed a
 # local 0 into the add, leaving 2s.)
 cvAR = 0:5
-cvCellMultiDriver = [cvX + (cvAR > 3 && 2gi)]
+cvCellMultiDriver = [cvX + (cvAR > 3 && (2gi))]
 "CvCellMultiDriver: -cvCellMultiDriver"
 
 # && as an arithmetic operand at a statement root (no collector): the enclosing
 # operator owns the loop, so it keeps the final iteration's value.
-cvRootArith = cvX + (cvA > 2 && 3gi + 5)
+cvRootArith = cvX + (cvA > 2 && (3gi + 5))
 "CvRootArith: -cvRootArith"
 
 # Heap value at a root: the per-iteration concat result is freed before the next
@@ -229,11 +229,11 @@ cjRangeArr = [gi > 1 && gi < 4 && gi]
 
 # && chain gating a heap string value: true yields the concat, false keeps the
 # fresh destination's empty seed, and a fallback overrides (no leak on any arm).
-cjStrTrue = a > 2 && a > 0 && sl ⊕ sm
+cjStrTrue = a > 2 && a > 0 && (sl ⊕ sm)
 "CjStrTrue: -cjStrTrue"
-cjStrFalse = a > 2 && b > 2 && sl ⊕ sm
+cjStrFalse = a > 2 && b > 2 && (sl ⊕ sm)
 "CjStrFalse: -cjStrFalse"
-cjStrFb = a > 2 && b > 2 && sl ⊕ sm || "fallback"
+cjStrFb = a > 2 && b > 2 && (sl ⊕ sm) || "fallback"
 "CjStrFb: -cjStrFb"
 
 # A conjunction gating a multi-return value: the whole && chain is one
@@ -328,7 +328,7 @@ aoW = 3 > 2 && 1 > 9 && 11
 aoI = 1:5
 aoR = aoI > 9 && aoI || -1
 "RangedAndOrAllMiss: -aoR"
-aoR2 = aoI > 2 && aoI * 10 || -1
+aoR2 = aoI > 2 && (aoI * 10) || -1
 "RangedAndOrLastWin: -aoR2"
 
 # Statement-gate position: && short-circuits conditions left to right.
@@ -370,7 +370,7 @@ anA, anB = Pair(1, 2) > Pair(5, 5) && Loud(6)
 
 # A repeated heap value is built once, though both slots take it, and each
 # owns a copy (leak-checked).
-ahA, ahB = PairStr(3, 1) > PairStr(2, 0) && LoudStr(8) ⊕ "?"
+ahA, ahB = PairStr(3, 1) > PairStr(2, 0) && (LoudStr(8) ⊕ "?")
 "AndRepeatsHeap: -ahA -ahB"
 
 # A repeated array gives each slot that takes it its own copy.
@@ -477,7 +477,7 @@ nstHeapArgFb = MkStr(a > 9 && "a" || "z")
 
 # Nested &&/|| driven by a range: last yielded value wins.
 nstRi = 0:5
-nstRanged = (nstRi > 2 || nstRi < 1) && nstRi * 10
+nstRanged = (nstRi > 2 || nstRi < 1) && (nstRi * 10)
 "NstRanged: -nstRanged"
 
 # Needed slots: a nested && or || runs its right side only for the slots its

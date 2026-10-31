@@ -563,19 +563,19 @@ arithGateHeapKeep = agS1 ⊕ agS2 > "zzz"
 # nested conditions are ANDed; the fallback fires if any fail. (Heap arms below
 # are leak-checked, including the value computed before a failed gate.)
 owI = 0:10
-orWrapPow = [(owI > 2 < 8) ^ 2 || -1.0]
+orWrapPow = [((owI > 2 < 8) ^ 2) || -1.0]
 "OrWrapPow: -orWrapPow"
-orWrapAddTrue = (a > 2) + 100 || -1
+orWrapAddTrue = ((a > 2) + 100) || -1
 "OrWrapAddTrue: -orWrapAddTrue"
-orWrapAddFalse = (b > 2) + 100 || -1
+orWrapAddFalse = ((b > 2) + 100) || -1
 "OrWrapAddFalse: -orWrapAddFalse"
-orWrapMulti = (a > 2) + (b > 3) || -1
+orWrapMulti = ((a > 2) + (b > 3)) || -1
 "OrWrapMulti: -orWrapMulti"
-orWrapHeapTrue = (MkStr(a) > "s2") ⊕ "!" || "def"
+orWrapHeapTrue = ((MkStr(a) > "s2") ⊕ "!") || "def"
 "OrWrapHeapTrue: -orWrapHeapTrue"
-orWrapHeapFalse = (MkStr(b) > "s2") ⊕ "!" || "def"
+orWrapHeapFalse = ((MkStr(b) > "s2") ⊕ "!") || "def"
 "OrWrapHeapFalse: -orWrapHeapFalse"
-orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
+orWrapHeapCell = [((MkStr(owI) > "s6") ⊕ "!") || "def"]
 "OrWrapHeapCell: -orWrapHeapCell"
 
 # The condition may appear more than once in the left operand; all occurrences
@@ -583,7 +583,7 @@ orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
 # the float ^) with a -1 fallback. The condition must stay inline: factoring it
 # into a variable (`t = owI > 2 < 8`) resolves it to a value with no live
 # condition, so `[t * t || -1]` has nothing for the || to attach to.
-orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
+orWrapRepeatedCond = [((owI > 2 < 8) * (owI > 2 < 8)) || -1]
 "OrWrapRepeatedCond: -orWrapRepeatedCond"
 
 # A complicated per-element/piecewise function is one chain of cond && value
@@ -591,7 +591,7 @@ orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
 # one pass, in order, and length-preserving (no splitting the domain and
 # concatenating filtered pieces); && binds tighter than ||, so no parens needed.
 # Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
-owPiecewise = [owI < 2 && -10 || owI < 5 && 0 || owI < 8 && owI * owI || 999]
+owPiecewise = [owI < 2 && -10 || owI < 5 && 0 || owI < 8 && (owI * owI) || 999]
 "OwPiecewise: -owPiecewise"
 
 # Conditions are value-position like the values: a comparison yields its LHS and
@@ -601,9 +601,9 @@ owPiecewise = [owI < 2 && -10 || owI < 5 && 0 || owI < 8 && owI * owI || 999]
 chI = 0:10
 chainGate = chI > 2 < 8 [chI * chI]
 "ChainGate: -chainGate"
-chainCondVal = [chI > 2 < 8 && chI * chI]
+chainCondVal = [chI > 2 < 8 && (chI * chI)]
 "ChainCondVal: -chainCondVal"
-chainCondValFb = [chI > 2 < 8 && chI * chI || -1]
+chainCondValFb = [chI > 2 < 8 && (chI * chI) || -1]
 "ChainCondValFb: -chainCondValFb"
 chA = 5
 chainScalar = chA > 2 < 8  chA * chA
@@ -981,8 +981,8 @@ rpL, rpM = rpK > 9 || Pair(1, 2)
 
 # A repeated heap fallback is built once, whether one slot or both take it,
 # and each slot that takes it owns a copy (leak-checked).
-hrA, hrB = PairStr(1, 3) > PairStr(2, 2) || LoudStr(9) ⊕ "?"
-hrC, hrD = PairStr(1, 1) > PairStr(2, 2) || LoudStr(7) ⊕ "?"
+hrA, hrB = PairStr(1, 3) > PairStr(2, 2) || (LoudStr(9) ⊕ "?")
+hrC, hrD = PairStr(1, 1) > PairStr(2, 2) || (LoudStr(7) ⊕ "?")
 "HeapRepeatOr: -hrA -hrB -hrC -hrD"
 
 # A comparison repeats a single side: a single right against each left slot,
@@ -1056,7 +1056,7 @@ nsG, nsH = ((PairStr(1, 5) > "s2") ⊕ "!") ⊕ "?"
 "NestedSpineFails: -nsG -nsH"
 
 # A || side recombines its nested arithmetic the same way.
-nsK = ((MkStr(4) > "a") ⊕ "!") ⊕ "?" || "z"
+nsK = (((MkStr(4) > "a") ⊕ "!") ⊕ "?") || "z"
 "NestedSpineOr: -nsK"
 
 # Each nested combine keeps its own slot type, so its integer arrays stay
@@ -1278,7 +1278,7 @@ rB = rI > 2 || rI
 "RangedOrIdent: -rB"
 rC = Double(rI > 2 || 7)
 "RangedOrCallArg: -rC"
-rD = rI > 2 && rI * 2 || 7
+rD = rI > 2 && (rI * 2) || 7
 "RangedOrCondValue: -rD"
 
 # A mask consumed by a call argument or an index is freed by that consumer
