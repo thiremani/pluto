@@ -28,8 +28,9 @@ After Phase 1, `fib_tail` is no longer a strong argument for a Pluto-level tail-
 Pluto's source-level semantics stay unchanged:
 
 - assignments copy
-- input names are read-only and keep their values for the whole call, even
-  when the caller shares one with an output (#144)
+- input names are read-only and keep their values while the body runs, once
+  per call or per iteration of a ranged call, even when the caller shares one
+  with an output (#144)
 - every body that runs writes every output (#123); output names are readable
   only once definitely assigned, and results reach the caller at assignment
   commit

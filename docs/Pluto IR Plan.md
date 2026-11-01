@@ -323,6 +323,14 @@ shares storage only between the iterations of a callee-owned range;
 `tests/alias_input` pins the results. Step 4's call lowering must preserve the
 external commit.
 
+Reusing the input's buffer for the output is a later optimization, not yet
+scheduled. It needs two facts: the caller can hand over the destination's
+old value because nothing else in the statement reads it, and the body
+consumes the input where no later read needs its contents, as at its last
+read, in a one-pass compaction such as a filter, or in a runtime sort with a
+consuming contract. It extends §8's consuming promotion across the call
+boundary; a handover alone does not make a body run in place.
+
 ## 7. Loop-Carried State
 
 A ranged assignment that reads its own LHS needs explicit carried state, so

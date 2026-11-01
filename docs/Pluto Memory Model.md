@@ -22,9 +22,12 @@ This document describes Pluto's semantic model and compares it with other major 
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
 7. **Read-Only Function Arguments:** Inputs are read-only and keep their
-   values for the whole call, even when the caller also passes the argument
-   as a destination. Every body that runs writes every output, and results
-   reach the caller's destinations when the assignment commits.
+   values while the body runs (once per call, or once per iteration of a
+   ranged call), even when the caller also passes the argument as a
+   destination. Every body that runs writes every output, and results reach
+   the caller's destinations when the assignment commits. A destination
+   passed back as an input gives each run the previous run's result, which
+   is how a ranged call accumulates.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -413,6 +416,17 @@ previous iteration's result. Within an iteration, inputs are stable. Starting
 from 10, `FoldBefore(value, 1:3)` and `FoldAfter(value, 1:3)` both produce
 `13 11` when their first output targets `value`. An empty range leaves an
 existing destination unchanged and a fresh destination at its zero value.
+
+A body keeps evolving state in an output. Once assigned, the output can feed
+further calls, each reading the previous step's result, while the input keeps
+its value throughout, even when the caller shares it:
+
+```python
+out = Pipeline(input)
+    out = Step1(input)
+    out = Step2(out)
+    out = Step3(out)
+```
 
 Within one invocation, sharing a binding between an argument and a
 destination is only a copy optimization; across a ranged call's iterations,
