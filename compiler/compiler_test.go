@@ -227,6 +227,69 @@ row`
 	require.NotContains(t, scriptIR, "_written", "a function without a range parameter has no write markers")
 }
 
+// Every body that runs writes every output (#123), so a ranged function sets
+// each write marker once per executed iteration rather than at each write,
+// the gated one included.
+func TestRangedIndirectReturnMarksOncePerIteration(t *testing.T) {
+	code := `s, n = Both(a, r)
+    s = a + r
+    s = r > 1 r
+    n = r`
+	script := `s, n = Both(0, 1:4)
+s, n`
+
+	moduleName := "ranged_markers_per_iteration"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Both", []Type{I64, Range{Iter: I64}})
+
+	start := strings.Index(scriptIR, "define void @"+mangled+"(")
+	require.NotEqual(t, -1, start, "expected the ranged indirect definition")
+	body := scriptIR[start:]
+	body = body[:strings.Index(body, "\n}\n")]
+
+	for _, marker := range []string{"store i1 true, ptr %s_written", "store i1 true, ptr %n_written"} {
+		require.Equal(t, 1, strings.Count(body, marker), "each marker is set once per iteration: %s", marker)
+		require.Greater(t, strings.Index(body, marker), strings.LastIndex(body, "ptr %n_dest"), "the markers follow the iteration's last write: %s", marker)
+	}
+}
+
+// A callee without a range parameter writes every output, so its call stages
+// them at zero; a ranged callee may run no iteration, which leaves the
+// destination as it was, so its staging still copies the destination.
+func TestCallStagingCopiesDestinationOnlyForRangedCallee(t *testing.T) {
+	code := `a = Twice(x)
+    a = [x x]`
+	rangeFree := `p = [7 8 9]
+p
+p = Twice(2)
+p`
+	ranged := `p = [7 8 9]
+p
+p = Twice(0:3)
+p`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "zero_call_staging", code, rangeFree)
+	require.NotContains(t, scriptIR, "@arr_i64_copy(", "a range-free call must not copy its destination into the staged slot")
+
+	scriptIR, _ = compileScriptAndCodeIR(t, "seeded_call_staging", code, ranged)
+	require.Equal(t, 1, strings.Count(scriptIR, "call ptr @arr_i64_copy("), "a ranged call stages a copy of its destination")
+}
+
+// Nested and targetless calls of a function without a range parameter pass
+// only its source arguments.
+func TestNestedAndTargetlessCallsPassNoSeed(t *testing.T) {
+	code := `out = Square(x)
+    out = x * x`
+	script := `Square(Square(2))`
+
+	moduleName := "nested_call_no_seed"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Square", []Type{I64})
+
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2)", "the nested call passes no seed")
+	require.Regexp(t, `call i64 @`+mangled+`\(i64 %\w+\)`, scriptIR, "the targetless outer call passes no seed")
+}
+
 // verifyCompiledModules asserts LLVM accepts the complete code and script
 // modules lowered from a source pair.
 func verifyCompiledModules(t *testing.T, moduleName, codeSrc, scriptSrc string) {
