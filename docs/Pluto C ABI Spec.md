@@ -518,6 +518,44 @@ specialization produce, with each iteration's shared argument rebound to the
 destination's current value. With `out = a + i`, `sum = Acc(sum, 1:5)` from 0
 gives 10, while an unshared `Acc(0, 1:5)` gives 4.
 
+### 5.4 Native Callers
+
+Every public specialization follows the calling convention above, so its
+symbol is an ordinary C function: once a native program can link it, C or
+any language with a C foreign function interface can call it. ABI 3.0
+(§5.3) is planned to drop the seed and the write markers from those without
+a range parameter. Three pieces are missing before a native program can
+call one:
+
+- the compiler builds an executable per script and no library;
+- it emits a specialization only for argument types that some Pluto call
+  uses, so a native caller cannot request one such as `Square(I64)`;
+- nothing yet specifies how a native caller creates or releases the strings
+  and arrays these functions exchange.
+
+Private variants (§5.2) stay internal even then, because each one assumes
+the call site that selects it. The `Acc` variant never reads its shared
+`I64` argument, since its loop starts from the seed, and a shared pointer
+input must point at the output's own slot. Exporting a variant would make
+those rules part of the public ABI. To offer accumulation to native
+callers, a module defines an ordinary function whose body makes the shared
+call:
+
+```
+total = AccFrom(start, lo, hi)
+    total = start
+    total = Acc(total, lo:hi)
+```
+
+`AccFrom(0, 1, 5)` gives 10, and `AccFrom(7, 3, 3)` gives 7. It takes the
+bounds rather than a `Range`, since a range parameter would run its body
+once per element. Its public specialization calls the private variant with
+`start` as both the shared argument and the seed. Like every direct return
+today, it also takes a seed as its fourth argument, which it never reads and
+which ABI 3.0 is planned to remove. Generated wrappers could later supply
+headers, ABI adaptation and ownership handling; they wait for a concrete
+native integration need.
+
 ---
 
 ## 6. Grammar
