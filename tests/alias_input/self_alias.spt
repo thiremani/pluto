@@ -238,3 +238,13 @@ callerDriven, callerDrivenSeen = ArrayAfter(callerDriven, callerDriven[(0:2) + 0
 gatedRange = 10
 gatedRange, gatedRangeSeen = 1 > 0 FoldAfter(gatedRange, 1:3)
 "GatedRange:", gatedRange, gatedRangeSeen
+
+# A conditional call that shares a static string destination widens it,
+# beside a sibling that copies the destination, then an unshared call: the
+# input keeps the old string, and every copy is freed (#108).
+condShared = "x"
+condShared, condSharedSeen, condSharedCopy = 1 > 0 ConcatAfter(condShared, "a"), condShared
+"ConditionalShared:", condShared, condSharedSeen, condSharedCopy
+plainText = "v"
+plainOut, plainSeen = ConcatAfter(plainText, "c")
+"Unshared:", plainText, plainOut, plainSeen

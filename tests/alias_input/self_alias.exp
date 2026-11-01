@@ -61,3 +61,5 @@ CallerOutOfBounds: a keep
 OwnDriver: [1 2 1 2] [1 2 1]
 CallerOwnDriver: [1 2 1 2] [1 2 1]
 GatedRange: 13 11
+ConditionalShared: xa x x
+Unshared: v vc v
