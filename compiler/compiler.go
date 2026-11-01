@@ -2223,17 +2223,16 @@ type callOutputAdapter struct {
 }
 
 // makeCallOutputAdapters adapts destination-typed result slots to an indirect
-// callee's declared output types. Matching slots pass through directly. A
-// mismatched slot, or one the call also passes as an input, gets an ABI-typed
-// zero seed; the callee's explicit per-output write flag decides whether that
-// value commits into the destination-typed stage. This keeps one ownership or
-// shape flavor from masquerading as another, and an input from seeing a write.
-func (c *Compiler) makeCallOutputAdapters(sig *callSignature, call preparedCall, running []*Symbol) []callOutputAdapter {
-	outTypes := sig.ABI.Return.OutTypes
+// callee's declared output types. A mismatched slot gets an ABI-typed zero
+// seed, so one ownership or shape flavor cannot masquerade as another, and so
+// does every slot a ranged loop carries, since an argument may hold its value
+// and an input keeps its value for the whole call. The callee's per-output
+// write flag decides whether a seed commits; other slots pass through directly.
+func (c *Compiler) makeCallOutputAdapters(running []*Symbol, outTypes []Type, carried bool) []callOutputAdapter {
 	adapters := make([]callOutputAdapter, len(running))
 	for i, output := range running {
 		targetType := output.Type.(Ptr).Elem
-		if TypeEqual(targetType, outTypes[i]) && !passesSlotAsInput(call.Args, output.Val) {
+		if !carried && TypeEqual(targetType, outTypes[i]) {
 			adapters[i].abiOutput = output
 			continue
 		}
@@ -2244,20 +2243,6 @@ func (c *Compiler) makeCallOutputAdapters(sig *callSignature, call preparedCall,
 		adapters[i].bridged = true
 	}
 	return adapters
-}
-
-// passesSlotAsInput reports whether a call passes slot itself as an input. A
-// caller-side ranged loop binds its destinations to the slots its call
-// writes, so an argument naming one of them is that slot. An input shared
-// with an output receives the slot only when the call is emitted, so it
-// never matches here.
-func passesSlotAsInput(args []callArg, slot llvm.Value) bool {
-	for _, arg := range args {
-		if arg.Lowered.Val == slot {
-			return true
-		}
-	}
-	return false
 }
 
 func callAdapterOutputs(adapters []callOutputAdapter) []*Symbol {
@@ -3235,7 +3220,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	var outputs []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
-		c.callIntoStagedOutputs(sig, call, outputs)
+		c.callIntoStagedOutputs(sig, call, outputs, false)
 	})
 	return c.loadOutputValues(outputs, "call_final")
 }
@@ -3268,10 +3253,8 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 	})
 }
 
-// compileIndirectCallIntoStagedOutputs calls into destination-typed staged
-// slots. A shared output passes its slot straight through, since the alias
-// pattern gave it the input's storage; an unshared output of another
-// representation goes through an adapter committed only when written.
+// compileIndirectCallIntoStagedOutputs calls into the slots a caller-side
+// ranged loop carries, each through an adapter committed only when written.
 func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	sig *callSignature,
 	ce *ast.CallExpression,
@@ -3279,12 +3262,12 @@ func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	staged []*Symbol,
 ) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		c.callIntoStagedOutputs(sig, call, staged)
+		c.callIntoStagedOutputs(sig, call, staged, true)
 	})
 }
 
-func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, staged []*Symbol) {
-	adapters := c.makeCallOutputAdapters(sig, call, staged)
+func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, staged []*Symbol, carried bool) {
+	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes, carried)
 	outputs := callAdapterOutputs(adapters)
 	c.runCallWithBoundsElse(func() {
 		writeFlags := c.makeCallOutputWriteFlags(len(outputs))

@@ -203,6 +203,13 @@ heapSkip = "a" ⊕ ""
 heapSkip, heapSkipSeen = ConcatAfter(heapSkip, names[(0:4) + 0])
 "HeapCallerSkip:", heapSkip, heapSkipSeen
 
+# A conditional argument that holds passes the destination's current value,
+# and the input keeps it while the call writes the output.
+condArg = "a" ⊕ ""
+condArgSeen = ""
+condArg, condArgSeen = ConcatAfter(condArg > "", names[(0:2) + 0])
+"ConditionalArgument:", condArg, condArgSeen
+
 # An empty range, or one with no element in bounds, runs no iteration and
 # keeps every destination.
 emptyText = "a" ⊕ ""

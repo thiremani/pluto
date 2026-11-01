@@ -54,6 +54,7 @@ FailedArgument: 10 0
 CalleeSkip: 21 15
 CallerSkip: 21 15
 HeapCallerSkip: abc ab
+ConditionalArgument: abc ab
 EmptyHeap: a keep
 OutOfBounds: a keep
 CallerOutOfBounds: a keep
