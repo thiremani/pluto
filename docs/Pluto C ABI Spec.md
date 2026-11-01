@@ -354,10 +354,10 @@ types:
   a distinct internal symbol; the source specialization and its effect facts
   remain unchanged. Any other representation change between a declared output
   and its destination uses a separate ABI output adapter initialized to zero
-  and committed only if its write marker is set. So does every output of a
-  call in a caller-side ranged loop, whose arguments may hold the values its
-  destinations carry, so that an input keeps its value while the callee
-  writes the output.
+  and committed only if its write marker is set. So does every output of an
+  indirect-return call in a caller-side ranged loop, whose arguments may hold
+  the values its destinations carry, so that an input keeps its value while
+  the callee writes the output.
 
 The direct-return seed is always present, even when the function body
 unconditionally overwrites its output. Schematically, with mangled names
