@@ -248,3 +248,15 @@ condShared, condSharedSeen, condSharedCopy = 1 > 0 ConcatAfter(condShared, "a"),
 plainText = "v"
 plainOut, plainSeen = ConcatAfter(plainText, "c")
 "Unshared:", plainText, plainOut, plainSeen
+
+# A body passes its own output on through further calls while its caller
+# shares the input with that output.
+pipeValue = 10
+pipeValue, pipeValueSeen = TwicePipeline(pipeValue)
+"TwicePipeline:", pipeValue, pipeValueSeen
+pipeText = "a"
+pipeText, pipeTextSeen = ShoutPipeline(pipeText)
+"ShoutPipeline:", pipeText, pipeTextSeen
+pipeArray = [1]
+pipeArray, pipeArraySeen = GrowPipeline(pipeArray)
+"GrowPipeline:", pipeArray, pipeArraySeen

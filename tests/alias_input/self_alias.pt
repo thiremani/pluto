@@ -168,3 +168,20 @@ out, after = FoldAfterBoth(current, i, j)
 out, after = ArrayAfterBoth(current, i, j)
     out = current ⊕ [i * j]
     after = current
+
+# A body keeps evolving state in its output: each nested call reads the
+# previous step's result, and the input keeps its value throughout.
+out, seen = TwicePipeline(current)
+    out = Twice(current)
+    out = Twice(out)
+    seen = current
+
+out, seen = ShoutPipeline(current)
+    out = Shout(current)
+    out = Shout(out)
+    seen = current
+
+out, seen = GrowPipeline(current)
+    out = Grow(current)
+    out = Grow(out)
+    seen = current
