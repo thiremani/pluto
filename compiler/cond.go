@@ -192,7 +192,7 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 			Type:     Ptr{Elem: outTypes[i]},
 			Borrowed: true,
 		}
-		existing, exists := Get(c.Scopes, ident.Value)
+		_, exists := Get(c.Scopes, ident.Value)
 		seed := c.resolveDestSeed(ident, outTypes[i])
 		// The conditional slot owns its seed independently. Otherwise an
 		// early RHS overwrite can free the real pre-statement destination
@@ -202,9 +202,6 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 			seed = c.deepCopyIfNeeded(seed)
 		}
 		c.storeSymbolToSlot(tempSym, seed, outTypes[i], tempName+"_seed")
-		if exists {
-			tempSym.WriteFlag = existing.WriteFlag
-		}
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
@@ -222,9 +219,8 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 		finalType := s.outType
 		finalVal := c.createLoad(tempSym.Val, finalType, s.dest.Value+"_cond_final")
 		finalSym := &Symbol{
-			Val:       finalVal,
-			Type:      finalType,
-			WriteFlag: tempSym.WriteFlag,
+			Val:  finalVal,
+			Type: finalType,
 		}
 
 		// A blank slot binds nothing. The temp owns whatever it holds — the
@@ -345,9 +341,6 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 		seed := c.resolveDestSeed(cs.temp, outType)
 		seed = c.deepCopyIfNeeded(seed)
 		c.storeSymbolToSlot(stageTempSym, seed, outType, tempName+"_seed")
-		if commitSym, ok := Get(c.Scopes, cs.temp.Value); ok {
-			stageTempSym.WriteFlag = commitSym.WriteFlag
-		}
 		Put(c.Scopes, tempName, stageTempSym)
 		c.bindSyntheticDestination(tempName, cs.dest.Value)
 		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
@@ -359,7 +352,6 @@ func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlo
 	for i := range stage {
 		stageSym, _ := Get(c.Scopes, stage[i].temp.Value)
 		stagedValue := c.derefIfPointer(stageSym, stage[i].temp.Value+"_stage_final")
-		stagedValue.WriteFlag = stageSym.WriteFlag
 		c.commitSlotValue(commit[i].temp, stagedValue, false)
 	}
 }

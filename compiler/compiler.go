@@ -13,12 +13,11 @@ import (
 )
 
 type Symbol struct {
-	Val       llvm.Value
-	Type      Type
-	FuncArg   bool       // Symbol originates from function input/output argument context.
-	Borrowed  bool       // Value/storage is borrowed from another owner (scope cleanup must skip).
-	ReadOnly  bool       // Input parameter (cannot be written to).
-	WriteFlag llvm.Value // Optional i1* set when this logical output is actually written.
+	Val      llvm.Value
+	Type     Type
+	FuncArg  bool // Symbol originates from function input/output argument context.
+	Borrowed bool // Value/storage is borrowed from another owner (scope cleanup must skip).
+	ReadOnly bool // Input parameter (cannot be written to).
 }
 
 // Borrowed-value ownership model:
@@ -882,19 +881,6 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	return derefed
 }
 
-func (c *Compiler) markOutputSlotWritten(dst *Symbol, mergedFrom llvm.Value) {
-	if dst.WriteFlag.IsNil() {
-		return
-	}
-	// Moving a value produced by a stage that tracks the same logical output
-	// is a merge, not a new write. The stage already set the flag only on the
-	// runtime paths that yielded a value.
-	if !mergedFrom.IsNil() && mergedFrom == dst.WriteFlag {
-		return
-	}
-	c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), dst.WriteFlag)
-}
-
 func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
@@ -907,7 +893,6 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	source := c.derefIfPointer(src, loadName)
 	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
-	c.markOutputSlotWritten(dst, src.WriteFlag)
 	return coerced
 }
 
@@ -1531,12 +1516,11 @@ func (c *Compiler) makePtr(name string, s *Symbol) (ptr *Symbol, alreadyPtr bool
 
 	// Create the new symbol that represents the pointer to this memory.
 	ptr = &Symbol{
-		Val:       alloca,
-		Type:      Ptr{Elem: s.Type},
-		FuncArg:   s.FuncArg,
-		Borrowed:  s.Borrowed,
-		ReadOnly:  s.ReadOnly,
-		WriteFlag: s.WriteFlag,
+		Val:      alloca,
+		Type:     Ptr{Elem: s.Type},
+		FuncArg:  s.FuncArg,
+		Borrowed: s.Borrowed,
+		ReadOnly: s.ReadOnly,
 	}
 
 	return ptr, false
@@ -1603,8 +1587,6 @@ func (c *Compiler) derefIfPointer(s *Symbol, loadName string) *Symbol {
 	newS := GetCopy(s)
 	newS.Val = loadedVal
 	newS.Type = ptrType.Elem
-	// A write flag belongs to the storage slot, not to an ordinary value read.
-	newS.WriteFlag = llvm.Value{}
 	return newS
 }
 
@@ -2194,10 +2176,9 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 	for i, outType := range resolved {
 		name := c.tempOutputName(dest, i)
 
-		var existing *Symbol
 		var exists bool
 		if dest != nil && i < len(dest) {
-			existing, exists = Get(c.Scopes, dest[i].Value)
+			_, exists = Get(c.Scopes, dest[i].Value)
 		}
 
 		var seed *Symbol
@@ -2207,9 +2188,6 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 			seed = c.makeZeroValue(outType)
 		}
 		outputs[i] = c.makeTempOutput(name, outType, true, seed)
-		if exists {
-			outputs[i].WriteFlag = existing.WriteFlag
-		}
 	}
 	return outputs
 }
@@ -2273,34 +2251,21 @@ func callAdapterOutputs(adapters []callOutputAdapter) []*Symbol {
 	return outputs
 }
 
-func (c *Compiler) propagateOutputWriteFlag(output *Symbol, didWrite llvm.Value, index int) {
-	if output.WriteFlag.IsNil() {
-		return
-	}
-	previous := c.builder.CreateLoad(c.Context.Int1Type(), output.WriteFlag, fmt.Sprintf("output_written_%d", index))
-	merged := c.builder.CreateOr(previous, didWrite, fmt.Sprintf("output_written_merge_%d", index))
-	c.builder.CreateStore(merged, output.WriteFlag)
-}
-
 // commitCallOutputAdapters commits ABI-flavor temporaries into the independent
 // result slots after (and only after) a call executes. A ranged callee's
-// writeFlags say which outputs it wrote; any other callee writes every output
-// and passes none.
+// writeFlags say which outputs it wrote, and an unwritten adapter is freed
+// instead; any other callee writes every output and passes none.
 func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeFlags []llvm.Value) {
 	for i, adapter := range adapters {
+		if !adapter.bridged {
+			continue
+		}
 		if writeFlags == nil {
-			if adapter.bridged {
-				c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
-			}
+			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
 			continue
 		}
 
 		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeFlags[i], fmt.Sprintf("call_output_written_%d", i))
-		if !adapter.bridged {
-			c.propagateOutputWriteFlag(running[i], didWrite, i)
-			continue
-		}
-
 		c.withCondBranch(didWrite, "calladapter", func() {
 			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
 		}, func() {
@@ -3185,9 +3150,8 @@ func (c *Compiler) loadOutputValues(outputs []*Symbol, name string) []*Symbol {
 			loadName = fmt.Sprintf("%s_%d", name, i)
 		}
 		out[i] = &Symbol{
-			Val:       c.createLoad(outputs[i].Val, elemType, loadName),
-			Type:      elemType,
-			WriteFlag: outputs[i].WriteFlag,
+			Val:  c.createLoad(outputs[i].Val, elemType, loadName),
+			Type: elemType,
 		}
 	}
 	return out
