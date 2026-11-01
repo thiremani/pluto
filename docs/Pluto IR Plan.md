@@ -49,14 +49,13 @@ their range, conditional, OOB, collector, affine, or commit behavior.
 
 **ABI note.** Per-slot effects are an internal analysis, never a public ABI
 classifier: a body-only edit must never change the C prototype of a
-type-mangled symbol. Today every exported direct `I64`/`F64` return keeps a
-hidden seed parameter. #123 requires every body that runs to write every
-output, so ABI 3.0 (#69) removes the seed and the write markers from every
-function without a `Range` or `ArrayRange` parameter. That removal depends
-only on whether a parameter is a range, and the complete prototype only on the
-solved parameter and output types, so a prototype still never depends on the
-body. A range-bearing function keeps a way to report an empty domain until
-Step 7 chooses one (§16).
+type-mangled symbol. #123 requires every body that runs to write every
+output, so ABI 3.0 (#69) gives the hidden direct-return seed and the write
+markers only to a function with a `Range` or `ArrayRange` parameter. That
+depends only on whether a parameter is a range, and the complete prototype
+only on the solved parameter and output types, so a prototype still never
+depends on the body. A range-bearing function keeps them to report an empty
+domain until Step 7 chooses one way (§16).
 
 ## 2. Deliberate Abstraction Level
 
@@ -243,7 +242,7 @@ PIR calls LHS locations **targets**:
 | Target | Meaning |
 | --- | --- |
 | `local(name)` | Ordinary local binding |
-| `output(name)` | Function output binding. Under the current ABI, a commit on an indirect output also updates its runtime write flag (direct scalar outputs have none); ABI 3.0 removes the flags from functions without a range parameter (§1) |
+| `output(name)` | Function output binding. A commit writes only the output: a range-bearing function sets its indirect outputs' write markers once per executed iteration, and no other function has any (§1) |
 | `discard` | A `_` slot: one independent sink per slot, never bound; see below |
 
 Field, index, column, and cell targets are future extensions (§18).
@@ -878,12 +877,14 @@ zero iterations, which means no assignment. Until Step 7 chooses between one
 resolution below.
 
 **Seeds until Step 7.** A direct `I64`/`F64` result carries no validity bit:
-it is seeded from the destination (`compileCallInner`), so a call-owned domain
-that runs no iteration returns the seed. After a successful invocation, seed
-resolution applies as a **contextual resolver at the assignment boundary**
-for such a call at an existing target: the seed *is* the keep-old outcome, so
-the consumer sees `MustYield`. A caller-side failure is **never** converted
-into a seeded `MustYield`. A nested or targetless call is seeded with zero.
+a callee with a range parameter is seeded from the destination
+(`compileCallInner`), so a call-owned domain that runs no iteration returns
+the seed. After a successful invocation, seed resolution applies as a
+**contextual resolver at the assignment boundary** for such a call at an
+existing target: the seed *is* the keep-old outcome, so the consumer sees
+`MustYield`. A caller-side failure is **never** converted into a seeded
+`MustYield`. A nested or targetless call of such a callee is seeded with
+zero; any other callee takes no seed (ABI 3.0, §1).
 
 Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
@@ -1196,7 +1197,7 @@ both); suite output is unchanged.
 - The ownership elaboration pass (§8), with generic cleanup lowering and
   the consuming-operand promotion; its copy-loud goldens are listed in §17.
 - **Calls split by argument yield.** #123 landed before this slice: every
-  body that runs writes every output, and ABI 3.0 (#69) removes the seed and
+  body that runs writes every output, and ABI 3.0 (#69) removed the seed and
   the write markers from functions without a range parameter, so every
   non-ranged callee is all-`MustWrite`. An argument whose conditional or
   checked failure remains unresolved still makes the invocation `MayYield`,
