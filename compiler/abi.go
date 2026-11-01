@@ -1,5 +1,7 @@
 package compiler
 
+import "slices"
+
 type ABIParamMode int
 
 const (
@@ -30,10 +32,13 @@ type ABIReturn struct {
 // Direct scalar returns carry a hidden destination seed so a skipped write
 // preserves the caller's value. Whether an input shares a caller binding with
 // an output is a compile-time property of each call site, lowered as a private
-// variant of the function; it never appears in the native signature.
+// variant of the function; it never appears in the native signature. Ranged
+// marks a Range or ArrayRange parameter: the function runs its body once per
+// element, possibly zero times.
 type FuncABI struct {
 	Params []ABIParam
 	Return ABIReturn
+	Ranged bool
 }
 
 func isDirectScalarABIType(t Type) bool {
@@ -64,6 +69,7 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 			Mode:     ABIReturnIndirect,
 			OutTypes: append([]Type(nil), outTypes...),
 		},
+		Ranged: slices.ContainsFunc(paramTypes, isRangeDriverType),
 	}
 
 	for i, paramType := range paramTypes {

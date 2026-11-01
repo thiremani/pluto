@@ -41,7 +41,7 @@ type Symbol struct {
 // Memory management:
 //
 //   For function calls (x = f(y)):
-//     - Function writes into an independent, destination-seeded staging slot
+//     - Function writes into an independent staging slot
 //     - The staged result is MOVED to the real destination after all RHS values
 //       have been evaluated
 //     - The real destination's old value is then freed by freeExprOldValues
@@ -311,7 +311,7 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 // staged pointer. A callee without a range parameter runs once per call, so
 // its inputs read their arguments and the call keeps the public specialization.
 func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest []*ast.Identifier) {
-	if !slices.ContainsFunc(sig.ParamTypes, isRangeDriverType) {
+	if !sig.ABI.Ranged {
 		return
 	}
 
@@ -2191,11 +2191,7 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 	resolved := c.resolvedDestTypes(dest, outTypes)
 	outputs := make([]*Symbol, len(resolved))
 	for i, outType := range resolved {
-		role := fmt.Sprintf("output_slot_%d", i)
-		if dest != nil && i < len(dest) {
-			role = "output_" + dest[i].Value
-		}
-		name := freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
+		name := c.tempOutputName(dest, i)
 
 		var existing *Symbol
 		var exists bool
@@ -2215,6 +2211,29 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 		}
 	}
 	return outputs
+}
+
+// makeZeroTempOutputs creates independent result slots for a callee without
+// a range parameter. Every body that runs writes every output (#123), so each
+// slot starts at its zero value, which is freed when the result lands, rather
+// than at a copy of its destination.
+func (c *Compiler) makeZeroTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	resolved := c.resolvedDestTypes(dest, outTypes)
+	outputs := make([]*Symbol, len(resolved))
+	for i, outType := range resolved {
+		outputs[i] = c.makeTempOutput(c.tempOutputName(dest, i), outType, true, nil)
+	}
+	return outputs
+}
+
+// tempOutputName names the result slot for output i after its destination,
+// when it has one.
+func (c *Compiler) tempOutputName(dest []*ast.Identifier, i int) string {
+	role := fmt.Sprintf("output_slot_%d", i)
+	if dest != nil && i < len(dest) {
+		role = "output_" + dest[i].Value
+	}
+	return freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
 }
 
 type callOutputAdapter struct {
@@ -3212,14 +3231,19 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	}
 
 	// Indirect-return callees write through their output pointers. Always point
-	// them at independent, destination-seeded slots so a call in one RHS cannot
-	// mutate a real destination before sibling RHS expressions have read the
-	// statement-start values. They are seeded after the arguments, as a direct
-	// return's seed is. The outer assignment owns the eventual commit and
-	// cleanup.
+	// them at independent slots so a call in one RHS cannot mutate a real
+	// destination before sibling RHS expressions have read the statement-start
+	// values. A ranged callee may run no iteration, so its slots are seeded from
+	// the destinations, after the arguments as a direct return's seed is; any
+	// other callee writes every output, so its slots start at zero. The outer
+	// assignment owns the eventual commit and cleanup.
 	var outputs []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
+		if sig.ABI.Ranged {
+			outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
+		} else {
+			outputs = c.makeZeroTempOutputs(dest, info.OutTypes)
+		}
 		c.callIntoStagedOutputs(sig, call, outputs, false)
 	})
 	return c.loadOutputValues(outputs, "call_final")
