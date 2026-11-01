@@ -332,20 +332,6 @@ func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest 
 	}
 }
 
-// directReturnSeedForCall captures the caller's current destination value for a
-// ranged callee's direct scalar return. The callee receives it through a hidden
-// ABI parameter and returns it when it runs no iteration, which leaves the
-// destination as it was even though the LLVM return itself is by value.
-func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, output *Symbol) *Symbol {
-	if output != nil {
-		return c.derefIfPointer(output, "call_seed")
-	}
-	if dest != nil {
-		return c.resolveDestSeed(dest, outType)
-	}
-	return c.makeZeroValue(outType)
-}
-
 func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
 	s, ok := Get(c.Scopes, name)
 	if !ok {
@@ -3266,14 +3252,13 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 	return fn, funcType, retStruct
 }
 
+// compileDirectCallIntoOutput calls inside a caller-side ranged loop, whose
+// callee never has a range parameter: the solver gives every argument its
+// yielded type once any argument needs the caller's loop. So it takes no seed.
 func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		var seed *Symbol
-		if sig.ABI.Ranged {
-			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
-		}
 		c.runCallWithBounds(func() {
-			result := c.callDirect(call.Function, call.FuncType, sig, call, seed)
+			result := c.callDirect(call.Function, call.FuncType, sig, call, nil)
 			c.storeSymbolToSlot(output, result, output.Type.(Ptr).Elem, "call_direct_store")
 		})
 	})
@@ -3335,9 +3320,12 @@ func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {
 func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) []*Symbol {
 	var results []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		// A ranged callee receives the destination's current value through a
+		// hidden ABI parameter and returns it when it runs no iteration, which
+		// leaves the destination as it was even though the return is by value.
 		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
 		if sig.ABI.Ranged && len(dest) > 0 {
-			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
+			seed = c.resolveDestSeed(dest[0], sig.ABI.Return.DirectType)
 		}
 		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
 		c.createStore(seed.Val, resultPtr, seed.Type)
