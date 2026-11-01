@@ -26,7 +26,7 @@ type Symbol struct {
 // Function lowering is ABI-classified. Indirect params/results use caller-owned
 // storage as before; direct scalar params stay as SSA values in function scope
 // until addressable storage is semantically required, and direct scalar outputs
-// stay as seeded values in function scope until storage is semantically required.
+// stay as SSA values in function scope until storage is semantically required.
 // Direct scalar returns cross the call boundary as SSA values.
 //
 //   - Input params (ReadOnly=true): read-only reference to caller's value
@@ -333,9 +333,9 @@ func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest 
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
-// direct scalar return. The callee receives it through a hidden ABI parameter
-// so a skipped output write preserves the destination even though the LLVM
-// return itself is by value.
+// ranged callee's direct scalar return. The callee receives it through a hidden
+// ABI parameter and returns it when it runs no iteration, which leaves the
+// destination as it was even though the LLVM return itself is by value.
 func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, output *Symbol) *Symbol {
 	if output != nil {
 		return c.derefIfPointer(output, "call_seed")
@@ -2282,31 +2282,43 @@ func (c *Compiler) propagateOutputWriteFlag(output *Symbol, didWrite llvm.Value,
 }
 
 // commitCallOutputAdapters commits ABI-flavor temporaries into the independent
-// result slots after (and only after) a call executes. Store/coercion happens
-// before old-value cleanup so shape resets and StrG -> StrH copies can inspect
-// the previous destination safely.
+// result slots after (and only after) a call executes. A ranged callee's
+// writeFlags say which outputs it wrote; any other callee writes every output
+// and passes none.
 func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeFlags []llvm.Value) {
 	for i, adapter := range adapters {
+		if writeFlags == nil {
+			if adapter.bridged {
+				c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
+			}
+			continue
+		}
+
 		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeFlags[i], fmt.Sprintf("call_output_written_%d", i))
 		if !adapter.bridged {
 			c.propagateOutputWriteFlag(running[i], didWrite, i)
 			continue
 		}
 
-		commit := func() {
-			targetType := running[i].Type.(Ptr).Elem
-			oldValue := c.derefIfPointer(running[i], fmt.Sprintf("calladapter_old_%d", i))
-			source := c.derefIfPointer(adapter.abiOutput, fmt.Sprintf("calladapter_result_%d", i))
-			stored := c.storeSymbolToSlot(running[i], source, targetType, fmt.Sprintf("calladapter_store_%d", i))
-			c.freeSymbolValue(oldValue, "")
-			if stored.Val != source.Val {
-				c.freeSymbolValue(source, "")
-			}
-		}
-
-		c.withCondBranch(didWrite, "calladapter", commit, func() {
+		c.withCondBranch(didWrite, "calladapter", func() {
+			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
+		}, func() {
 			c.freeSymbolValue(adapter.abiOutput, fmt.Sprintf("calladapter_unwritten_%d", i))
 		})
+	}
+}
+
+// commitCallOutputAdapter moves one adapter's result into its result slot.
+// Store/coercion happens before old-value cleanup so shape resets and
+// StrG -> StrH copies can inspect the previous destination safely.
+func (c *Compiler) commitCallOutputAdapter(running, abiOutput *Symbol, index int) {
+	targetType := running.Type.(Ptr).Elem
+	oldValue := c.derefIfPointer(running, fmt.Sprintf("calladapter_old_%d", index))
+	source := c.derefIfPointer(abiOutput, fmt.Sprintf("calladapter_result_%d", index))
+	stored := c.storeSymbolToSlot(running, source, targetType, fmt.Sprintf("calladapter_store_%d", index))
+	c.freeSymbolValue(oldValue, "")
+	if stored.Val != source.Val {
+		c.freeSymbolValue(source, "")
 	}
 }
 
@@ -2476,7 +2488,9 @@ func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected T
 	}
 }
 
-func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
+// getReturnStruct defines the result carrier: a pointer per output and, for a
+// ranged function, a write-marker pointer per output after them.
+func (c *Compiler) getReturnStruct(mangled string, abi FuncABI) llvm.Type {
 	// Check if we've already made a "%<mangled>_ret" in this module:
 	retName := mangled + "_ret"
 
@@ -2485,10 +2499,15 @@ func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type
 	}
 	// Otherwise, define it exactly once:
 	st := c.Context.StructCreateNamed(retName)
-	fields := make([]llvm.Type, len(outputTypes)*2)
-	for i, t := range outputTypes {
-		fields[i] = llvm.PointerType(c.mapToLLVMType(t), 0)
-		fields[len(outputTypes)+i] = llvm.PointerType(c.Context.Int1Type(), 0)
+	outputTypes := abi.Return.OutTypes
+	fields := make([]llvm.Type, 0, len(outputTypes)*2)
+	for _, t := range outputTypes {
+		fields = append(fields, llvm.PointerType(c.mapToLLVMType(t), 0))
+	}
+	if abi.Ranged {
+		for range outputTypes {
+			fields = append(fields, llvm.PointerType(c.Context.Int1Type(), 0))
+		}
 	}
 	st.StructSetBody(fields, false)
 	return st
@@ -2500,7 +2519,7 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	retStruct := llvm.Type{}
 
 	if abi.UsesIndirectReturn() {
-		retStruct = c.getReturnStruct(mangled, abi.Return.OutTypes)
+		retStruct = c.getReturnStruct(mangled, abi)
 		llvmParams = append(llvmParams, llvm.PointerType(retStruct, 0))
 	} else {
 		retType = c.mapToLLVMType(abi.Return.DirectType)
@@ -2509,7 +2528,7 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	for _, param := range abi.Params {
 		llvmParams = append(llvmParams, c.mapToLLVMType(param.Lowered))
 	}
-	if abi.Return.Mode == ABIReturnDirect {
+	if abi.DirectReturnSeedParamIndex() >= 0 {
 		llvmParams = append(llvmParams, c.mapToLLVMType(abi.Return.DirectType))
 	}
 
@@ -2594,7 +2613,7 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	return function
 }
 
-func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
+func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type, markers bool) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		// GEP to get pointer to sret field (which holds a destination pointer)
@@ -2611,6 +2630,9 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 			FuncArg:  true,
 			Borrowed: true,
 			ReadOnly: false,
+		}
+		if !markers {
+			continue
 		}
 		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
 		flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
@@ -2706,7 +2728,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	var outputs []*Symbol
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes, sig.ABI.Ranged)
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}
@@ -3266,8 +3288,8 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 
 func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-		if output != nil {
+		var seed *Symbol
+		if sig.ABI.Ranged {
 			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
 		}
 		c.runCallWithBounds(func() {
@@ -3294,7 +3316,10 @@ func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, 
 	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes, carried)
 	outputs := callAdapterOutputs(adapters)
 	c.runCallWithBoundsElse(func() {
-		writeFlags := c.makeCallOutputWriteFlags(len(outputs))
+		var writeFlags []llvm.Value
+		if sig.ABI.Ranged {
+			writeFlags = c.makeCallOutputWriteFlags(len(outputs))
+		}
 		c.builder.CreateCall(
 			call.FuncType,
 			call.Function,
@@ -3331,7 +3356,7 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 	var results []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-		if len(dest) > 0 {
+		if sig.ABI.Ranged && len(dest) > 0 {
 			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
 		}
 		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
@@ -3379,7 +3404,7 @@ func (c *Compiler) callArgs(
 		}
 		llvmArgs = append(llvmArgs, argVal)
 	}
-	if sig.ABI.Return.Mode == ABIReturnDirect {
+	if sig.ABI.DirectReturnSeedParamIndex() >= 0 {
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}
