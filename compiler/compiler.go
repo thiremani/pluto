@@ -68,9 +68,10 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs       []*Symbol // lowered function inputs (range iterators remain pointer-backed)
-	IterIndices  []int     // Indices of iterator params
-	AliasPattern []int     // Per input, the one-based output it shares (callSignature.AliasPattern)
+	Inputs       []*Symbol    // lowered function inputs (range iterators remain pointer-backed)
+	IterIndices  []int        // Indices of iterator params
+	AliasPattern []int        // Per input, the one-based output it shares (callSignature.AliasPattern)
+	WriteMarkers []llvm.Value // Per output, the i1 pointer each executed iteration sets (indirect returns)
 }
 
 type callArg struct {
@@ -2613,7 +2614,7 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	return function
 }
 
-func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type, markers bool) []*Symbol {
+func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		// GEP to get pointer to sret field (which holds a destination pointer)
@@ -2631,14 +2632,20 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 			Borrowed: true,
 			ReadOnly: false,
 		}
-		if !markers {
-			continue
-		}
-		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
-		flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
-		retPtrs[i].WriteFlag = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
 	}
 	return retPtrs
+}
+
+// loadWriteMarkers loads a ranged function's write-marker pointers, which its
+// result carrier holds after the output pointers.
+func (c *Compiler) loadWriteMarkers(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value) []llvm.Value {
+	markers := make([]llvm.Value, len(fn.Outputs))
+	flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
+	for i, outIdent := range fn.Outputs {
+		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
+		markers[i] = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
+	}
+	return markers
 }
 
 func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature, function llvm.Value) *Symbol {
@@ -2710,11 +2717,12 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 	return inputs, iterIndices
 }
 
-func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, aliasPattern []int, currentOutput *Symbol) *Symbol {
+func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, aliasPattern []int, markers []llvm.Value, currentOutput *Symbol) *Symbol {
 	fa := &FuncArgs{
 		Inputs:       inputs,
 		IterIndices:  iterIndices,
 		AliasPattern: aliasPattern,
+		WriteMarkers: markers,
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2726,9 +2734,13 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	inputs, iterIndices := c.processParams(template, sig, function)
 
 	var outputs []*Symbol
+	var markers []llvm.Value
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes, sig.ABI.Ranged)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes)
+		if sig.ABI.Ranged {
+			markers = c.loadWriteMarkers(template, retStruct, sretPtr)
+		}
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}
@@ -2739,11 +2751,11 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
-		finalOutput := c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, outputs[0])
+		finalOutput := c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, nil, outputs[0])
 		// Rebind the function output name to the final loop-carried SSA value.
 		Put(c.Scopes, template.Outputs[0].Value, finalOutput)
 	} else {
-		c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, nil)
+		c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, markers, nil)
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
@@ -2874,6 +2886,11 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 		staged := c.bindIterationInputs(fn, fa)
 		c.compileFuncBody(fn)
 		c.commitIterationOutputs(staged)
+		// Every body that runs writes every output (#123), so each executed
+		// iteration sets every marker; a marker left false means none ran.
+		for _, marker := range fa.WriteMarkers {
+			c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), marker)
+		}
 		if currentOutput == nil {
 			return nil
 		}
@@ -2972,9 +2989,8 @@ func (c *Compiler) bindIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) []it
 	return staged
 }
 
-// commitIterationOutputs moves each iteration's result into its carried slot,
-// marking the output written, and frees the previous result once the body no
-// longer reads it.
+// commitIterationOutputs moves each iteration's result into its carried slot
+// and frees the previous result once the body no longer reads it.
 func (c *Compiler) commitIterationOutputs(staged []iterationOutput) {
 	for _, output := range staged {
 		previous := c.derefIfPointer(output.carry, output.name+"_iter_previous")
