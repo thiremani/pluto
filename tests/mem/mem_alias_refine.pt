@@ -1,6 +1,6 @@
 # A heap-string argument whose same-named destination receives a static output.
-# The output uses the destination's heap storage, so the later input read
-# observes the replacement even though its expression produces a static string.
+# The output uses the destination's heap storage, so the next iteration's input
+# reads the replacement even though its expression produces a static string.
 out, echo = RefineEcho(s, x)
     out = "static"
     echo = ""

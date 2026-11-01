@@ -22,10 +22,12 @@ This document describes Pluto's semantic model and compares it with other major 
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
 7. **Read-Only Function Arguments:** Inputs are read-only and keep their
-   values for the whole call, even when the caller also passes the argument
-   as a destination. Every body that runs writes every output, and results
-   reach the caller's destinations when the assignment commits. Stable
-   inputs are not implemented yet (#144); see "Status" under Call Site.
+   values while the body runs (once per call, or once per iteration of a
+   ranged call), even when the caller also passes the argument as a
+   destination. Every body that runs writes every output, and results reach
+   the caller's destinations when the assignment commits. A destination
+   passed back as an input gives each run the previous run's result, which
+   is how a ranged call accumulates.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -415,21 +417,29 @@ from 10, `FoldBefore(value, 1:3)` and `FoldAfter(value, 1:3)` both produce
 `13 11` when their first output targets `value`. An empty range leaves an
 existing destination unchanged and a fresh destination at its zero value.
 
+A body keeps evolving state in an output. Once assigned, the output can feed
+further calls, each reading the previous step's result, while the input keeps
+its value throughout, even when the caller shares it:
+
+```python
+out = Pipeline(input)
+    out = Step1(input)
+    out = Step2(out)
+    out = Step3(out)
+```
+
 Within one invocation, sharing a binding between an argument and a
 destination is only a copy optimization; across a ranged call's iterations,
 it is what makes each iteration read the previous result. The compiler may
 give the input and the output one slot where no read can tell the
 difference: in `a = Maybe(a, -1)`, the body reads `prev` only in its first
-write to `out`, so `out = prev` needs no copy.
+write to `out`, so `out = prev` would need no copy. The current lowering
+keeps them apart within every invocation and shares storage only between the
+iterations of a callee that runs the range itself.
 
-**Status.** Definite outputs and the per-template checks are implemented
-(#123). Stable inputs are decided and not yet implemented (#144): a shared
-input is still a live reference, so each read observes earlier writes to the
-shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
-`p, q = Swap(p, q)` with the sequential body gives `2 2`,
-`value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
-`FoldAfter(value, 1:3)` gives `13 13`. #144 removes this difference, migrates
-`tests/alias_input`, and updates the README's sharing example.
+**Status.** Definite outputs and the per-template checks (#123) and stable
+inputs (#144) are implemented; `tests/alias_input` covers each result above
+for scalars, strings and arrays, in ordinary and ranged calls.
 
 ### Range Parameters
 

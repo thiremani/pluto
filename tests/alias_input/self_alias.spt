@@ -9,7 +9,7 @@ v = [1 2]
 v = Grow(v)
 v
 
-# Cross-aliases make statement order significant: only the simultaneous form swaps.
+# Inputs are stable, so the sequential and simultaneous swaps agree.
 sequentialLeft, sequentialRight = 1, 2
 sequentialLeft, sequentialRight = SequentialSwap(sequentialLeft, sequentialRight)
 "SequentialSwap:", sequentialLeft, sequentialRight
@@ -57,8 +57,8 @@ arrayAfter = [10]
 arrayAfter, arraySeenAfter = ArrayAfter(arrayAfter, 1:3)
 "ArrayRangeAfter:", arrayAfter, arraySeenAfter
 
-# Nested calls forward sharing even though their argument and target use
-# different local names in the outer template.
+# A nested call shares nothing with its outer caller: its argument and target
+# are different bindings in the outer template.
 nested = 10
 nested, nestedSeen = NestedFold(nested, 5)
 "NestedNumber:", nested, nestedSeen
@@ -69,8 +69,9 @@ nestedArray = [10]
 nestedArray, nestedArraySeen = NestedArrayRange(nestedArray)
 "NestedArrayRange:", nestedArray, nestedArraySeen
 
-# A skipped write leaves the shared value unchanged; multiple writes each
-# read the latest value through the input.
+# A skipped write leaves the shared value unchanged; repeated writes read the
+# stable input, and a nested ranged call continues from each result only
+# through a binding it shares itself.
 taken = 10
 taken, takenSeen = ConditionalFold(taken, 5)
 "ConditionalTaken:", taken, takenSeen
@@ -96,22 +97,21 @@ condNestedSkipped = 10
 condNestedSkipped, condNestedSkippedSeen = ConditionalNested(condNestedSkipped, -1)
 "ConditionalNestedSkipped:", condNestedSkipped, condNestedSkippedSeen
 
-# Sharing is internal to the call: a sibling RHS still reads the caller's
-# pre-assignment binding until every RHS finishes.
+# A sibling RHS still reads the caller's pre-assignment binding until every
+# RHS finishes.
 staged = "hello" ⊕ ""
 staged, stagedSeen, old = ConcatAfter(staged, "abc"), staged
 "StagedString:", staged, stagedSeen, old
 
-# An empty output built from the second input resets the actual shared slot.
-# The output's storage must follow its aliased second input, without changing
-# the unrelated rank.
+# An empty output built from the second input resets the destination without
+# changing the unrelated rank, and the second input keeps its value.
 flat = [1 2]
 matrix = [[3 4]]
 matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
 "ResetArray:", matrix, flatSeen, matrixSeen
 
-# The wrapper widens the static output to the caller's heap string, and the
-# nested call shares that storage, so the input observes the write.
+# The wrapper's static output widens into the caller's heap string after the
+# call, and the input keeps its value.
 wrapped = "hello" ⊕ "!"
 wrapped, wrappedSeen = Wrap(wrapped)
 "WidenedWrapper:", wrapped, wrappedSeen
@@ -129,9 +129,9 @@ resetSource = [1 2]
 resetTarget, resetLeft, resetRight = ResetPair(resetSource, resetSource)
 "UnsharedReset:", resetTarget, resetLeft, resetRight
 
-# An output is readable once definitely assigned: a sibling output can build
-# on it, and a shared input observes the write. A read string output is solved
-# as owned, so the nested call sees the storage the shared caller holds.
+# An output is readable once definitely assigned, and a sibling output can
+# build on it, while a shared input keeps its value. A read string output is
+# solved as owned, so the nested call sees the storage the caller holds.
 sq, cube = Powers(3)
 "Powers:", sq, cube
 pw = 3
@@ -141,8 +141,8 @@ readTwice = "hello" ⊕ "!"
 readTwice, readKept, readEcho = ReadTwice(readTwice)
 "ReadTwice:", readTwice, readKept, readEcho
 
-# Both arguments share the destination; each iteration triples the running
-# value plus the item through the nested call, and before keeps the seed.
+# Both arguments name the destination; the nested ranged call reads the
+# stable inputs on every iteration, and before keeps the seed.
 pair = 10
 pair, before = SharedPair(pair, pair)
 "SharedPair:", pair, before
@@ -155,3 +155,108 @@ bangSource = "ab" ⊕ "cd"
 bangCopy = Bang(bangSource)
 bangSource = Bang(bangSource)
 "Bang:", bangCopy, bangSource
+
+# Ranged heap swaps: each iteration swaps the previous iteration's values,
+# whether the callee or the caller runs the loop.
+swapLeft, swapRight = [1], [2]
+swapLeft, swapRight = SwapEach(swapLeft, swapRight, 1:3)
+"RangedSwap:", swapLeft, swapRight
+loopLeft, loopRight = [1], [2]
+loopLeft, loopRight = SwapEach(loopLeft, loopRight, (1:3) + 0)
+"CallerRangedSwap:", loopLeft, loopRight
+
+# Both inputs share the destination, for heap and scalar values.
+both = [0]
+both = AppendBoth(both, both, 1:3)
+"SharedBothArray:", both
+bothScalar = 10
+bothScalar = AddBoth(bothScalar, bothScalar, 1:3)
+"SharedBothScalar:", bothScalar
+
+# Several drivers: nested inside the callee, and a cartesian domain the caller
+# runs.
+drivers = 10
+drivers, driversSeen = FoldAfterBoth(drivers, 1:3, 1:3)
+"Drivers:", drivers, driversSeen
+driverArray = [0]
+driverArray, driverArraySeen = ArrayAfterBoth(driverArray, 1:3, 1:3)
+"DriverArray:", driverArray, driverArraySeen
+cartesian = 10
+cartesian, cartesianSeen = FoldAfter(cartesian, (1:3) + (1:3))
+"Cartesian:", cartesian, cartesianSeen
+
+# A failed argument skips its call, and an out-of-bounds element skips its
+# iteration, wherever the loop runs.
+short = [5 6]
+failed = 10
+failedSeen = 0
+failed, failedSeen = FoldAfter(failed, short[7])
+"FailedArgument:", failed, failedSeen
+calleeSkip = 10
+calleeSkip, calleeSkipSeen = FoldAfter(calleeSkip, short[0:4])
+"CalleeSkip:", calleeSkip, calleeSkipSeen
+callerSkip = 10
+callerSkip, callerSkipSeen = FoldAfter(callerSkip, short[(0:4) + 0])
+"CallerSkip:", callerSkip, callerSkipSeen
+names = ["b" "c"]
+heapSkip = "a" ⊕ ""
+heapSkip, heapSkipSeen = ConcatAfter(heapSkip, names[(0:4) + 0])
+"HeapCallerSkip:", heapSkip, heapSkipSeen
+
+# A conditional argument that holds passes the destination's current value,
+# and the input keeps it while the call writes the output.
+condArg = "a" ⊕ ""
+condArgSeen = ""
+condArg, condArgSeen = ConcatAfter(condArg > "", names[(0:2) + 0])
+"ConditionalArgument:", condArg, condArgSeen
+
+# An empty range, or one with no element in bounds, runs no iteration and
+# keeps every destination.
+emptyText = "a" ⊕ ""
+emptyTextSeen = "keep"
+emptyText, emptyTextSeen = ConcatAfter(emptyText, names[0:0])
+"EmptyHeap:", emptyText, emptyTextSeen
+outside = "a" ⊕ ""
+outsideSeen = "keep"
+outside, outsideSeen = ConcatAfter(outside, names[5:7])
+"OutOfBounds:", outside, outsideSeen
+callerOutside = "a" ⊕ ""
+callerOutsideSeen = "keep"
+callerOutside, callerOutsideSeen = ConcatAfter(callerOutside, names[(5:7) + 0])
+"CallerOutOfBounds:", callerOutside, callerOutsideSeen
+
+# The destination's own array drives the loop: each iteration's input reads
+# the previous result while the driver walks the elements.
+driven = [1 2]
+driven, drivenSeen = ArrayAfter(driven, driven[0:2])
+"OwnDriver:", driven, drivenSeen
+callerDriven = [1 2]
+callerDriven, callerDrivenSeen = ArrayAfter(callerDriven, callerDriven[(0:2) + 0])
+"CallerOwnDriver:", callerDriven, callerDrivenSeen
+
+# A conditional ranged call shares through its synthetic destinations.
+gatedRange = 10
+gatedRange, gatedRangeSeen = 1 > 0 FoldAfter(gatedRange, 1:3)
+"GatedRange:", gatedRange, gatedRangeSeen
+
+# A conditional call that shares a static string destination widens it,
+# beside a sibling that copies the destination, then an unshared call: the
+# input keeps the old string, and every copy is freed (#108).
+condShared = "x"
+condShared, condSharedSeen, condSharedCopy = 1 > 0 ConcatAfter(condShared, "a"), condShared
+"ConditionalShared:", condShared, condSharedSeen, condSharedCopy
+plainText = "v"
+plainOut, plainSeen = ConcatAfter(plainText, "c")
+"Unshared:", plainText, plainOut, plainSeen
+
+# A body passes its own output on through further calls while its caller
+# shares the input with that output.
+pipeValue = 10
+pipeValue, pipeValueSeen = TwicePipeline(pipeValue)
+"TwicePipeline:", pipeValue, pipeValueSeen
+pipeText = "a"
+pipeText, pipeTextSeen = ShoutPipeline(pipeText)
+"ShoutPipeline:", pipeText, pipeTextSeen
+pipeArray = [1]
+pipeArray, pipeArraySeen = GrowPipeline(pipeArray)
+"GrowPipeline:", pipeArray, pipeArraySeen

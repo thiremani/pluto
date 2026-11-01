@@ -116,8 +116,8 @@ func (abi FuncABI) DirectReturnSeedParamIndex() int {
 // declared as outType: the input's storage must be the declared type or a
 // compatible wider representation that a store converts (an owned string for
 // a static output). A struct shares only at its exact type, since nothing
-// converts its fields. The shared output then uses the input's
-// storage, so a write lands where the next read looks.
+// converts its fields. The shared output then uses the input's storage, so
+// each iteration's result lands where the next iteration's input reads.
 func sharableOutput(paramType, outType Type) bool {
 	if _, isStruct := outType.(Struct); isStruct {
 		return TypeEqual(paramType, outType)
@@ -130,10 +130,9 @@ func sharableOutput(paramType, outType Type) bool {
 // argNames holds one entry per parameter, empty for an argument that is not a
 // plain identifier. dests contains output destination names in order, with
 // synthetic staging names already resolved to the bindings they represent.
-// outTypes are the declared output types. enclosing maps a caller-body input to
-// the caller output it already shares, so a nested call forwards that sharing.
-// A parameter shares at most one destination, the first that matches.
-func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type, enclosing map[string]string) []int {
+// outTypes are the declared output types. A parameter shares at most one
+// destination, the first that matches.
+func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type) []int {
 	var pattern []int
 	for i, name := range argNames {
 		if name == "" {
@@ -144,10 +143,7 @@ func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type, enclosi
 			if j >= len(outTypes) {
 				break
 			}
-			if !sharableOutput(paramTypes[i], outTypes[j]) {
-				continue
-			}
-			if dest != name && enclosing[name] != dest {
+			if dest != name || !sharableOutput(paramTypes[i], outTypes[j]) {
 				continue
 			}
 			if pattern == nil {

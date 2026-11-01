@@ -28,19 +28,19 @@ After Phase 1, `fib_tail` is no longer a strong argument for a Pluto-level tail-
 Pluto's source-level semantics stay unchanged:
 
 - assignments copy
-- input names are read-only and keep their values for the whole call; today
-  they can observe writes through a shared output, which #144 (decided)
-  removes
+- input names are read-only and keep their values while the body runs, once
+  per call or per iteration of a ranged call, even when the caller shares one
+  with an output (#144)
 - every body that runs writes every output (#123); output names are readable
   only once definitely assigned, and results reach the caller at assignment
   commit
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`
-input can be passed by value provided the call site's alias pattern (the
-private `_aN` variant) redirects each read to its shared output when required;
-once inputs are stable (#144) no read needs redirecting. A single `I64` output can be returned in a
-register while still behaving like a Pluto output.
+input can be passed by value: inputs are stable (#144), so no read is
+redirected to a shared output, and a callee-owned range's private `_aN`
+variant rebinds a shared input once per iteration. A single `I64` output can
+be returned in a register while still behaving like a Pluto output.
 
 ## 3. Architecture
 
@@ -99,10 +99,11 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 - give every direct scalar return a final hidden destination seed, preserving
   skipped conditional writes and empty-range behavior without making the
   physical signature depend on the function body
-- preserve live input/output sharing in both ordinary and range-bearing calls
+- carry a shared destination across the iterations of a range-bearing call
   by lowering a call whose argument names its own destination to a private
-  alias variant, in which reads use that output's current value, including
-  writes in the same iteration; exported prototypes no longer carry alias
+  alias variant, whose inputs read the previous iteration's result and stay
+  stable within each iteration (#144); a callee without a range parameter
+  keeps its public specialization. Exported prototypes no longer carry alias
   selectors, which changes range-bearing prototypes (ABI 2.1) and leaves
   every other function's signature as it was
 

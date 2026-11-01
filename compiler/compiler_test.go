@@ -462,10 +462,10 @@ out = Echo(value)
 	}
 }
 
-// A call whose argument names one of its own destinations lowers to a private
-// variant in which that input reads the output's storage. The pattern names
-// outputs by declared position, so a leading output whose type cannot back the
-// input keeps its slot in the name.
+// A ranged call whose argument names one of its own destinations lowers to a
+// private variant in which that input reads the output's storage once, at the
+// start of each iteration. The pattern names outputs by declared position, so
+// a leading output whose type cannot back the input keeps its slot in the name.
 func TestAliasedInputReadsOutputInVariant(t *testing.T) {
 	code := `half, res = Rev(a, x)
     half = x * 0.5
@@ -479,8 +479,8 @@ h, r`
 
 	require.Contains(t, ir, "define internal void @"+mangled+"_a2_2_0(",
 		"the aliased call must lower to a private variant naming the second output for the first input")
-	require.Contains(t, ir, "%a_alias_load = load i64, ptr %res_dest",
-		"inside the variant the input reads the res output's storage directly")
+	require.Contains(t, ir, "%a_iter_input = load i64, ptr %res_dest",
+		"each iteration's input reads the res output's storage as the iteration starts")
 	require.NotContains(t, ir, "alias_match", "no run-time selection remains")
 	require.NotContains(t, ir, "define void @"+mangled+"(", "the unaliased specialization is not emitted when only the variant is called")
 }
@@ -503,6 +503,24 @@ other, seen`
 
 	require.Contains(t, ir, "define void @"+mangled+"(", "the unshared call uses the public specialization")
 	require.NotContains(t, ir, "@"+mangled+"_a", "destination storage alone selects no private variant")
+}
+
+// A callee without a range parameter runs once per call, so a call whose
+// argument names its own destination keeps the public specialization too:
+// the input reads the caller's binding while the output is staged apart.
+func TestSharedOrdinaryCallUsesPublicSpecialization(t *testing.T) {
+	code := `out, seen = Fold(current, item)
+    out = current ⊕ item
+    seen = current`
+	script := `value = "hello" ⊕ "!"
+value, seen = Fold(value, "?")
+value, seen`
+
+	ir, _ := compileScriptAndCodeIR(t, "shared_ordinary", code, script)
+	mangled := Mangle(MangleDirPath("shared_ordinary", ""), "Fold", []Type{StrH{}, StrG{}})
+
+	require.Contains(t, ir, "define void @"+mangled+"(", "the shared call uses the public specialization")
+	require.NotContains(t, ir, "@"+mangled+"_a", "sharing a binding selects no private variant without a range parameter")
 }
 
 // A read string output is solved as owned, so a nested call fed from it

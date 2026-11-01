@@ -349,11 +349,15 @@ types:
   statement-start value.
 - When an input shares an output whose declared representation is narrower
   but compatible (an owned string input with a static string output), the
-  private alias variant gives that output the input's storage so the input
-  observes its writes. It has a distinct internal symbol; the source specialization and
-  its effect facts remain unchanged. Any other representation change between
-  a declared output and its destination uses a separate ABI output adapter
-  initialized to zero and committed only if its write marker is set.
+  private alias variant gives that output the input's storage, so each
+  iteration's result lands where the next iteration's input reads it. It has
+  a distinct internal symbol; the source specialization and its effect facts
+  remain unchanged. Any other representation change between a declared output
+  and its destination uses a separate ABI output adapter initialized to zero
+  and committed only if its write marker is set. So does every output of an
+  indirect-return call in a caller-side ranged loop, whose arguments may hold
+  the values its destinations carry, so that an input keeps its value while
+  the callee writes the output.
 
 The direct-return seed is always present, even when the function body
 unconditionally overwrites its output. Schematically, with mangled names
@@ -392,21 +396,27 @@ void Pt_example(Results *results, I64 direct_arg, Other *indirect_arg);
 ```
 
 A call whose argument and destination are the same binding shares the input
-with that output. This is a compile-time fact of the call site, so it never
-appears in the exported signature. The compiler lowers such a call to a
-private alias variant of the specialization (§5.2). Inside the variant a
-direct scalar input reads the output's current value, and for a compatible
-indirect input the caller passes the matching staged output pointer itself.
-Each read therefore observes the selected output's current value, and both
-forms carry output values into subsequent range iterations. The caller's real
-destinations remain unchanged until the surrounding assignment commits.
+with that output when the callee runs the call's loop, that is, when it has a
+`Range` or `ArrayRange` parameter. This is a compile-time fact of the call
+site, so it never appears in the exported signature. The compiler lowers such
+a call to a private alias variant of the specialization (§5.2). For a
+compatible indirect input the caller passes the matching staged output
+pointer itself: each iteration's input reads the previous iteration's result
+there, while the iteration writes the output to a slot of its own and moves
+it into the shared slot once the body is done. A direct scalar input takes
+the shared output's value once, as each iteration starts. Inputs are
+therefore stable within each iteration (#144), and output values carry into
+subsequent iterations. A callee without a range parameter runs once per
+call, so its inputs read their arguments and the call uses the public
+specialization. The caller's real destinations remain unchanged until the
+surrounding assignment commits.
 
-A native caller cannot request a variant. Passing the same address for a
-pointer input and an output shares them only within the called body's own
-statements: a nested Pluto call inside that body stages its outputs and
-commits them afterwards, so it does not extend the sharing. A register scalar
-is always a plain value. Sharing across nested calls is guaranteed for Pluto
-callers, whose call sites select the variants statically.
+A native caller cannot request a variant, and no Pluto call passes a public
+specialization one address as both a pointer input and an output. A native
+caller that does lets the body's later reads of that input observe its
+writes to the output, within the called body's own statements; a nested
+Pluto call inside that body stages its outputs and commits them afterwards.
+A register scalar is always a plain value.
 
 **Changes in 2.1.** Version 2.0 gave range-bearing variants a hidden `i32`
 alias selector per direct scalar parameter, placed after the source parameters
@@ -471,13 +481,14 @@ at least one parameter shares an output; otherwise the call uses the bare
 specialization symbol. An unshared output keeps its declared representation,
 and the caller converts it into the destination after the call.
 
-Example: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
-first parameter sharing its first output, which is therefore an `I64`.
-`Demangle` renders it as `math.Fold(I64 -> 1, StrH)`.
+Example: `Pt_4math_p_3Acc_f2_I64_Range_t1_I64_a2_1_0` is `Acc(I64, Range)`
+with its first parameter sharing its first output, which is therefore an
+`I64`. `Demangle` renders it as `math.Acc(I64 -> 1, Range_t1_I64)`.
 
 The public specialization symbol is unchanged by the variant. C callers
-never see a variant and cannot request one. Once inputs are stable (#144), a
-variant can no longer change what a body reads within one invocation (§5.3).
+never see a variant and cannot request one. Inputs are stable (#144), so a
+variant never changes what a body reads within one invocation (§5.3); only
+a callee with a `Range` or `ArrayRange` parameter has variants.
 
 ### 5.3 Planned: ABI 3.0 (#69)
 
@@ -499,13 +510,51 @@ function such as `Acc` must still report that no iteration ran, since zero
 iterations mean no assignment; it keeps its seed until PIR Step 7 chooses
 between one "did execute" bit and a caller-side emptiness check.
 
-Once inputs are stable within each scalar invocation (#144), a private
-variant (§5.2) may only let a shared input and output use one slot within one
-invocation where no read can tell. Across iterations, a variant must produce what
-repeated scalar invocations of the bare specialization produce, with each
-iteration's shared argument rebound to the destination's current value. With
-`out = a + i`, `sum = Acc(sum, 1:5)` from 0 gives 10, while an unshared
-`Acc(0, 1:5)` gives 4.
+Inputs are stable within each scalar invocation (#144), so a private variant
+(§5.2) may let a shared input and output use one slot within one invocation
+only where no read can tell; the current lowering never does. Across
+iterations, a variant produces what repeated scalar invocations of the bare
+specialization produce, with each iteration's shared argument rebound to the
+destination's current value. With `out = a + i`, `sum = Acc(sum, 1:5)` from 0
+gives 10, while an unshared `Acc(0, 1:5)` gives 4.
+
+### 5.4 Native Callers
+
+Every public specialization follows the calling convention above, so its
+symbol is an ordinary C function: once a native program can link it, C or
+any language with a C foreign function interface can call it. ABI 3.0
+(§5.3) is planned to drop the seed and the write markers from those without
+a range parameter. Three pieces are missing before a native program can
+call one:
+
+- the compiler builds an executable per script and no library;
+- it emits a specialization only for argument types that some Pluto call
+  uses, so a native caller cannot request one such as `Square(I64)`;
+- nothing yet specifies how a native caller creates or releases the strings
+  and arrays these functions exchange.
+
+Private variants (§5.2) stay internal even then, because each one assumes
+the call site that selects it. The `Acc` variant never reads its shared
+`I64` argument, since its loop starts from the seed, and a shared pointer
+input must point at the output's own slot. Exporting a variant would make
+those rules part of the public ABI. To offer accumulation to native
+callers, a module defines an ordinary function whose body makes the shared
+call:
+
+```
+total = AccFrom(start, lo, hi)
+    total = start
+    total = Acc(total, lo:hi)
+```
+
+`AccFrom(0, 1, 5)` gives 10, and `AccFrom(7, 3, 3)` gives 7. It takes the
+bounds rather than a `Range`, since a range parameter would run its body
+once per element. Its public specialization calls the private variant with
+`start` as both the shared argument and the seed. Like every direct return
+today, it also takes a seed as its fourth argument, which it never reads and
+which ABI 3.0 is planned to remove. Generated wrappers could later supply
+headers, ABI adaptation and ownership handling; they wait for a concrete
+native integration need.
 
 ---
 

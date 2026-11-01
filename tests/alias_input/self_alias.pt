@@ -14,7 +14,8 @@ a, b = SequentialSwap(x, y)
 a, b = SimultaneousSwap(x, y)
     a, b = y, x
 
-# An input shared with an output observes writes from earlier statements.
+# An input keeps its argument's value for the whole call, whatever the
+# destinations are, so both statement orders agree.
 out, before = FoldBefore(current, item)
     before = current
     out = current + item
@@ -45,8 +46,9 @@ out, seen = NestedFold(current, item)
 out, seen = NestedConcat(current, item)
     out, seen = ConcatAfter(current, item)
 
-# The ranged call rebinds the shared input to its staged slot; the nested
-# call made inside that loop must still select the sharing variant.
+# In the body, the input and the output are different bindings, so the
+# nested ranged call reads the stable input on every iteration, whether or
+# not the outer caller shares.
 out, seen = NestedArrayRange(current)
     out, seen = NestedArrayDeep(current, (1:3) + 0)
 
@@ -58,9 +60,9 @@ out, seen = ConditionalFold(current, item)
     out = item > 0 current + item
     seen = current
 
-# Caller-driven ranges rebind the shared input to the staged output while the
-# loop runs; the nested call must still select the sharing variant, on the
-# first ranged call and on a later one that continues from the output.
+# A nested ranged call accumulates only through a binding its own call site
+# shares: the first call reads the stable input on every iteration, and the
+# second continues from the output it names as argument and destination.
 out, seen = NestedRange(current)
     out, seen = FoldAfter(current, (1:3) + 0)
 
@@ -73,7 +75,7 @@ out, seen = NestedArrayTwice(current)
     out, seen = ArrayAfter(out, (3:5) + 0)
 
 # A conditional call writes through synthetic destinations that stand in for
-# the outputs; sharing follows them to the real output.
+# the outputs; the nested call reads the stable input.
 out, seen = ConditionalNested(current, item)
     out, seen = current, current
     out, seen = item > 0 FoldAfter(current, item)
@@ -107,9 +109,9 @@ out, kept, echo = ReadTwice(current)
     out = "second"
     echo = current
 
-# Two inputs may share one output. Ranged staging inside the body rebinds
-# both names to the same pointer-backed staged slot, and the nested call must
-# still see both as shared: its second write reads the first through a and b.
+# Two inputs may share one output. SharedPair's nested ranged call names
+# neither input as its destination, so it reads both stable inputs on every
+# iteration, whether or not SharedPair's caller shares them.
 out = AddBoth(a, b, item)
     out = a + item
     out = out + a + b
@@ -119,8 +121,7 @@ out, before = SharedPair(a, b)
     out = AddBoth(a, b, (1:3) + 0)
 
 # A conditional call promotes its indirect arguments before branching. The
-# scalar after a two-valued argument binds a later parameter and must keep
-# its live alias.
+# scalar after a two-valued argument binds a later parameter.
 left, right = Tags(n)
     left = "l"
     right = ""
@@ -140,7 +141,47 @@ out, left, right = ResetPair(first, second)
     left = first
     right = second
 
-# The body sees the storage its caller shares with it.
+# The body cannot tell whether its caller shares: the input and the output
+# have separate storage either way.
 out = Bang(current)
     out = current ⊕ "!"
     "storage: -current%p -out%p"
+
+# Every output shares the other output's input, so each iteration swaps the
+# previous iteration's heap values.
+a, b = SwapEach(x, y, item)
+    a = y ⊕ [item]
+    b = x
+
+# Both inputs share one output, and each iteration reads the previous result
+# through both.
+out = AppendBoth(first, second, item)
+    out = first ⊕ [item]
+    out = out ⊕ second
+
+# Two drivers nest inside the callee, and the input is stable within each of
+# their iterations.
+out, after = FoldAfterBoth(current, i, j)
+    out = current + i * j
+    after = current
+
+out, after = ArrayAfterBoth(current, i, j)
+    out = current ⊕ [i * j]
+    after = current
+
+# A body keeps evolving state in its output: each nested call reads the
+# previous step's result, and the input keeps its value throughout.
+out, seen = TwicePipeline(current)
+    out = Twice(current)
+    out = Twice(out)
+    seen = current
+
+out, seen = ShoutPipeline(current)
+    out = Shout(current)
+    out = Shout(out)
+    seen = current
+
+out, seen = GrowPipeline(current)
+    out = Grow(current)
+    out = Grow(out)
+    seen = current

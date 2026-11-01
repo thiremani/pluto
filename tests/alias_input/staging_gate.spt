@@ -1,5 +1,6 @@
-# A shared input observes each iteration's staged write, as the inlined
-# statement does, for scalars, strings and arrays alike.
+# A shared input keeps its argument's value on every iteration of the body's
+# gated loop, as an unshared one does, while the inlined statement reads its
+# own staged result; for scalars, strings and arrays alike.
 i = 10
 i = GateInt(i)
 s = "x"

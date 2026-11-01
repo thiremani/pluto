@@ -139,7 +139,7 @@ func (c *Compiler) resolveDestSeed(ident *ast.Identifier, outType Type) *Symbol 
 	if !ok {
 		return c.makeZeroValue(outType)
 	}
-	return c.valueSymbol(ident.Value, existing, ident.Value+"_cond_seed")
+	return c.derefIfPointer(existing, ident.Value+"_cond_seed")
 }
 
 // OutputSlot bundles a conditional assignment's three parallel facts: the real
@@ -240,7 +240,7 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 			Put(c.Scopes, s.dest.Value, finalSym)
 			continue
 		}
-		oldValue := c.valueSymbol(s.dest.Value, oldSym, s.dest.Value+"_cond_old")
+		oldValue := c.derefIfPointer(oldSym, s.dest.Value+"_cond_old")
 
 		if _, ok := oldSym.Type.(Ptr); ok {
 			c.storeSymbolToSlot(oldSym, finalSym, oldSym.Type.(Ptr).Elem, s.dest.Value+"_cond_commit")
@@ -266,27 +266,22 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 	}
 }
 
-// aliasCondDests maps existing destination names, and the inputs sharing them
-// (see stagedBindings), to conditional temp slots so RHS reads during IF-branch
-// assignment see the latest temp writes. All bindings are gathered before any
-// is replaced, since stagedBindings finds inputs by their current bindings.
+// aliasCondDests maps existing destination names to conditional temp slots so
+// RHS reads during IF-branch assignment see the latest temp writes.
 func (c *Compiler) aliasCondDests(slots []OutputSlot) map[string]*Symbol {
-	bindings := make(map[string]*Symbol, len(slots))
+	aliases := make(map[string]*Symbol, len(slots))
 	for _, s := range slots {
-		if _, exists := Get(c.Scopes, s.dest.Value); !exists {
+		oldSym, exists := Get(c.Scopes, s.dest.Value)
+		if !exists {
 			continue
 		}
 		tempSym, ok := Get(c.Scopes, s.temp.Value)
 		if !ok {
 			continue
 		}
-		maps.Copy(bindings, c.stagedBindings(s.dest.Value, tempSym))
-	}
-
-	aliases := make(map[string]*Symbol, len(bindings))
-	for _, name := range slices.Sorted(maps.Keys(bindings)) {
-		aliases[name], _ = Get(c.Scopes, name)
-		SetExisting(c.Scopes, name, bindings[name])
+		c.recordStagedSlot(tempSym)
+		aliases[s.dest.Value] = oldSym
+		SetExisting(c.Scopes, s.dest.Value, tempSym)
 	}
 	return aliases
 }
@@ -363,7 +358,7 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlot) {
 	for i := range stage {
 		stageSym, _ := Get(c.Scopes, stage[i].temp.Value)
-		stagedValue := c.valueSymbol(stage[i].temp.Value, stageSym, stage[i].temp.Value+"_stage_final")
+		stagedValue := c.derefIfPointer(stageSym, stage[i].temp.Value+"_stage_final")
 		stagedValue.WriteFlag = stageSym.WriteFlag
 		c.commitSlotValue(commit[i].temp, stagedValue, false)
 	}
@@ -1727,7 +1722,7 @@ func (c *Compiler) withCondBranch(cond llvm.Value, name string, onTrue, onFalse 
 func (c *Compiler) commitSlotValue(tempIdent *ast.Identifier, value *Symbol, copyValue bool) {
 	tempSym, _ := Get(c.Scopes, tempIdent.Value)
 	slotElem := tempSym.Type.(Ptr).Elem
-	oldValue := c.valueSymbol(tempIdent.Value, tempSym, tempIdent.Value+"_slot_old")
+	oldValue := c.derefIfPointer(tempSym, tempIdent.Value+"_slot_old")
 
 	toStore := value
 	if copyValue {

@@ -182,7 +182,8 @@ i = 0:5
 nestedCallCollector = i + 1 + [Square(i)]
 "NestedCallCollector: -nestedCallCollector"
 
-# Ensure function-internal array assignment builds a fresh array (no accumulation on param)
+# Function-internal array assignment builds a fresh array, so the shared input
+# keeps the previous iteration's result throughout each iteration
 rebuilt = [1 2 3]
 rebuilt = Rebuild(rebuilt, 10:13)
 "RebuildAssign: -rebuilt"
