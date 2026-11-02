@@ -72,6 +72,15 @@ its loop runs no iterations. A failed bound never fails the value around the
 range, so `(0:(n > 0) + 0) || 99` is rejected, like `(0:n + 0) || 99`: its
 left side cannot fail.
 
+A range visits `start`, then each element one `step` further (1 when omitted),
+while it stays below `stop`, or above it for a negative step: `0:6:2` visits
+`0`, `2` and `4`. Iteration ends where the next element would pass `stop`,
+even when computing that element would overflow `I64`, so
+`2:4:9223372036854775807` visits only `2` (#156). A literal step of `0` or `-0`
+is a compile error, since the range would never advance. Any other zero step,
+such as one held in a variable, leaves the range without elements: consuming
+it runs no iterations, while the descriptor itself still prints, as `0:3:0`.
+
 Range is nameable and copyable, but is not yet a fully first-class container
 element. Arrays and tables contain scalar/string elements rather than Range
 descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
