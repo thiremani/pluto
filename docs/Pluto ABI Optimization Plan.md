@@ -98,7 +98,8 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
   addressable slots only when semantically required
 - give every direct scalar return a final hidden destination seed, preserving
   skipped conditional writes and empty-range behavior without making the
-  physical signature depend on the function body
+  physical signature depend on the function body; ABI 3.0 (#69) keeps it only
+  for a function with a range parameter
 - carry a shared destination across the iterations of a range-bearing call
   by lowering a call whose argument names its own destination to a private
   alias variant, whose inputs read the previous iteration's result and stay
@@ -116,10 +117,10 @@ wrong argument list. Write-effect information may still eliminate seed use
 inside Pluto code; a seedless fast path needs a distinctly named private clone
 behind the stable public entry point.
 
-ABI 3.0 (#69) keeps that rule while removing the seed, which #123 left unused
-outside callee-owned domains: whether a function keeps it depends on whether
-it has a range parameter, never on its write effects. The C ABI Spec §5.3
-describes ABI 3.0.
+ABI 3.0 (#69) keeps that rule while removing the seed and the write markers,
+which #123 left unused outside callee-owned domains: whether a function keeps
+them depends on whether it has a range parameter, never on its write effects.
+The C ABI Spec §5 describes ABI 3.0.
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 

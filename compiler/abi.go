@@ -26,11 +26,12 @@ type ABIReturn struct {
 	OutTypes   []Type
 }
 
-// FuncABI captures the lowered function boundary for one mangled variant.
-// Direct scalar returns carry a hidden destination seed so a skipped write
-// preserves the caller's value. Whether an input shares a caller binding with
-// an output is a compile-time property of each call site, lowered as a private
-// variant of the function; it never appears in the native signature.
+// FuncABI captures the lowered function boundary for one mangled variant,
+// which its solved types decide, never its body. Every body that runs writes
+// every output (#123), so only a function with a range parameter
+// (HasRangeParam) takes a direct return's seed or an indirect return's write
+// markers. Call-site sharing becomes a private variant, never part of the
+// native signature.
 type FuncABI struct {
 	Params []ABIParam
 	Return ABIReturn
@@ -80,9 +81,6 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	}
 
 	if directType, ok := directScalarABIReturnType(outTypes); ok {
-		// Whether a function body writes its output conditionally is not part
-		// of the type-based mangle. Keep the native C ABI stable across body
-		// changes: direct-return mode always implies a destination seed.
 		abi.Return.Mode = ABIReturnDirect
 		abi.Return.DirectType = directType
 	}
@@ -92,6 +90,18 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 
 func (abi FuncABI) UsesIndirectReturn() bool {
 	return abi.Return.Mode == ABIReturnIndirect
+}
+
+// HasRangeParam reports a Range or ArrayRange parameter, whose loop may run
+// the body zero times.
+func (abi FuncABI) HasRangeParam() bool {
+	for _, param := range abi.Params {
+		if isRangeDriverType(param.Source) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (abi FuncABI) sourceParamBaseIndex() int {
@@ -106,7 +116,7 @@ func (abi FuncABI) SourceFunctionParamIndex(paramIndex int) int {
 }
 
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
-	if abi.Return.Mode != ABIReturnDirect {
+	if abi.Return.Mode != ABIReturnDirect || !abi.HasRangeParam() {
 		return -1
 	}
 	return abi.sourceParamBaseIndex() + len(abi.Params)
