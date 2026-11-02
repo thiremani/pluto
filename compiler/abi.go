@@ -1,7 +1,5 @@
 package compiler
 
-import "slices"
-
 type ABIParamMode int
 
 const (
@@ -29,15 +27,14 @@ type ABIReturn struct {
 }
 
 // FuncABI captures the lowered function boundary for one mangled variant,
-// which its solved types decide, never its body. Ranged marks a Range or
-// ArrayRange parameter, whose loop may run the body zero times: since every
-// body that runs writes every output (#123), only a ranged function takes a
-// direct return's seed or an indirect return's write markers. Call-site
-// sharing becomes a private variant, never part of the native signature.
+// which its solved types decide, never its body. Every body that runs writes
+// every output (#123), so only a function with a range parameter
+// (HasRangeParam) takes a direct return's seed or an indirect return's write
+// markers. Call-site sharing becomes a private variant, never part of the
+// native signature.
 type FuncABI struct {
 	Params []ABIParam
 	Return ABIReturn
-	Ranged bool
 }
 
 func isDirectScalarABIType(t Type) bool {
@@ -68,7 +65,6 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 			Mode:     ABIReturnIndirect,
 			OutTypes: append([]Type(nil), outTypes...),
 		},
-		Ranged: slices.ContainsFunc(paramTypes, isRangeDriverType),
 	}
 
 	for i, paramType := range paramTypes {
@@ -96,6 +92,17 @@ func (abi FuncABI) UsesIndirectReturn() bool {
 	return abi.Return.Mode == ABIReturnIndirect
 }
 
+// HasRangeParam reports a Range or ArrayRange parameter, whose loop may run
+// the body zero times.
+func (abi FuncABI) HasRangeParam() bool {
+	for _, param := range abi.Params {
+		if isRangeDriverType(param.Source) {
+			return true
+		}
+	}
+	return false
+}
+
 func (abi FuncABI) sourceParamBaseIndex() int {
 	if abi.UsesIndirectReturn() {
 		return 1
@@ -108,7 +115,7 @@ func (abi FuncABI) SourceFunctionParamIndex(paramIndex int) int {
 }
 
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
-	if abi.Return.Mode != ABIReturnDirect || !abi.Ranged {
+	if abi.Return.Mode != ABIReturnDirect || !abi.HasRangeParam() {
 		return -1
 	}
 	return abi.sourceParamBaseIndex() + len(abi.Params)

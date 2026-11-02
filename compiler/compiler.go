@@ -311,7 +311,7 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 // staged pointer. A callee without a range parameter runs once per call, so
 // its inputs read their arguments and the call keeps the public specialization.
 func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest []*ast.Identifier) {
-	if !sig.ABI.Ranged {
+	if !sig.ABI.HasRangeParam() {
 		return
 	}
 
@@ -2457,7 +2457,7 @@ func (c *Compiler) getReturnStruct(mangled string, abi FuncABI) llvm.Type {
 	for _, t := range outputTypes {
 		fields = append(fields, llvm.PointerType(c.mapToLLVMType(t), 0))
 	}
-	if abi.Ranged {
+	if abi.HasRangeParam() {
 		for range outputTypes {
 			fields = append(fields, llvm.PointerType(c.Context.Int1Type(), 0))
 		}
@@ -2690,7 +2690,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
 		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes)
-		if sig.ABI.Ranged {
+		if sig.ABI.HasRangeParam() {
 			markers = c.loadWriteMarkers(template, retStruct, sretPtr)
 		}
 	} else {
@@ -3228,7 +3228,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// assignment owns the eventual commit and cleanup.
 	var outputs []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		if sig.ABI.Ranged {
+		if sig.ABI.HasRangeParam() {
 			outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
 		} else {
 			outputs = c.makeZeroTempOutputs(dest, info.OutTypes)
@@ -3284,7 +3284,7 @@ func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, 
 	outputs := callAdapterOutputs(adapters)
 	c.runCallWithBoundsElse(func() {
 		var writeMarkers []llvm.Value
-		if sig.ABI.Ranged {
+		if sig.ABI.HasRangeParam() {
 			writeMarkers = c.makeCallWriteMarkers(len(outputs))
 		}
 		c.builder.CreateCall(
@@ -3326,7 +3326,7 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 		// hidden ABI parameter and returns it when it runs no iteration, which
 		// leaves the destination as it was even though the return is by value.
 		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-		if sig.ABI.Ranged && len(dest) > 0 {
+		if sig.ABI.HasRangeParam() && len(dest) > 0 {
 			seed = c.resolveDestSeed(dest[0], sig.ABI.Return.DirectType)
 		}
 		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
