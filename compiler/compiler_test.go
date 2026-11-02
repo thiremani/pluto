@@ -92,7 +92,7 @@ r`
 	falseArm := strings.Index(body, "\ncond_else:")
 	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
 	aMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
-	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new7)")
+	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new5)")
 	require.NotEqual(t, -1, aMask)
 	require.NotEqual(t, -1, bMask)
 	require.Less(t, bMask, aMask, "the failed condition frees its masks last first, as scopes free bindings")
@@ -874,7 +874,7 @@ res`
 
 	require.NotContains(t, scriptIR, "%sum = alloca i64", "descending loop-carried direct scalar outputs should stay in SSA form by default")
 	require.Contains(t, scriptIR, "phi i64", "descending loop-carried direct scalar outputs should converge through PHI state")
-	require.Contains(t, scriptIR, "loop_cond_neg", "descending loop-carried direct scalar outputs should use the negative-step loop path")
+	require.Contains(t, scriptIR, "%loop_more_desc = icmp sgt i64 %iter, %loop_last_bound", "a descending range continues while an element above its stop follows")
 }
 
 func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {
