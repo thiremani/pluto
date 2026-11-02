@@ -2186,9 +2186,11 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 func (c *Compiler) makeZeroTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
 	resolved := c.resolvedDestTypes(dest, outTypes)
 	outputs := make([]*Symbol, len(resolved))
+
 	for i, outType := range resolved {
 		outputs[i] = c.makeTempOutput(c.tempOutputName(dest, i), outType, true, nil)
 	}
+
 	return outputs
 }
 
@@ -2199,6 +2201,7 @@ func (c *Compiler) tempOutputName(dest []*ast.Identifier, i int) string {
 	if dest != nil && i < len(dest) {
 		role = "output_" + dest[i].Value
 	}
+
 	return freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
 }
 
@@ -2269,6 +2272,7 @@ func (c *Compiler) commitCallOutputAdapter(running, abiOutput *Symbol, index int
 	oldValue := c.derefIfPointer(running, fmt.Sprintf("calladapter_old_%d", index))
 	source := c.derefIfPointer(abiOutput, fmt.Sprintf("calladapter_result_%d", index))
 	stored := c.storeSymbolToSlot(running, source, targetType, fmt.Sprintf("calladapter_store_%d", index))
+
 	c.freeSymbolValue(oldValue, "")
 	if stored.Val != source.Val {
 		c.freeSymbolValue(source, "")
@@ -2457,11 +2461,13 @@ func (c *Compiler) getReturnStruct(mangled string, abi FuncABI) llvm.Type {
 	for _, t := range outputTypes {
 		fields = append(fields, llvm.PointerType(c.mapToLLVMType(t), 0))
 	}
+
 	if abi.HasRangeParam() {
 		for range outputTypes {
 			fields = append(fields, llvm.PointerType(c.Context.Int1Type(), 0))
 		}
 	}
+
 	st.StructSetBody(fields, false)
 	return st
 }
@@ -2593,10 +2599,12 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 func (c *Compiler) loadWriteMarkers(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value) []llvm.Value {
 	markers := make([]llvm.Value, len(fn.Outputs))
 	flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
+
 	for i, outIdent := range fn.Outputs {
 		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
 		markers[i] = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
 	}
+
 	return markers
 }
 

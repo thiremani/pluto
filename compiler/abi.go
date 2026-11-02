@@ -100,6 +100,7 @@ func (abi FuncABI) HasRangeParam() bool {
 			return true
 		}
 	}
+
 	return false
 }
 
