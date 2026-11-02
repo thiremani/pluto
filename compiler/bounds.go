@@ -398,22 +398,8 @@ func affineIndexFromExpr(expr ast.Expression) (affineIndexForm, bool) {
 }
 
 func (c *Compiler) loopIterMinMax(start, stop, step llvm.Value) (minIter, maxIter, hasAny llvm.Value) {
-	zero := c.ConstI64(0)
 	one := c.ConstI64(1)
-
-	isNeg := c.builder.CreateICmp(llvm.IntSLT, step, zero, "iter_step_is_neg")
-	isPos := c.builder.CreateICmp(llvm.IntSGT, step, zero, "iter_step_is_pos")
-	posHasAny := c.builder.CreateAnd(
-		isPos,
-		c.builder.CreateICmp(llvm.IntSLT, start, stop, "iter_pos_has"),
-		"iter_pos_has_any",
-	)
-	negHasAny := c.builder.CreateAnd(
-		isNeg,
-		c.builder.CreateICmp(llvm.IntSGT, start, stop, "iter_neg_has"),
-		"iter_neg_has_any",
-	)
-	hasAny = c.builder.CreateOr(posHasAny, negHasAny, "iter_has_any")
+	isNeg, hasAny := c.rangeDirection(start, stop, step)
 
 	stopMinusOne := c.builder.CreateSub(stop, one, "iter_stop_minus_one")
 	stopPlusOne := c.builder.CreateAdd(stop, one, "iter_stop_plus_one")

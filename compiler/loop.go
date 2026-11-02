@@ -295,8 +295,7 @@ func (c *Compiler) createTestedStepLoop(loop rangeLoop) llvm.Value {
 	return final
 }
 
-// loopPhis opens a loop header with the element and the carried state, which
-// start from the range's start and the seed.
+// loopPhis opens a loop header with the element and the carried state.
 func (c *Compiler) loopPhis(loop rangeLoop, preheader llvm.BasicBlock) (iter, current llvm.Value) {
 	iter = c.builder.CreatePHI(c.Context.Int64Type(), "iter")
 	iter.AddIncoming([]llvm.Value{loop.start}, []llvm.BasicBlock{preheader})
@@ -316,8 +315,7 @@ func (c *Compiler) continueLoop(loop rangeLoop, iter, current, iterNext, nextSta
 }
 
 // rangeDirection reports whether a range steps downward, and whether it holds
-// an element: start < stop for a positive step, start > stop for a negative
-// one. A zero step holds none.
+// an element; a zero step holds none.
 func (c *Compiler) rangeDirection(start, stop, step llvm.Value) (descending, nonEmpty llvm.Value) {
 	zero := c.ConstI64(0)
 	descending = c.builder.CreateICmp(llvm.IntSLT, step, zero, "step_is_neg")
@@ -335,9 +333,7 @@ func (c *Compiler) rangeDirection(start, stop, step llvm.Value) (descending, non
 	return descending, nonEmpty
 }
 
-// saturatingSub emits a - b clamped to the I64 range. As a range's last bound,
-// a clamp means no element can follow: nothing is below INT64_MIN or above
-// INT64_MAX.
+// saturatingSub emits a - b clamped to the I64 range.
 func (c *Compiler) saturatingSub(a, b llvm.Value, name string) llvm.Value {
 	i64 := c.Context.Int64Type()
 	fnType := llvm.FunctionType(i64, []llvm.Type{i64, i64}, false)
