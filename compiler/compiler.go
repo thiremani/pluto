@@ -2240,19 +2240,19 @@ func callAdapterOutputs(adapters []callOutputAdapter) []*Symbol {
 
 // commitCallOutputAdapters commits ABI-flavor temporaries into the independent
 // result slots after (and only after) a call executes. A ranged callee's
-// writeFlags say which outputs it wrote, and an unwritten adapter is freed
+// writeMarkers say which outputs it wrote, and an unwritten adapter is freed
 // instead; any other callee writes every output and passes none.
-func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeFlags []llvm.Value) {
+func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeMarkers []llvm.Value) {
 	for i, adapter := range adapters {
 		if !adapter.bridged {
 			continue
 		}
-		if writeFlags == nil {
+		if writeMarkers == nil {
 			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
 			continue
 		}
 
-		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeFlags[i], fmt.Sprintf("call_output_written_%d", i))
+		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeMarkers[i], fmt.Sprintf("call_output_written_%d", i))
 		c.withCondBranch(didWrite, "calladapter", func() {
 			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
 		}, func() {
@@ -3283,17 +3283,17 @@ func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, 
 	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes, carried)
 	outputs := callAdapterOutputs(adapters)
 	c.runCallWithBoundsElse(func() {
-		var writeFlags []llvm.Value
+		var writeMarkers []llvm.Value
 		if sig.ABI.Ranged {
-			writeFlags = c.makeCallOutputWriteFlags(len(outputs))
+			writeMarkers = c.makeCallWriteMarkers(len(outputs))
 		}
 		c.builder.CreateCall(
 			call.FuncType,
 			call.Function,
-			c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
+			c.callArgs(sig, call, call.RetStruct, outputs, writeMarkers, nil),
 			"",
 		)
-		c.commitCallOutputAdapters(staged, adapters, writeFlags)
+		c.commitCallOutputAdapters(staged, adapters, writeMarkers)
 	}, func() { c.cleanupSkippedCallOutputAdapters(adapters) })
 }
 
@@ -3307,15 +3307,15 @@ func (sig *callSignature) isVariant() bool {
 	return sig.AliasPattern != nil
 }
 
-func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {
-	flags := make([]llvm.Value, count)
-	for i := range flags {
+func (c *Compiler) makeCallWriteMarkers(count int) []llvm.Value {
+	markers := make([]llvm.Value, count)
+	for i := range markers {
 		name := fmt.Sprintf("call_output_written_%d", c.tmpCounter)
 		c.tmpCounter++
-		flags[i] = c.createEntryBlockAlloca(c.Context.Int1Type(), name)
-		c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), flags[i])
+		markers[i] = c.createEntryBlockAlloca(c.Context.Int1Type(), name)
+		c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), markers[i])
 	}
-	return flags
+	return markers
 }
 
 // compileCallInner compiles the actual function call
@@ -3351,7 +3351,7 @@ func (c *Compiler) callArgs(
 	call preparedCall,
 	retStruct llvm.Type,
 	outputs []*Symbol,
-	writeFlags []llvm.Value,
+	writeMarkers []llvm.Value,
 	directSeed *Symbol,
 ) []llvm.Value {
 	llvmArgs := []llvm.Value{}
@@ -3361,9 +3361,9 @@ func (c *Compiler) callArgs(
 			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
 			c.builder.CreateStore(out.Val, fieldPtr)
 		}
-		for i, flag := range writeFlags {
+		for i, marker := range writeMarkers {
 			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, len(outputs)+i, fmt.Sprintf("sret_written_field_%d", i))
-			c.builder.CreateStore(flag, fieldPtr)
+			c.builder.CreateStore(marker, fieldPtr)
 		}
 		llvmArgs = append(llvmArgs, sretPtr)
 	}
