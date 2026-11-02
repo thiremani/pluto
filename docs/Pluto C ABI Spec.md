@@ -1,6 +1,6 @@
 # Pluto C ABI & Name Mangling Specification
 
-**Version:** 2.1 | **Status:** Draft | **Target:** C11 / C++17
+**Version:** 3.0 | **Status:** Draft | **Target:** C11 / C++17
 
 ## 1. Overview
 
@@ -284,7 +284,8 @@ typedef struct {
 
 The descriptor occupies the ordinary source-parameter position. An indirect
 result carrier, when present, comes first; all source parameters follow in
-source order; and a hidden direct-return seed is last.
+source order; and a range-bearing function's hidden direct-return seed
+(§5.3) is last.
 
 ---
 
@@ -333,17 +334,11 @@ types:
 - `I64` and `F64` parameters are passed directly. Ranges, internal
   `ArrayRange` descriptors, and other values are passed indirectly.
 - A function with exactly one `I64` or `F64` output returns that scalar
-  directly and receives one hidden seed value. Every body that runs writes
-  every output (#123), so the seed preserves the caller's staged value only
-  when a `Range` or internal `ArrayRange` parameter runs no iteration; a
-  function without one never reads its seed.
+  directly. One with a `Range` or internal `ArrayRange` parameter also
+  receives a hidden seed value after its source parameters (§5.3).
 - All other output lists use an indirect `void` return. Argument zero points
-  to a carrier whose first `N` fields are output pointers and whose next `N`
-  fields are pointers to `i1` write markers.
-- The caller initializes every write marker to false. A callee sets the marker
-  when it writes that output, which every body that runs does. A marker left
-  false therefore means an empty range parameter, and the caller keeps its
-  existing destination.
+  to a carrier whose first `N` fields are output pointers. A function with a
+  range parameter has `N` more fields, pointers to `i1` write markers (§5.3).
 - Output expressions are staged independently at the call site, so one output
   cannot mutate a destination before a sibling right-hand side reads its
   statement-start value.
@@ -354,42 +349,38 @@ types:
   a distinct internal symbol; the source specialization and its effect facts
   remain unchanged. Any other representation change between a declared output
   and its destination uses a separate ABI output adapter initialized to zero
-  and committed only if its write marker is set. So does every output of an
-  indirect-return call in a caller-side ranged loop, whose arguments may hold
-  the values its destinations carry, so that an input keeps its value while
-  the callee writes the output.
+  and committed after the call. So does every output of an indirect-return
+  call in a caller-side ranged loop, whose arguments may hold the values its
+  destinations carry, so that an input keeps its value while the callee
+  writes the output. A range-bearing callee's adapter commits only if its
+  write marker is set; a call in a caller-side ranged loop never has a
+  range-bearing callee.
 
-The direct-return seed is always present, even when the function body
-unconditionally overwrites its output. Schematically, with mangled names
-abbreviated:
+Every body that runs writes every output (#123), so a function needs its
+destination's old value only when its range parameter runs no iteration.
+Schematically, with mangled names abbreviated:
 
 ```c
-int64_t Pt_Square_I64(int64_t x, int64_t seed);
-int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
+int64_t Pt_Square_I64(int64_t x);
+int64_t Pt_ConditionalSquare_I64_I64(int64_t prev, int64_t x);
 int64_t Pt_Acc_I64_Range(int64_t a, const PtRangeI64 *range, int64_t seed);
 ```
 
-A C caller passes the destination's current value to request Pluto's keep-old
-semantics, or the output type's zero value for a fresh destination. The seed is
-`noundef` and must still be supplied to a function such as `Square` that does
-not inspect it. Whether the body must write or may skip a write never changes
-the public signature or mangled name. In particular, adding a conditional
-assignment—or changing a reachable output-producing callee from must-write to
-may-write—cannot alter the prototype of an existing symbol. A future seedless
-internal fast path must therefore use a distinct private symbol behind this
-stable boundary.
+`ConditionalSquare` must start from a default: with an input `prev` and
+`res = prev` first, a caller that keeps an old value passes it as that
+ordinary argument. Whether a function has the seed and the write markers
+depends only on whether it has a range parameter, and its complete prototype
+only on its solved parameter and output types, never on its body: adding a
+conditional assignment cannot alter the prototype of an existing symbol.
 
-The planned ABI 3.0 (§5.3, #69) removes the seed and the write markers from
-every function without a `Range` or `ArrayRange` parameter.
-
-Conceptually, a two-output indirect call uses:
+Conceptually, a two-output indirect call uses the carrier below; a
+range-bearing callee's carrier adds `bool *wrote0` and `bool *wrote1` after
+the output pointers.
 
 ```c
 struct Results {
     T0 *out0;
     T1 *out1;
-    bool *wrote0;
-    bool *wrote1;
 };
 
 void Pt_example(Results *results, I64 direct_arg, Other *indirect_arg);
@@ -417,6 +408,16 @@ caller that does lets the body's later reads of that input observe its
 writes to the output, within the called body's own statements; a nested
 Pluto call inside that body stages its outputs and commits them afterwards.
 A register scalar is always a plain value.
+
+**Changes in 3.0.** Version 2.1 gave every direct return a hidden seed after
+its source parameters and every indirect carrier a write marker per output,
+so that a skipped write could keep the caller's value. Every body that runs
+writes every output (#123), so version 3.0 (#69) keeps them only for a
+function with a `Range` or `ArrayRange` parameter. Every other function's
+prototype changes: a direct return loses its last argument, so `Square` goes
+from `int64_t Pt_Square_I64(int64_t x, int64_t seed)` to
+`int64_t Pt_Square_I64(int64_t x)`, and an indirect carrier loses its marker
+fields. A range-bearing function's prototype is unchanged.
 
 **Changes in 2.1.** Version 2.0 gave range-bearing variants a hidden `i32`
 alias selector per direct scalar parameter, placed after the source parameters
@@ -490,25 +491,21 @@ never see a variant and cannot request one. Inputs are stable (#144), so a
 variant never changes what a body reads within one invocation (§5.3); only
 a callee with a `Range` or `ArrayRange` parameter has variants.
 
-### 5.3 Planned: ABI 3.0 (#69)
+### 5.3 Range Parameters
 
-Every body that runs writes every output (#123), so no function needs its
-destination's old value as an implicit input. ABI 3.0, tracked in #69 and not
-yet implemented, removes the hidden seed and the write markers from every
-function without a `Range` or `ArrayRange` parameter: a direct return takes
-only its source parameters, and the indirect carrier holds only output
-pointers. `Square` becomes `int64_t Pt_Square_I64(int64_t x)`.
-`ConditionalSquare` must start from a default: with an input `prev` and
-`res = prev` first, it becomes
-`int64_t Pt_ConditionalSquare_I64_I64(int64_t prev, int64_t x)`, and a caller
-that keeps an old value passes it as that ordinary argument.
+A function with a `Range` or internal `ArrayRange` parameter runs its body
+once per element, so it may run it zero times, and zero iterations mean no
+assignment. Such a function reports that no iteration ran, until PIR Step 7
+chooses between one "did execute" bit and a caller-side emptiness check:
 
-Whether a function keeps the seed and the write markers depends only on
-whether it has a range parameter; its complete prototype depends on its
-solved parameter and output types, never on its body. A range-bearing
-function such as `Acc` must still report that no iteration ran, since zero
-iterations mean no assignment; it keeps its seed until PIR Step 7 chooses
-between one "did execute" bit and a caller-side emptiness check.
+- A direct return receives the destination's current value as its seed,
+  starts its loop from it, and returns it when no iteration runs. A caller
+  passes the output type's zero value for a fresh destination and for a
+  nested or targetless call. The seed is `noundef`.
+- An indirect return's caller initializes every write marker to false. The
+  callee sets every marker once per iteration it runs, since that iteration
+  writes every output, so a marker left false means an empty range, and the
+  caller keeps its existing destination.
 
 Inputs are stable within each scalar invocation (#144), so a private variant
 (§5.2) may let a shared input and output use one slot within one invocation
@@ -522,10 +519,8 @@ gives 10, while an unshared `Acc(0, 1:5)` gives 4.
 
 Every public specialization follows the calling convention above, so its
 symbol is an ordinary C function: once a native program can link it, C or
-any language with a C foreign function interface can call it. ABI 3.0
-(§5.3) is planned to drop the seed and the write markers from those without
-a range parameter. Three pieces are missing before a native program can
-call one:
+any language with a C foreign function interface can call it. Three pieces
+are missing before a native program can call one:
 
 - the compiler builds an executable per script and no library;
 - it emits a specialization only for argument types that some Pluto call
@@ -549,12 +544,12 @@ total = AccFrom(start, lo, hi)
 
 `AccFrom(0, 1, 5)` gives 10, and `AccFrom(7, 3, 3)` gives 7. It takes the
 bounds rather than a `Range`, since a range parameter would run its body
-once per element. Its public specialization calls the private variant with
-`start` as both the shared argument and the seed. Like every direct return
-today, it also takes a seed as its fourth argument, which it never reads and
-which ABI 3.0 is planned to remove. Generated wrappers could later supply
-headers, ABI adaptation and ownership handling; they wait for a concrete
-native integration need.
+once per element. Without one, it takes no seed either:
+`int64_t Pt_AccFrom_I64_I64_I64(int64_t start, int64_t lo, int64_t hi)`,
+with the mangled name abbreviated. Its public specialization calls the
+private variant with `start` as both the shared argument and the seed.
+Generated wrappers could later supply headers, ABI adaptation and ownership
+handling; they wait for a concrete native integration need.
 
 ---
 

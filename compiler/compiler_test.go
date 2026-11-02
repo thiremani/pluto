@@ -119,11 +119,15 @@ out`
 }
 
 func TestDirectReturnSeedIndex(t *testing.T) {
-	zeroArg := classifyFuncABI(nil, []Type{I64})
-	require.Equal(t, ABIReturnDirect, zeroArg.Return.Mode)
-	require.Equal(t, 0, zeroArg.DirectReturnSeedParamIndex())
+	rangeFree := classifyFuncABI([]Type{I64}, []Type{I64})
+	require.Equal(t, ABIReturnDirect, rangeFree.Return.Mode)
+	require.Equal(t, -1, rangeFree.DirectReturnSeedParamIndex(), "a function without a range parameter takes no seed")
 
-	stringReturn := classifyFuncABI(nil, []Type{StrG{}})
+	ranged := classifyFuncABI([]Type{I64, Range{Iter: I64}}, []Type{I64})
+	require.Equal(t, ABIReturnDirect, ranged.Return.Mode)
+	require.Equal(t, 2, ranged.DirectReturnSeedParamIndex(), "a ranged function's seed follows its source parameters")
+
+	stringReturn := classifyFuncABI([]Type{Range{Iter: I64}}, []Type{StrG{}})
 	require.Equal(t, ABIReturnIndirect, stringReturn.Return.Mode)
 	require.Equal(t, -1, stringReturn.DirectReturnSeedParamIndex())
 }
@@ -138,8 +142,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{I64, I64})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)", "expected direct scalar signature with a hidden destination seed")
-	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3, i64 0)", "expected direct scalar call with a fresh-destination seed")
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1)", "expected direct scalar signature without a hidden seed")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3)", "expected direct scalar call without a seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar return should not use sret struct")
 }
 
@@ -179,8 +183,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "AddF", []Type{F64, F64})
 
-	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1, double noundef %2)", "expected direct float signature with a hidden destination seed")
-	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00, double 0.000000e+00)", "expected direct float call with a fresh-destination seed")
+	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1)", "expected direct float signature without a hidden seed")
+	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00)", "expected direct float call without a seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar float return should not use sret struct")
 }
 
@@ -200,7 +204,7 @@ a, b`
 	require.Contains(t, scriptIR, "call void @"+mangled+"(", "expected indirect multi-return call")
 }
 
-func TestRangedArrayOutputMarksIndirectWrite(t *testing.T) {
+func TestRangeFreeIndirectReturnHasNoWriteMarkers(t *testing.T) {
 	code := `res = LastRow(matrix)
     res = []0
     i = 0:2
@@ -212,14 +216,78 @@ func TestRangedArrayOutputMarksIndirectWrite(t *testing.T) {
 row = LastRow(matrix)
 row`
 
-	moduleName := "ranged_array_output_write"
+	moduleName := "range_free_indirect_return"
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "LastRow", []Type{
 		Array{ElemType: I64, Rank: 2},
 	})
 
 	require.Contains(t, scriptIR, "define void @"+mangled+"(", "expected an indirect array return")
-	require.Contains(t, scriptIR, "store i1 true, ptr %res_written", "a yielded ranged selection must mark the output as written")
+	require.Contains(t, scriptIR, "%"+mangled+"_ret = type { ptr }", "a range in the body is not a range parameter, so the carrier holds only the output pointer")
+	require.NotContains(t, scriptIR, "_written", "a function without a range parameter has no write markers")
+}
+
+// Every body that runs writes every output (#123), so a ranged function sets
+// each write marker once per executed iteration rather than at each write,
+// the gated one included.
+func TestRangedIndirectReturnMarksOncePerIteration(t *testing.T) {
+	code := `s, n = Both(a, r)
+    s = a + r
+    s = r > 1 r
+    n = r`
+	script := `s, n = Both(0, 1:4)
+s, n`
+
+	moduleName := "ranged_markers_per_iteration"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Both", []Type{I64, Range{Iter: I64}})
+
+	start := strings.Index(scriptIR, "define void @"+mangled+"(")
+	require.NotEqual(t, -1, start, "expected the ranged indirect definition")
+	body := scriptIR[start:]
+	body = body[:strings.Index(body, "\n}\n")]
+
+	for _, marker := range []string{"store i1 true, ptr %s_written", "store i1 true, ptr %n_written"} {
+		require.Equal(t, 1, strings.Count(body, marker), "each marker is set once per iteration: %s", marker)
+		require.Greater(t, strings.Index(body, marker), strings.LastIndex(body, "ptr %n_dest"), "the markers follow the iteration's last write: %s", marker)
+	}
+}
+
+// A callee without a range parameter writes every output, so its call stages
+// them at zero; a ranged callee may run no iteration, which leaves the
+// destination as it was, so its staging still copies the destination.
+func TestCallStagingCopiesDestinationOnlyForRangedCallee(t *testing.T) {
+	code := `a = Twice(x)
+    a = [x x]`
+	rangeFree := `p = [7 8 9]
+p
+p = Twice(2)
+p`
+	ranged := `p = [7 8 9]
+p
+p = Twice(0:3)
+p`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "zero_call_staging", code, rangeFree)
+	require.NotContains(t, scriptIR, "@arr_i64_copy(", "a range-free call must not copy its destination into the staged slot")
+
+	scriptIR, _ = compileScriptAndCodeIR(t, "seeded_call_staging", code, ranged)
+	require.Equal(t, 1, strings.Count(scriptIR, "call ptr @arr_i64_copy("), "a ranged call stages a copy of its destination")
+}
+
+// Nested and targetless calls of a function without a range parameter pass
+// only its source arguments.
+func TestNestedAndTargetlessCallsPassNoSeed(t *testing.T) {
+	code := `out = Square(x)
+    out = x * x`
+	script := `Square(Square(2))`
+
+	moduleName := "nested_call_no_seed"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Square", []Type{I64})
+
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2)", "the nested call passes no seed")
+	require.Regexp(t, `call i64 @`+mangled+`\(i64 %\w+\)`, scriptIR, "the targetless outer call passes no seed")
 }
 
 // verifyCompiledModules asserts LLVM accepts the complete code and script
@@ -735,11 +803,11 @@ res`
 		Range{Iter: I64},
 	})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)",
+	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1)",
 		"a shared driver must select the ordinary scalar specialization")
 	require.GreaterOrEqual(t, strings.Count(scriptIR, "call i64 @"+scalarMangled+"("), 1,
 		"the shared caller-side loop should invoke the scalar specialization")
-	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter, i64 %call_seed)",
+	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter)",
 		"the array access and scalar argument should use the same caller-loop iterator")
 	require.NotContains(t, scriptIR, arrayRangeMangled,
 		"arr[i] and i must not become independent callee iterators")

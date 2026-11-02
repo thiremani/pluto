@@ -13,12 +13,11 @@ import (
 )
 
 type Symbol struct {
-	Val       llvm.Value
-	Type      Type
-	FuncArg   bool       // Symbol originates from function input/output argument context.
-	Borrowed  bool       // Value/storage is borrowed from another owner (scope cleanup must skip).
-	ReadOnly  bool       // Input parameter (cannot be written to).
-	WriteFlag llvm.Value // Optional i1* set when this logical output is actually written.
+	Val      llvm.Value
+	Type     Type
+	FuncArg  bool // Symbol originates from function input/output argument context.
+	Borrowed bool // Value/storage is borrowed from another owner (scope cleanup must skip).
+	ReadOnly bool // Input parameter (cannot be written to).
 }
 
 // Borrowed-value ownership model:
@@ -26,7 +25,7 @@ type Symbol struct {
 // Function lowering is ABI-classified. Indirect params/results use caller-owned
 // storage as before; direct scalar params stay as SSA values in function scope
 // until addressable storage is semantically required, and direct scalar outputs
-// stay as seeded values in function scope until storage is semantically required.
+// stay as SSA values in function scope until storage is semantically required.
 // Direct scalar returns cross the call boundary as SSA values.
 //
 //   - Input params (ReadOnly=true): read-only reference to caller's value
@@ -41,7 +40,7 @@ type Symbol struct {
 // Memory management:
 //
 //   For function calls (x = f(y)):
-//     - Function writes into an independent, destination-seeded staging slot
+//     - Function writes into an independent staging slot
 //     - The staged result is MOVED to the real destination after all RHS values
 //       have been evaluated
 //     - The real destination's old value is then freed by freeExprOldValues
@@ -68,9 +67,10 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs       []*Symbol // lowered function inputs (range iterators remain pointer-backed)
-	IterIndices  []int     // Indices of iterator params
-	AliasPattern []int     // Per input, the one-based output it shares (callSignature.AliasPattern)
+	Inputs       []*Symbol    // lowered function inputs (range iterators remain pointer-backed)
+	IterIndices  []int        // Indices of iterator params
+	AliasPattern []int        // Per input, the one-based output it shares (callSignature.AliasPattern)
+	WriteMarkers []llvm.Value // Per output, the i1 pointer each executed iteration sets (indirect returns)
 }
 
 type callArg struct {
@@ -311,7 +311,7 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 // staged pointer. A callee without a range parameter runs once per call, so
 // its inputs read their arguments and the call keeps the public specialization.
 func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest []*ast.Identifier) {
-	if !slices.ContainsFunc(sig.ParamTypes, isRangeDriverType) {
+	if !sig.ABI.Ranged {
 		return
 	}
 
@@ -330,20 +330,6 @@ func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest 
 			sig.ABI.Return.OutTypes[slot-1] = sig.ParamTypes[i]
 		}
 	}
-}
-
-// directReturnSeedForCall captures the caller's current destination value for a
-// direct scalar return. The callee receives it through a hidden ABI parameter
-// so a skipped output write preserves the destination even though the LLVM
-// return itself is by value.
-func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, output *Symbol) *Symbol {
-	if output != nil {
-		return c.derefIfPointer(output, "call_seed")
-	}
-	if dest != nil {
-		return c.resolveDestSeed(dest, outType)
-	}
-	return c.makeZeroValue(outType)
 }
 
 func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
@@ -881,19 +867,6 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	return derefed
 }
 
-func (c *Compiler) markOutputSlotWritten(dst *Symbol, mergedFrom llvm.Value) {
-	if dst.WriteFlag.IsNil() {
-		return
-	}
-	// Moving a value produced by a stage that tracks the same logical output
-	// is a merge, not a new write. The stage already set the flag only on the
-	// runtime paths that yielded a value.
-	if !mergedFrom.IsNil() && mergedFrom == dst.WriteFlag {
-		return
-	}
-	c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), dst.WriteFlag)
-}
-
 func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
@@ -906,7 +879,6 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	source := c.derefIfPointer(src, loadName)
 	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
-	c.markOutputSlotWritten(dst, src.WriteFlag)
 	return coerced
 }
 
@@ -1530,12 +1502,11 @@ func (c *Compiler) makePtr(name string, s *Symbol) (ptr *Symbol, alreadyPtr bool
 
 	// Create the new symbol that represents the pointer to this memory.
 	ptr = &Symbol{
-		Val:       alloca,
-		Type:      Ptr{Elem: s.Type},
-		FuncArg:   s.FuncArg,
-		Borrowed:  s.Borrowed,
-		ReadOnly:  s.ReadOnly,
-		WriteFlag: s.WriteFlag,
+		Val:      alloca,
+		Type:     Ptr{Elem: s.Type},
+		FuncArg:  s.FuncArg,
+		Borrowed: s.Borrowed,
+		ReadOnly: s.ReadOnly,
 	}
 
 	return ptr, false
@@ -1602,8 +1573,6 @@ func (c *Compiler) derefIfPointer(s *Symbol, loadName string) *Symbol {
 	newS := GetCopy(s)
 	newS.Val = loadedVal
 	newS.Type = ptrType.Elem
-	// A write flag belongs to the storage slot, not to an ordinary value read.
-	newS.WriteFlag = llvm.Value{}
 	return newS
 }
 
@@ -2183,24 +2152,20 @@ func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed
 	return output
 }
 
-// makeSeededTempOutputs creates independent result slots. Existing destination
-// values seed output-parameter and empty-range behavior, but heap-backed seeds
+// makeSeededTempOutputs creates independent result slots seeded from the
+// destinations' current values: a range that runs no iteration leaves them in
+// place, and a ranged callee's shared input reads its slot. Heap-backed seeds
 // are copied so evaluating one RHS cannot mutate or free a destination before
 // sibling RHS expressions have read the statement's original values.
 func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
 	resolved := c.resolvedDestTypes(dest, outTypes)
 	outputs := make([]*Symbol, len(resolved))
 	for i, outType := range resolved {
-		role := fmt.Sprintf("output_slot_%d", i)
-		if dest != nil && i < len(dest) {
-			role = "output_" + dest[i].Value
-		}
-		name := freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
+		name := c.tempOutputName(dest, i)
 
-		var existing *Symbol
 		var exists bool
 		if dest != nil && i < len(dest) {
-			existing, exists = Get(c.Scopes, dest[i].Value)
+			_, exists = Get(c.Scopes, dest[i].Value)
 		}
 
 		var seed *Symbol
@@ -2210,11 +2175,31 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 			seed = c.makeZeroValue(outType)
 		}
 		outputs[i] = c.makeTempOutput(name, outType, true, seed)
-		if exists {
-			outputs[i].WriteFlag = existing.WriteFlag
-		}
 	}
 	return outputs
+}
+
+// makeZeroTempOutputs creates independent result slots for a callee without
+// a range parameter. Every body that runs writes every output (#123), so each
+// slot starts at its zero value, which is freed when the result lands, rather
+// than at a copy of its destination.
+func (c *Compiler) makeZeroTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	resolved := c.resolvedDestTypes(dest, outTypes)
+	outputs := make([]*Symbol, len(resolved))
+	for i, outType := range resolved {
+		outputs[i] = c.makeTempOutput(c.tempOutputName(dest, i), outType, true, nil)
+	}
+	return outputs
+}
+
+// tempOutputName names the result slot for output i after its destination,
+// when it has one.
+func (c *Compiler) tempOutputName(dest []*ast.Identifier, i int) string {
+	role := fmt.Sprintf("output_slot_%d", i)
+	if dest != nil && i < len(dest) {
+		role = "output_" + dest[i].Value
+	}
+	return freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
 }
 
 type callOutputAdapter struct {
@@ -2226,8 +2211,8 @@ type callOutputAdapter struct {
 // callee's declared output types. A mismatched slot gets an ABI-typed zero
 // seed, so one ownership or shape flavor cannot masquerade as another, and so
 // does every slot a ranged loop carries, since an argument may hold its value
-// and an input keeps its value for the whole call. The callee's per-output
-// write flag decides whether a seed commits; other slots pass through directly.
+// and an input keeps its value for the whole call. Other slots pass through
+// directly; commitCallOutputAdapters commits the adapters.
 func (c *Compiler) makeCallOutputAdapters(running []*Symbol, outTypes []Type, carried bool) []callOutputAdapter {
 	adapters := make([]callOutputAdapter, len(running))
 	for i, output := range running {
@@ -2253,41 +2238,40 @@ func callAdapterOutputs(adapters []callOutputAdapter) []*Symbol {
 	return outputs
 }
 
-func (c *Compiler) propagateOutputWriteFlag(output *Symbol, didWrite llvm.Value, index int) {
-	if output.WriteFlag.IsNil() {
-		return
-	}
-	previous := c.builder.CreateLoad(c.Context.Int1Type(), output.WriteFlag, fmt.Sprintf("output_written_%d", index))
-	merged := c.builder.CreateOr(previous, didWrite, fmt.Sprintf("output_written_merge_%d", index))
-	c.builder.CreateStore(merged, output.WriteFlag)
-}
-
 // commitCallOutputAdapters commits ABI-flavor temporaries into the independent
-// result slots after (and only after) a call executes. Store/coercion happens
-// before old-value cleanup so shape resets and StrG -> StrH copies can inspect
-// the previous destination safely.
-func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeFlags []llvm.Value) {
+// result slots after (and only after) a call executes. A ranged callee's
+// writeMarkers say which outputs it wrote, and an unwritten adapter is freed
+// instead; any other callee writes every output and passes none.
+func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeMarkers []llvm.Value) {
 	for i, adapter := range adapters {
-		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeFlags[i], fmt.Sprintf("call_output_written_%d", i))
 		if !adapter.bridged {
-			c.propagateOutputWriteFlag(running[i], didWrite, i)
+			continue
+		}
+		if writeMarkers == nil {
+			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
 			continue
 		}
 
-		commit := func() {
-			targetType := running[i].Type.(Ptr).Elem
-			oldValue := c.derefIfPointer(running[i], fmt.Sprintf("calladapter_old_%d", i))
-			source := c.derefIfPointer(adapter.abiOutput, fmt.Sprintf("calladapter_result_%d", i))
-			stored := c.storeSymbolToSlot(running[i], source, targetType, fmt.Sprintf("calladapter_store_%d", i))
-			c.freeSymbolValue(oldValue, "")
-			if stored.Val != source.Val {
-				c.freeSymbolValue(source, "")
-			}
-		}
-
-		c.withCondBranch(didWrite, "calladapter", commit, func() {
+		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeMarkers[i], fmt.Sprintf("call_output_written_%d", i))
+		c.withCondBranch(didWrite, "calladapter", func() {
+			c.commitCallOutputAdapter(running[i], adapter.abiOutput, i)
+		}, func() {
 			c.freeSymbolValue(adapter.abiOutput, fmt.Sprintf("calladapter_unwritten_%d", i))
 		})
+	}
+}
+
+// commitCallOutputAdapter moves one adapter's result into its result slot.
+// Store/coercion happens before old-value cleanup so shape resets and
+// StrG -> StrH copies can inspect the previous destination safely.
+func (c *Compiler) commitCallOutputAdapter(running, abiOutput *Symbol, index int) {
+	targetType := running.Type.(Ptr).Elem
+	oldValue := c.derefIfPointer(running, fmt.Sprintf("calladapter_old_%d", index))
+	source := c.derefIfPointer(abiOutput, fmt.Sprintf("calladapter_result_%d", index))
+	stored := c.storeSymbolToSlot(running, source, targetType, fmt.Sprintf("calladapter_store_%d", index))
+	c.freeSymbolValue(oldValue, "")
+	if stored.Val != source.Val {
+		c.freeSymbolValue(source, "")
 	}
 }
 
@@ -2457,7 +2441,9 @@ func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected T
 	}
 }
 
-func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
+// getReturnStruct defines the result carrier: a pointer per output and, for a
+// ranged function, a write-marker pointer per output after them.
+func (c *Compiler) getReturnStruct(mangled string, abi FuncABI) llvm.Type {
 	// Check if we've already made a "%<mangled>_ret" in this module:
 	retName := mangled + "_ret"
 
@@ -2466,10 +2452,15 @@ func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type
 	}
 	// Otherwise, define it exactly once:
 	st := c.Context.StructCreateNamed(retName)
-	fields := make([]llvm.Type, len(outputTypes)*2)
-	for i, t := range outputTypes {
-		fields[i] = llvm.PointerType(c.mapToLLVMType(t), 0)
-		fields[len(outputTypes)+i] = llvm.PointerType(c.Context.Int1Type(), 0)
+	outputTypes := abi.Return.OutTypes
+	fields := make([]llvm.Type, 0, len(outputTypes)*2)
+	for _, t := range outputTypes {
+		fields = append(fields, llvm.PointerType(c.mapToLLVMType(t), 0))
+	}
+	if abi.Ranged {
+		for range outputTypes {
+			fields = append(fields, llvm.PointerType(c.Context.Int1Type(), 0))
+		}
 	}
 	st.StructSetBody(fields, false)
 	return st
@@ -2481,7 +2472,7 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	retStruct := llvm.Type{}
 
 	if abi.UsesIndirectReturn() {
-		retStruct = c.getReturnStruct(mangled, abi.Return.OutTypes)
+		retStruct = c.getReturnStruct(mangled, abi)
 		llvmParams = append(llvmParams, llvm.PointerType(retStruct, 0))
 	} else {
 		retType = c.mapToLLVMType(abi.Return.DirectType)
@@ -2490,7 +2481,7 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	for _, param := range abi.Params {
 		llvmParams = append(llvmParams, c.mapToLLVMType(param.Lowered))
 	}
-	if abi.Return.Mode == ABIReturnDirect {
+	if abi.DirectReturnSeedParamIndex() >= 0 {
 		llvmParams = append(llvmParams, c.mapToLLVMType(abi.Return.DirectType))
 	}
 
@@ -2593,11 +2584,20 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 			Borrowed: true,
 			ReadOnly: false,
 		}
-		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
-		flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
-		retPtrs[i].WriteFlag = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
 	}
 	return retPtrs
+}
+
+// loadWriteMarkers loads a ranged function's write-marker pointers, which its
+// result carrier holds after the output pointers.
+func (c *Compiler) loadWriteMarkers(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value) []llvm.Value {
+	markers := make([]llvm.Value, len(fn.Outputs))
+	flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
+	for i, outIdent := range fn.Outputs {
+		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
+		markers[i] = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
+	}
+	return markers
 }
 
 func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature, function llvm.Value) *Symbol {
@@ -2669,11 +2669,12 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 	return inputs, iterIndices
 }
 
-func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, aliasPattern []int, currentOutput *Symbol) *Symbol {
+func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, aliasPattern []int, markers []llvm.Value, currentOutput *Symbol) *Symbol {
 	fa := &FuncArgs{
 		Inputs:       inputs,
 		IterIndices:  iterIndices,
 		AliasPattern: aliasPattern,
+		WriteMarkers: markers,
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2685,9 +2686,13 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	inputs, iterIndices := c.processParams(template, sig, function)
 
 	var outputs []*Symbol
+	var markers []llvm.Value
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
 		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes)
+		if sig.ABI.Ranged {
+			markers = c.loadWriteMarkers(template, retStruct, sretPtr)
+		}
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}
@@ -2698,11 +2703,11 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
-		finalOutput := c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, outputs[0])
+		finalOutput := c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, nil, outputs[0])
 		// Rebind the function output name to the final loop-carried SSA value.
 		Put(c.Scopes, template.Outputs[0].Value, finalOutput)
 	} else {
-		c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, nil)
+		c.compileFuncIter(template, inputs, iterIndices, sig.AliasPattern, markers, nil)
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
@@ -2833,6 +2838,11 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 		staged := c.bindIterationInputs(fn, fa)
 		c.compileFuncBody(fn)
 		c.commitIterationOutputs(staged)
+		// Every body that runs writes every output (#123), so each executed
+		// iteration sets every marker; a marker left false means none ran.
+		for _, marker := range fa.WriteMarkers {
+			c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), marker)
+		}
 		if currentOutput == nil {
 			return nil
 		}
@@ -2931,9 +2941,8 @@ func (c *Compiler) bindIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) []it
 	return staged
 }
 
-// commitIterationOutputs moves each iteration's result into its carried slot,
-// marking the output written, and frees the previous result once the body no
-// longer reads it.
+// commitIterationOutputs moves each iteration's result into its carried slot
+// and frees the previous result once the body no longer reads it.
 func (c *Compiler) commitIterationOutputs(staged []iterationOutput) {
 	for _, output := range staged {
 		previous := c.derefIfPointer(output.carry, output.name+"_iter_previous")
@@ -3128,9 +3137,8 @@ func (c *Compiler) loadOutputValues(outputs []*Symbol, name string) []*Symbol {
 			loadName = fmt.Sprintf("%s_%d", name, i)
 		}
 		out[i] = &Symbol{
-			Val:       c.createLoad(outputs[i].Val, elemType, loadName),
-			Type:      elemType,
-			WriteFlag: outputs[i].WriteFlag,
+			Val:  c.createLoad(outputs[i].Val, elemType, loadName),
+			Type: elemType,
 		}
 	}
 	return out
@@ -3212,14 +3220,19 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	}
 
 	// Indirect-return callees write through their output pointers. Always point
-	// them at independent, destination-seeded slots so a call in one RHS cannot
-	// mutate a real destination before sibling RHS expressions have read the
-	// statement-start values. They are seeded after the arguments, as a direct
-	// return's seed is. The outer assignment owns the eventual commit and
-	// cleanup.
+	// them at independent slots so a call in one RHS cannot mutate a real
+	// destination before sibling RHS expressions have read the statement-start
+	// values. A ranged callee may run no iteration, so its slots are seeded from
+	// the destinations, after the arguments as a direct return's seed is; any
+	// other callee writes every output, so its slots start at zero. The outer
+	// assignment owns the eventual commit and cleanup.
 	var outputs []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
+		if sig.ABI.Ranged {
+			outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
+		} else {
+			outputs = c.makeZeroTempOutputs(dest, info.OutTypes)
+		}
 		c.callIntoStagedOutputs(sig, call, outputs, false)
 	})
 	return c.loadOutputValues(outputs, "call_final")
@@ -3240,21 +3253,21 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 	return fn, funcType, retStruct
 }
 
+// compileDirectCallIntoOutput calls inside a caller-side ranged loop, whose
+// callee never has a range parameter: the solver gives every argument its
+// yielded type once any argument needs the caller's loop. So it takes no seed.
 func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-		if output != nil {
-			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
-		}
 		c.runCallWithBounds(func() {
-			result := c.callDirect(call.Function, call.FuncType, sig, call, seed)
+			result := c.callDirect(call.Function, call.FuncType, sig, call, nil)
 			c.storeSymbolToSlot(output, result, output.Type.(Ptr).Elem, "call_direct_store")
 		})
 	})
 }
 
 // compileIndirectCallIntoStagedOutputs calls into the slots a caller-side
-// ranged loop carries, each through an adapter committed only when written.
+// ranged loop carries, each through an adapter committed after the call,
+// since the callee has no range parameter (see compileDirectCallIntoOutput).
 func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	sig *callSignature,
 	ce *ast.CallExpression,
@@ -3270,14 +3283,17 @@ func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, 
 	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes, carried)
 	outputs := callAdapterOutputs(adapters)
 	c.runCallWithBoundsElse(func() {
-		writeFlags := c.makeCallOutputWriteFlags(len(outputs))
+		var writeMarkers []llvm.Value
+		if sig.ABI.Ranged {
+			writeMarkers = c.makeCallWriteMarkers(len(outputs))
+		}
 		c.builder.CreateCall(
 			call.FuncType,
 			call.Function,
-			c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
+			c.callArgs(sig, call, call.RetStruct, outputs, writeMarkers, nil),
 			"",
 		)
-		c.commitCallOutputAdapters(staged, adapters, writeFlags)
+		c.commitCallOutputAdapters(staged, adapters, writeMarkers)
 	}, func() { c.cleanupSkippedCallOutputAdapters(adapters) })
 }
 
@@ -3291,24 +3307,27 @@ func (sig *callSignature) isVariant() bool {
 	return sig.AliasPattern != nil
 }
 
-func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {
-	flags := make([]llvm.Value, count)
-	for i := range flags {
+func (c *Compiler) makeCallWriteMarkers(count int) []llvm.Value {
+	markers := make([]llvm.Value, count)
+	for i := range markers {
 		name := fmt.Sprintf("call_output_written_%d", c.tmpCounter)
 		c.tmpCounter++
-		flags[i] = c.createEntryBlockAlloca(c.Context.Int1Type(), name)
-		c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), flags[i])
+		markers[i] = c.createEntryBlockAlloca(c.Context.Int1Type(), name)
+		c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), markers[i])
 	}
-	return flags
+	return markers
 }
 
 // compileCallInner compiles the actual function call
 func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) []*Symbol {
 	var results []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		// A ranged callee receives the destination's current value through a
+		// hidden ABI parameter and returns it when it runs no iteration, which
+		// leaves the destination as it was even though the return is by value.
 		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-		if len(dest) > 0 {
-			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
+		if sig.ABI.Ranged && len(dest) > 0 {
+			seed = c.resolveDestSeed(dest[0], sig.ABI.Return.DirectType)
 		}
 		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
 		c.createStore(seed.Val, resultPtr, seed.Type)
@@ -3332,7 +3351,7 @@ func (c *Compiler) callArgs(
 	call preparedCall,
 	retStruct llvm.Type,
 	outputs []*Symbol,
-	writeFlags []llvm.Value,
+	writeMarkers []llvm.Value,
 	directSeed *Symbol,
 ) []llvm.Value {
 	llvmArgs := []llvm.Value{}
@@ -3342,9 +3361,9 @@ func (c *Compiler) callArgs(
 			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
 			c.builder.CreateStore(out.Val, fieldPtr)
 		}
-		for i, flag := range writeFlags {
+		for i, marker := range writeMarkers {
 			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, len(outputs)+i, fmt.Sprintf("sret_written_field_%d", i))
-			c.builder.CreateStore(flag, fieldPtr)
+			c.builder.CreateStore(marker, fieldPtr)
 		}
 		llvmArgs = append(llvmArgs, sretPtr)
 	}
@@ -3355,7 +3374,7 @@ func (c *Compiler) callArgs(
 		}
 		llvmArgs = append(llvmArgs, argVal)
 	}
-	if sig.ABI.Return.Mode == ABIReturnDirect {
+	if sig.ABI.DirectReturnSeedParamIndex() >= 0 {
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}
