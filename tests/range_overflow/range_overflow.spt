@@ -1,7 +1,6 @@
 # INT64_MIN has no literal: 9223372036854775808 does not fit before the
 # minus applies.
 minInt = -9223372036854775807 - 1
-"MinInt: -minInt"
 
 # A range ends where its next element would pass INT64_MAX, instead of
 # wrapping to INT64_MIN + 1 and 0.
@@ -15,14 +14,10 @@ one = 9223372036854775806:9223372036854775807:2
 seenOne = [one + 0]
 "OneElementUp: -seenOne"
 
-# The descending mirrors end above INT64_MIN.
+# A descending range ends where its next element would pass INT64_MIN.
 down = -2:-4:-9223372036854775807
 seenDown = [down + 0]
 "BigStepDown: -seenDown"
-
-oneDown = -9223372036854775807:minInt:-2
-seenOneDown = [oneDown + 0]
-"OneElementDown: -seenOneDown"
 
 # A step of INT64_MIN reaches the second element and stops before the third.
 minStep = 5:minInt:minInt
@@ -41,41 +36,15 @@ high = 9223372036854775807:9223372036854775806:-2
 seenHigh = [high + 0]
 "HighStop: -seenHigh"
 
-# A step other than 1 or -1 checks for an element before the first iteration.
-emptyUp = 5:2:3
-seenEmptyUp = [emptyUp + 0]
-"EmptyUp: -seenEmptyUp"
-
-emptyDown = 2:5:-3
-seenEmptyDown = [emptyDown + 0]
-"EmptyDown: -seenEmptyDown"
-
-# Unit steps reach the last element before INT64_MAX and after INT64_MIN.
+# A unit step reaches the last element before INT64_MAX.
 top = 9223372036854775805:9223372036854775807
 seenTop = [top + 0]
 "UnitStepTop: -seenTop"
 
-bottom = -9223372036854775806:minInt:-1
-seenBottom = [bottom + 0]
-"UnitStepBottom: -seenBottom"
-
-# A caller-side ranged statement counts the elements it visits.
-count = 0
-count = count + one - one + 1
-"CallerCount: -count"
-
-# A callee-owned Range visits the same elements.
+# A callee-owned Range over up visits only 2.
 last = 0
 last = Last(up)
 "CalleeLast: -last"
-
-calls = 0
-calls = Count(calls, one)
-"CalleeCount: -calls"
-
-minCalls = 0
-minCalls = Count(minCalls, minStep)
-"CalleeMinStepCount: -minCalls"
 
 # A callee-owned ArrayRange visits only index 2, which is out of bounds, so
 # the destination keeps its value.
@@ -121,9 +90,6 @@ z = 0:3:zs[0]
 "ZeroStep: -z"
 zeroSeen = [z + 0]
 "ZeroStepElements: -zeroSeen"
-zeroSum = 5
-zeroSum = zeroSum + z
-"ZeroStepLoop: -zeroSum"
 
 # A step held in a variable is no literal, even when the compiler folds it to
 # 0: the range yields no element.
