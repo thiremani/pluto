@@ -2152,8 +2152,9 @@ func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed
 	return output
 }
 
-// makeSeededTempOutputs creates independent result slots. Existing destination
-// values seed output-parameter and empty-range behavior, but heap-backed seeds
+// makeSeededTempOutputs creates independent result slots seeded from the
+// destinations' current values: a range that runs no iteration leaves them in
+// place, and a ranged callee's shared input reads its slot. Heap-backed seeds
 // are copied so evaluating one RHS cannot mutate or free a destination before
 // sibling RHS expressions have read the statement's original values.
 func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
@@ -2210,8 +2211,8 @@ type callOutputAdapter struct {
 // callee's declared output types. A mismatched slot gets an ABI-typed zero
 // seed, so one ownership or shape flavor cannot masquerade as another, and so
 // does every slot a ranged loop carries, since an argument may hold its value
-// and an input keeps its value for the whole call. The callee's per-output
-// write flag decides whether a seed commits; other slots pass through directly.
+// and an input keeps its value for the whole call. Other slots pass through
+// directly; commitCallOutputAdapters commits the adapters.
 func (c *Compiler) makeCallOutputAdapters(running []*Symbol, outTypes []Type, carried bool) []callOutputAdapter {
 	adapters := make([]callOutputAdapter, len(running))
 	for i, output := range running {
@@ -3265,7 +3266,8 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 }
 
 // compileIndirectCallIntoStagedOutputs calls into the slots a caller-side
-// ranged loop carries, each through an adapter committed only when written.
+// ranged loop carries, each through an adapter committed after the call,
+// since the callee has no range parameter (see compileDirectCallIntoOutput).
 func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	sig *callSignature,
 	ce *ast.CallExpression,

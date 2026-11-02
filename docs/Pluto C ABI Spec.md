@@ -349,11 +349,12 @@ types:
   a distinct internal symbol; the source specialization and its effect facts
   remain unchanged. Any other representation change between a declared output
   and its destination uses a separate ABI output adapter initialized to zero
-  and committed after the call; a range-bearing callee's adapter commits only
-  if its write marker is set. So does every output of an indirect-return call
-  in a caller-side ranged loop, whose arguments may hold the values its
+  and committed after the call. So does every output of an indirect-return
+  call in a caller-side ranged loop, whose arguments may hold the values its
   destinations carry, so that an input keeps its value while the callee
-  writes the output.
+  writes the output. A range-bearing callee's adapter commits only if its
+  write marker is set; a call in a caller-side ranged loop never has a
+  range-bearing callee.
 
 Every body that runs writes every output (#123), so a function needs its
 destination's old value only when its range parameter runs no iteration.
