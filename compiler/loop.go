@@ -341,11 +341,26 @@ func (c *Compiler) rangeDirection(start, stop, step llvm.Value) (descending, non
 func (c *Compiler) saturatingSub(a, b llvm.Value, name string) llvm.Value {
 	i64 := c.Context.Int64Type()
 	fnType := llvm.FunctionType(i64, []llvm.Type{i64, i64}, false)
-	fn := c.Module.NamedFunction("llvm.ssub.sat.i64")
+	return c.builder.CreateCall(fnType, c.intrinsic("llvm.ssub.sat.i64", fnType), []llvm.Value{a, b}, name)
+}
+
+// checkedArith emits an I64 overflow intrinsic, such as
+// llvm.smul.with.overflow.i64, and returns its result and overflow bit.
+func (c *Compiler) checkedArith(intrinsic string, a, b llvm.Value, name string) (result, overflow llvm.Value) {
+	i64 := c.Context.Int64Type()
+	pairType := c.Context.StructType([]llvm.Type{i64, c.Context.Int1Type()}, false)
+	fnType := llvm.FunctionType(pairType, []llvm.Type{i64, i64}, false)
+	pair := c.builder.CreateCall(fnType, c.intrinsic(intrinsic, fnType), []llvm.Value{a, b}, name)
+	return c.builder.CreateExtractValue(pair, 0, name+"_value"), c.builder.CreateExtractValue(pair, 1, name+"_overflow")
+}
+
+// intrinsic declares an LLVM intrinsic in the module once.
+func (c *Compiler) intrinsic(name string, fnType llvm.Type) llvm.Value {
+	fn := c.Module.NamedFunction(name)
 	if fn.IsNil() {
-		fn = llvm.AddFunction(c.Module, "llvm.ssub.sat.i64", fnType)
+		fn = llvm.AddFunction(c.Module, name, fnType)
 	}
-	return c.builder.CreateCall(fnType, fn, []llvm.Value{a, b}, name)
+	return fn
 }
 
 func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {

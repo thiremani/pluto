@@ -422,21 +422,24 @@ func (c *Compiler) loopIterMinMax(start, stop, step llvm.Value) (minIter, maxIte
 	return
 }
 
-func (c *Compiler) affineIndexAt(coeff, bias int64, x llvm.Value, name string) llvm.Value {
-	base := x
+// affineIndexAt computes coeff * x + bias, and whether that overflows.
+func (c *Compiler) affineIndexAt(coeff, bias int64, x llvm.Value, name string) (index, overflow llvm.Value) {
+	index = x
+	overflow = llvm.ConstInt(c.Context.Int1Type(), 0, false)
 	switch coeff {
 	case 0:
-		base = c.ConstI64(0)
+		index = c.ConstI64(0)
 	case 1:
 		// identity
 	default:
-		base = c.builder.CreateMul(x, c.ConstI64(uint64(coeff)), name+"_mul")
+		index, overflow = c.checkedArith("llvm.smul.with.overflow.i64", x, c.ConstI64(uint64(coeff)), name+"_mul")
 	}
 
 	if bias == 0 {
-		return base
+		return index, overflow
 	}
-	return c.builder.CreateAdd(base, c.ConstI64(uint64(bias)), name+"_bias")
+	index, biasOverflow := c.checkedArith("llvm.sadd.with.overflow.i64", index, c.ConstI64(uint64(bias)), name+"_bias")
+	return index, c.builder.CreateOr(overflow, biasOverflow, name+"_overflow")
 }
 
 func (c *Compiler) affineLoopBoundsForComponents(
@@ -454,14 +457,18 @@ func (c *Compiler) affineLoopBoundsForComponents(
 		minSrc, maxSrc = maxSrc, minSrc
 	}
 
-	minIdx := c.affineIndexAt(form.coeff, form.bias, minSrc, "idx_affine_min")
-	maxIdx := c.affineIndexAt(form.coeff, form.bias, maxSrc, "idx_affine_max")
+	// The index is monotonic in the element, so endpoints that do not overflow
+	// bound every index between them.
+	minIdx, minOverflow := c.affineIndexAt(form.coeff, form.bias, minSrc, "idx_affine_min")
+	maxIdx, maxOverflow := c.affineIndexAt(form.coeff, form.bias, maxSrc, "idx_affine_max")
+	exact := c.builder.CreateNot(c.builder.CreateOr(minOverflow, maxOverflow, "idx_affine_overflow"), "idx_affine_exact")
 
 	length := c.arrayIndexLength(arr, arrElem)
 	zero := c.ConstI64(0)
 	lowOK := c.builder.CreateICmp(llvm.IntSGE, minIdx, zero, "idx_affine_low_ok")
 	highOK := c.builder.CreateICmp(llvm.IntSLT, maxIdx, length, "idx_affine_high_ok")
-	nonEmptySafe := c.builder.CreateAnd(lowOK, highOK, "idx_affine_safe_nonempty")
+	inBounds := c.builder.CreateAnd(lowOK, highOK, "idx_affine_in_bounds")
+	nonEmptySafe := c.builder.CreateAnd(exact, inBounds, "idx_affine_safe_nonempty")
 	return c.builder.CreateOr(
 		c.builder.CreateNot(hasAny, "idx_affine_empty"),
 		nonEmptySafe,
