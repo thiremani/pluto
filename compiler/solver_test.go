@@ -1115,6 +1115,37 @@ func TestRangeBoundTypes(t *testing.T) {
 	}
 }
 
+// TestRangeZeroStep: a range literal stepping by a literal 0, or -0, is
+// rejected once; a step that is 0 only at run time is not.
+func TestRangeZeroStep(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		errors int
+	}{
+		{"Zero", "x = 0:3:0\nx", 1},
+		{"NegatedZero", "x = 0:3:-0\nx", 1},
+		{"RunTimeZero", "zs = [0]\nx = 0:3:zs[0]\nx", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			ts.Solve()
+
+			require.Len(t, ts.Errors, tc.errors)
+			if tc.errors > 0 {
+				require.Equal(t, "range step is 0, so the range would never advance; use a nonzero step", ts.Errors[0].Msg)
+			}
+		})
+	}
+}
+
 func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
