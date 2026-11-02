@@ -243,7 +243,7 @@ func (c *Compiler) createUnitStepLoop(loop rangeLoop, descending bool) llvm.Valu
 
 	c.builder.SetInsertPointAtEnd(cond)
 	iter, current := c.loopPhis(loop, preheader)
-	c.builder.CreateCondBr(c.builder.CreateICmp(predicate, iter, loop.stop, "loop_cond"), body, exit)
+	c.builder.CreateCondBr(c.builder.CreateICmp(predicate, iter, loop.stop, "loop_in_range"), body, exit)
 
 	c.builder.SetInsertPointAtEnd(body)
 	nextState := loop.bodyGen(iter, current)

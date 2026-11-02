@@ -1,0 +1,7 @@
+# The last element a callee-owned range visits.
+out = Last(x)
+    out = x
+
+# How many elements a callee-owned range visits, counted onto prev.
+out = Count(prev, x)
+    out = prev + x - x + 1

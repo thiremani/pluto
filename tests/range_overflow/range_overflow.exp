@@ -1,0 +1,26 @@
+MinInt: -9223372036854775808
+BigStepUp: [2]
+OneElementUp: [9223372036854775806]
+BigStepDown: [-2]
+OneElementDown: [-9223372036854775807]
+MinStep: [5 -9223372036854775803]
+LowStop: [-9223372036854775808]
+HighStop: [9223372036854775807]
+EmptyUp: []
+EmptyDown: []
+UnitStepTop: [9223372036854775805 9223372036854775806]
+UnitStepBottom: [-9223372036854775806 -9223372036854775807]
+CallerCount: 1
+CalleeLast: 2
+CalleeCount: 1
+CalleeMinStepCount: 2
+CalleeArrayRange: 9
+AffineWrappingRange: 3
+AffineScaledIndex: 14
+AffineNegatedIndex: 14
+AffineBiasedIndex: 0
+AffineFarIndex: 14
+ZeroStep: 0:3:0
+ZeroStepElements: []
+ZeroStepLoop: 5
+HeldZeroStep: []
