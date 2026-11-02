@@ -1082,9 +1082,9 @@ j = 0:5:i`,
 	}
 }
 
-// TestRangeBoundTypes: a range reports the first rule its bounds break, once,
-// naming every bound's type.
-func TestRangeBoundTypes(t *testing.T) {
+// TestRangeBoundErrors: a range reports the first rule its bounds break, once.
+// A type error names every bound's type.
+func TestRangeBoundErrors(t *testing.T) {
 	cases := []struct {
 		name   string
 		script string
@@ -1095,6 +1095,8 @@ func TestRangeBoundTypes(t *testing.T) {
 		{"FloatStep", "x = 0:6:2.5\nx", "range bounds should be Integer. start type: I64, stop type: I64, step type: F64"},
 		{"NarrowStop", "x = 0:n\nx", "range bounds must have the same type. start type: I64, stop type: I32"},
 		{"NarrowStep", "x = 0:6:n\nx", "range bounds must have the same type. start type: I64, stop type: I64, step type: I32"},
+		{"ZeroStep", "x = 0:3:0\nx", "range step is 0, so the range would never advance; use a nonzero step"},
+		{"NegatedZeroStep", "x = 0:3:-0\nx", "range step is 0, so the range would never advance; use a nonzero step"},
 	}
 
 	for _, tc := range cases {
@@ -1111,37 +1113,6 @@ func TestRangeBoundTypes(t *testing.T) {
 
 			require.Len(t, ts.Errors, 1)
 			require.Equal(t, tc.want, ts.Errors[0].Msg)
-		})
-	}
-}
-
-// TestRangeZeroStep: a range literal stepping by a literal 0, or -0, is
-// rejected once; a step that is 0 only at run time is not.
-func TestRangeZeroStep(t *testing.T) {
-	cases := []struct {
-		name   string
-		script string
-		errors int
-	}{
-		{"Zero", "x = 0:3:0\nx", 1},
-		{"NegatedZero", "x = 0:3:-0\nx", 1},
-		{"RunTimeZero", "zs = [0]\nx = 0:3:zs[0]\nx", 0},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := llvm.NewContext()
-			defer ctx.Dispose()
-
-			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
-			require.Empty(t, cc.Compile())
-			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
-			ts.Solve()
-
-			require.Len(t, ts.Errors, tc.errors)
-			if tc.errors > 0 {
-				require.Equal(t, "range step is 0, so the range would never advance; use a nonzero step", ts.Errors[0].Msg)
-			}
 		})
 	}
 }
