@@ -157,6 +157,12 @@ def _with_go_llvm_tags(goflags: str, llvm_major: str) -> str:
             # Go's last -tags flag wins, including its legacy space-separated form.
             effective_tags = _go_quoted_fields(value) if " " in value or "'" in value else value.split(",")
 
+    for tag in effective_tags:
+        # Go reads legacy values such as -tags='a,b' as one tag that no constraint can match;
+        # the -tags=a,b flag below would split it and select different files.
+        if re.search(r"[,'\s]", tag):
+            raise RuntimeError(f"invalid GOFLAGS: build tag {tag!r} holds a comma, quote or space; list tags as -tags=a,b")
+
     tags = go_llvm_tags(llvm_major).split(",")
     tags.extend(tag for tag in effective_tags if tag and tag != "byollvm" and not re.fullmatch(r"llvm[0-9]+", tag))
     if effective_tags == tags:

@@ -118,6 +118,12 @@ class LLVMEnvTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid GOFLAGS"):
             llvm_env._with_go_llvm_tags('"-tags=byollvm', LLVM_MAJOR)
 
+    def test_go_llvm_tags_reject_tags_holding_separators(self) -> None:
+        for goflags in ("-tags='netgo,osusergo'", "\"-tags='netgo osusergo'\"", "\"-tags=a'b\""):
+            with self.subTest(goflags=goflags):
+                with self.assertRaisesRegex(RuntimeError, "invalid GOFLAGS: build tag"):
+                    llvm_env._with_go_llvm_tags(goflags, LLVM_MAJOR)
+
     def test_rejects_mismatched_explicit_config(self) -> None:
         llvm_config = Path("/fake/llvm-config")
         wrong_major = str(int(LLVM_MAJOR) + 1)
