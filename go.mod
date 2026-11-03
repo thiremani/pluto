@@ -2,12 +2,12 @@ module github.com/thiremani/pluto
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.3
 
 require (
 	github.com/gofrs/flock v0.13.0
 	github.com/stretchr/testify v1.11.1
-	tinygo.org/x/go-llvm v0.0.0-20250929104024-00fb4309ddd2
+	tinygo.org/x/go-llvm v0.0.0-20261102203043-f553a1266d99
 )
 
 require (

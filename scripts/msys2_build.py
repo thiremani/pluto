@@ -38,7 +38,7 @@ def build_pluto(project_root: str | Path | None = None, extra_env: dict | None =
         raise SystemExit(1)
 
     run(["go", "version"], env)
-    # GOFLAGS from msys2_env.py will apply -tags byollvm.
+    # GOFLAGS from msys2_env.py will apply the go-llvm tags.
     out = root / "pluto.exe"
     run(["go", "build", "-o", str(out), "."], env | {"PWD": str(root)}, root)
     print(f"OK: ./{out.name} built.")

@@ -996,7 +996,7 @@ greeting = "hello\n\x41"`
 	require.Equal(t, "Pt_9testConst_p_8greeting", c.Compiler.MangledNames["greeting"])
 
 	// Constants are now mangled per C ABI spec: Pt_[ModPath]_p_[Name]
-	expPi := "@Pt_9testConst_p_2pi = unnamed_addr constant double 0x400921FB54411744"
+	expPi := "@Pt_9testConst_p_2pi = unnamed_addr constant double f0x400921FB54411744"
 	if !strings.Contains(ir, expPi) {
 		t.Errorf("IR does not contain global constant for pi. Exp: %s, ir: \n%s", expPi, ir)
 	}

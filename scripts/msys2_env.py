@@ -19,9 +19,9 @@ import subprocess
 from typing import Dict, List, Mapping
 
 if __package__:
-    from .llvm_version import read_llvm_major
+    from .llvm_version import go_llvm_tags, read_llvm_major
 else:
-    from llvm_version import read_llvm_major
+    from llvm_version import go_llvm_tags, read_llvm_major
 
 
 def _which_llvm_config(env: Mapping[str, str] | None = None) -> str:
@@ -116,9 +116,9 @@ def compute_env(base_env: Mapping[str, str] | None = None) -> Dict[str, str]:
     )
     env["CGO_CXXFLAGS"] = f"-std=c++17 {cxxflags}".strip()
     env["CGO_LDFLAGS"] = ldflags.strip()
-    # Ensure Go commands inherit the byollvm tag in this MSYS2 flow.
+    # Ensure Go commands inherit the go-llvm tags in this MSYS2 flow.
     # Use = form to avoid GOFLAGS tokenizing into a non-flag value.
-    env["GOFLAGS"] = "-tags=byollvm"
+    env["GOFLAGS"] = f"-tags={go_llvm_tags(env['LLVM_VERSION'])}"
     # Select GNU toolchain in Pluto on Windows under MSYS2.
     env["PLUTO_WIN_TOOLCHAIN"] = "gnu"
     current_path = source.get("PATH", "")

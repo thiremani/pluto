@@ -20,6 +20,13 @@ class LLVMVersionConsistencyTest(unittest.TestCase):
             with self.subTest(formula=formula):
                 self.assertIn(f"      - formula: {formula}@{llvm_major}\n", config)
 
+    def test_goreleaser_builds_tag_the_llvm_major(self) -> None:
+        config = (ROOT / ".goreleaser.yaml").read_text(encoding="utf-8")
+        tag_blocks = config.count("    tags:\n")
+
+        self.assertGreater(tag_blocks, 0)
+        self.assertEqual(config.count("    tags:\n      - byollvm\n      - 'llvm{{ .Env.LLVM_VERSION }}'\n"), tag_blocks)
+
 
 if __name__ == "__main__":
     unittest.main()

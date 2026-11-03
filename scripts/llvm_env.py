@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -19,9 +20,9 @@ from pathlib import Path
 from typing import Mapping
 
 if __package__:
-    from .llvm_version import read_llvm_major
+    from .llvm_version import go_llvm_tags, read_llvm_major
 else:
-    from llvm_version import read_llvm_major
+    from llvm_version import go_llvm_tags, read_llvm_major
 
 
 CPP_DEFS = "-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
@@ -135,8 +136,40 @@ def _validate_llvm_config(llvm_config: Path, llvm_major: str) -> None:
         )
 
 
-def _with_byollvm(goflags: str) -> str:
-    return goflags if "-tags=byollvm" in goflags else f"{goflags} -tags=byollvm".strip()
+def _go_quoted_fields(value: str) -> list[str]:
+    # Like Go's quoted.Split: quotes only wrap whole fields, with no unescaping.
+    lexer = shlex.shlex(value, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+
+    try:
+        return [field[1:-1] if field.startswith(("'", '"')) else field for field in lexer]
+    except ValueError as err:
+        raise RuntimeError(f"invalid GOFLAGS: {err}") from err
+
+
+def _with_go_llvm_tags(goflags: str, llvm_major: str) -> str:
+    effective_tags = []
+
+    for flag in _go_quoted_fields(goflags):
+        name, separator, value = flag.partition("=")
+        if name in ("-tags", "--tags") and separator:
+            # Go's last -tags flag wins, including its legacy space-separated form.
+            effective_tags = _go_quoted_fields(value) if " " in value or "'" in value else value.split(",")
+
+    for tag in effective_tags:
+        # Go reads legacy values such as -tags='a,b' as one tag that no constraint can match;
+        # the -tags=a,b flag below would split it and select different files.
+        if re.search(r"[,'\s]", tag):
+            raise RuntimeError(f"invalid GOFLAGS: build tag {tag!r} holds a comma, quote or space; list tags as -tags=a,b")
+
+    tags = go_llvm_tags(llvm_major).split(",")
+    tags.extend(tag for tag in effective_tags if tag and tag != "byollvm" and not re.fullmatch(r"llvm[0-9]+", tag))
+    if effective_tags == tags:
+        return goflags
+
+    # Preserve all other flags verbatim, including quoted values and Windows paths.
+    return f"{goflags} -tags={','.join(tags)}".strip()
 
 
 def _append_env_flags(env: dict[str, str], key: str, value: str) -> None:
@@ -177,7 +210,7 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
             from msys2_env import compute_env
 
         required = compute_env(env)
-        env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
+        env["GOFLAGS"] = _with_go_llvm_tags(env.get("GOFLAGS", ""), llvm_major)
         for key, value in required.items():
             if key.startswith("CGO_"):
                 _append_env_flags(env, key, value)
@@ -192,7 +225,7 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
 
         env["LLVM_BIN"] = str(llvm_bin)
         env["LLVM_CONFIG"] = str(llvm_config)
-        env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
+        env["GOFLAGS"] = _with_go_llvm_tags(env.get("GOFLAGS", ""), llvm_major)
         clang_suffix = ".exe" if _is_windows_env(env) else ""
         clang = llvm_bin / f"clang{clang_suffix}"
         clangxx = llvm_bin / f"clang++{clang_suffix}"
