@@ -258,11 +258,14 @@ func (c *Compiler) createUnitStepLoop(loop rangeLoop, descending bool) llvm.Valu
 
 // createTestedStepLoop steps only when another element follows: iter + step
 // before stop, tested as iter against stop - step, which saturates where no
-// element can follow. A zero step runs no iteration.
+// element can follow. A zero step runs no iteration. The direction is a branch,
+// not a select, so LLVM can unswitch a loop whose step sign it cannot see.
 func (c *Compiler) createTestedStepLoop(loop rangeLoop) llvm.Value {
 	preheader := c.builder.GetInsertBlock()
 	fn := preheader.Parent()
 	body := c.Context.AddBasicBlock(fn, "loop_body")
+	testAsc := c.Context.AddBasicBlock(fn, "loop_test_asc")
+	testDesc := c.Context.AddBasicBlock(fn, "loop_test_desc")
 	latch := c.Context.AddBasicBlock(fn, "loop_latch")
 	exit := c.Context.AddBasicBlock(fn, "loop_exit")
 	descending, nonEmpty := c.rangeDirection(loop.start, loop.stop, loop.step)
@@ -272,13 +275,13 @@ func (c *Compiler) createTestedStepLoop(loop rangeLoop) llvm.Value {
 	c.builder.SetInsertPointAtEnd(body)
 	iter, current := c.loopPhis(loop, preheader)
 	nextState := loop.bodyGen(iter, current)
-	bodyEnd := c.builder.GetInsertBlock()
-	more := c.builder.CreateSelect(descending,
-		c.builder.CreateICmp(llvm.IntSGT, iter, lastBound, "loop_more_desc"),
-		c.builder.CreateICmp(llvm.IntSLT, iter, lastBound, "loop_more_asc"),
-		"loop_more",
-	)
-	c.builder.CreateCondBr(more, latch, exit)
+	c.builder.CreateCondBr(descending, testDesc, testAsc)
+
+	c.builder.SetInsertPointAtEnd(testAsc)
+	c.builder.CreateCondBr(c.builder.CreateICmp(llvm.IntSLT, iter, lastBound, "loop_more_asc"), latch, exit)
+
+	c.builder.SetInsertPointAtEnd(testDesc)
+	c.builder.CreateCondBr(c.builder.CreateICmp(llvm.IntSGT, iter, lastBound, "loop_more_desc"), latch, exit)
 
 	// Another element follows, so this increment yields it and cannot overflow.
 	c.builder.SetInsertPointAtEnd(latch)
@@ -291,7 +294,7 @@ func (c *Compiler) createTestedStepLoop(loop rangeLoop) llvm.Value {
 		return llvm.Value{}
 	}
 	final := c.builder.CreatePHI(loop.stateType, "loop_final")
-	final.AddIncoming([]llvm.Value{loop.seed, nextState}, []llvm.BasicBlock{preheader, bodyEnd})
+	final.AddIncoming([]llvm.Value{loop.seed, nextState, nextState}, []llvm.BasicBlock{preheader, testAsc, testDesc})
 	return final
 }
 
