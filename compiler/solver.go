@@ -1609,20 +1609,16 @@ func (ts *TypeSolver) rejectRangeDependentBound(boundName string, expr ast.Expre
 	})
 }
 
-// rejectZeroStep reports a range literal stepping by a literal 0, or -0,
-// which would never advance. A step that is 0 only at run time yields no
-// element.
+// rejectZeroStep reports a range literal whose step is 0 whatever its names
+// hold, such as 0, -0 or (1 - 1), so the range would never advance. Any other
+// zero step yields no element.
 func (ts *TypeSolver) rejectZeroStep(step ast.Expression) {
-	if prefix, ok := step.(*ast.PrefixExpression); ok && prefix.Operator == token.SYM_SUB {
-		step = prefix.Right
-	}
-	literal, ok := step.(*ast.IntegerLiteral)
-	if !ok || literal.Value != 0 {
+	if value, ok := constantInt(step); !ok || value != 0 {
 		return
 	}
 
 	ts.Errors = append(ts.Errors, &token.CompileError{
-		Token: literal.Tok(),
+		Token: step.Tok(),
 		Msg:   "range step is 0, so the range would never advance; use a nonzero step",
 	})
 }

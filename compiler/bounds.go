@@ -397,6 +397,13 @@ func affineIndexFromExpr(expr ast.Expression) (affineIndexForm, bool) {
 	}
 }
 
+// constantInt evaluates an integer expression whose value doesn't depend on
+// the names it mentions, such as 1 - 1 or n - n.
+func constantInt(expr ast.Expression) (int64, bool) {
+	form, ok := affineIndexFromExpr(expr)
+	return form.bias, ok && !form.hasVar
+}
+
 func (c *Compiler) loopIterMinMax(start, stop, step llvm.Value) (minIter, maxIter, hasAny llvm.Value) {
 	one := c.ConstI64(1)
 	isNeg, hasAny := c.rangeDirection(start, stop, step)
