@@ -397,8 +397,8 @@ func affineIndexFromExpr(expr ast.Expression) (affineIndexForm, bool) {
 	}
 }
 
-// constantInt evaluates an integer expression whose value doesn't depend on
-// the names it mentions, such as 1 - 1 or n - n.
+// constantInt reports the value of an integer expression the affine analysis
+// reduces to a constant, such as 1 - 1 or n - n.
 func constantInt(expr ast.Expression) (int64, bool) {
 	form, ok := affineIndexFromExpr(expr)
 	return form.bias, ok && !form.hasVar

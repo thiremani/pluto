@@ -1609,9 +1609,9 @@ func (ts *TypeSolver) rejectRangeDependentBound(boundName string, expr ast.Expre
 	})
 }
 
-// rejectZeroStep reports a range literal whose step is 0 whatever its names
-// hold, such as 0, -0 or (1 - 1), so the range would never advance. Any other
-// zero step yields no element.
+// rejectZeroStep reports a range literal whose step constantInt proves 0, such
+// as 0, -0, (1 - 1) or (n - n): the range would never advance. Any other zero
+// step yields no element.
 func (ts *TypeSolver) rejectZeroStep(step ast.Expression) {
 	if value, ok := constantInt(step); !ok || value != 0 {
 		return
