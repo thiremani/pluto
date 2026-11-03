@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -135,9 +136,34 @@ def _validate_llvm_config(llvm_config: Path, llvm_major: str) -> None:
         )
 
 
+def _go_quoted_fields(value: str) -> list[str]:
+    # Like Go's quoted.Split: quotes only wrap whole fields, with no unescaping.
+    lexer = shlex.shlex(value, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+
+    try:
+        return [field[1:-1] if field.startswith(("'", '"')) else field for field in lexer]
+    except ValueError as err:
+        raise RuntimeError(f"invalid GOFLAGS: {err}") from err
+
+
 def _with_go_llvm_tags(goflags: str, llvm_major: str) -> str:
-    tags = f"-tags={go_llvm_tags(llvm_major)}"
-    return goflags if tags in goflags else f"{goflags} {tags}".strip()
+    effective_tags = []
+
+    for flag in _go_quoted_fields(goflags):
+        name, separator, value = flag.partition("=")
+        if name in ("-tags", "--tags") and separator:
+            # Go's last -tags flag wins, including its legacy space-separated form.
+            effective_tags = _go_quoted_fields(value) if " " in value or "'" in value else value.split(",")
+
+    tags = go_llvm_tags(llvm_major).split(",")
+    tags.extend(tag for tag in effective_tags if tag and tag != "byollvm" and not re.fullmatch(r"llvm[0-9]+", tag))
+    if effective_tags == tags:
+        return goflags
+
+    # Preserve all other flags verbatim, including quoted values and Windows paths.
+    return f"{goflags} -tags={','.join(tags)}".strip()
 
 
 def _append_env_flags(env: dict[str, str], key: str, value: str) -> None:

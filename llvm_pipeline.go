@@ -223,6 +223,7 @@ func branchSuccessors(term llvm.Value) []llvm.BasicBlock {
 	for i := range succs {
 		succs[i] = term.Successor(i)
 	}
+
 	return succs
 }
 
@@ -230,6 +231,7 @@ func isBranch(term llvm.Value) bool {
 	if term.IsNil() {
 		return false
 	}
+
 	opcode := term.InstructionOpcode()
 	return opcode == llvm.UncondBr || opcode == llvm.CondBr
 }

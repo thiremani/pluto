@@ -95,11 +95,28 @@ class LLVMEnvTest(unittest.TestCase):
             ("", tags),
             ("-tags=byollvm", f"-tags=byollvm {tags}"),
             (f"-mod=mod {tags}", f"-mod=mod {tags}"),
+            ("-tags=byollvm,netgo", f"-tags=byollvm,netgo {tags},netgo"),
+            (f"{tags} -tags=byollvm,llvm22", f"{tags} -tags=byollvm,llvm22 {tags}"),
+            ("--tags=llvm22,netgo", f"--tags=llvm22,netgo {tags},netgo"),
+            (f"{tags} -tags=", f"{tags} -tags= {tags}"),
+            ("-tags=byollvm,llvm230", f"-tags=byollvm,llvm230 {tags}"),
+            ('"-tags=byollvm netgo"', f'"-tags=byollvm netgo" {tags},netgo'),
+            ("-tags='netgo'", f"-tags='netgo' {tags},netgo"),
+            (f"-ldflags=-X=main.label={tags}", f"-ldflags=-X=main.label={tags} {tags}"),
+            (
+                r'"-ldflags=-extldflags=-LC:\Program Files\LLVM" -tags=byollvm,netgo',
+                rf'"-ldflags=-extldflags=-LC:\Program Files\LLVM" -tags=byollvm,netgo {tags},netgo',
+            ),
         )
 
         for goflags, want in cases:
             with self.subTest(goflags=goflags):
                 self.assertEqual(llvm_env._with_go_llvm_tags(goflags, LLVM_MAJOR), want)
+                self.assertEqual(llvm_env._with_go_llvm_tags(want, LLVM_MAJOR), want)
+
+    def test_go_llvm_tags_reject_unterminated_quotes(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid GOFLAGS"):
+            llvm_env._with_go_llvm_tags('"-tags=byollvm', LLVM_MAJOR)
 
     def test_rejects_mismatched_explicit_config(self) -> None:
         llvm_config = Path("/fake/llvm-config")
