@@ -2,7 +2,7 @@ module github.com/thiremani/pluto
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.3
 
 require (
 	github.com/gofrs/flock v0.13.0
