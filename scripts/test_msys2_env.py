@@ -49,6 +49,7 @@ class MSYS2EnvTest(unittest.TestCase):
         self.assertEqual(result["LLVM_BIN"], "C:/msys64/ucrt64/bin")
         self.assertEqual(result["LLVM_CONFIG"], "C:/msys64/ucrt64/bin/llvm-config.exe")
         self.assertEqual(result["LLVM_VERSION"], LLVM_MAJOR)
+        self.assertEqual(result["GOFLAGS"], f"-tags=byollvm,llvm{LLVM_MAJOR}")
         self.assertEqual(result["CC"], "clang")
         self.assertEqual(result["CXX"], "clang++")
         self.assertTrue(result["PATH"].startswith(f"C:/msys64/ucrt64/bin{msys2_env.os.pathsep}"))

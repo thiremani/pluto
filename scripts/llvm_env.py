@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Mapping
 
 if __package__:
-    from .llvm_version import read_llvm_major
+    from .llvm_version import go_llvm_tags, read_llvm_major
 else:
-    from llvm_version import read_llvm_major
+    from llvm_version import go_llvm_tags, read_llvm_major
 
 
 CPP_DEFS = "-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
@@ -135,8 +135,9 @@ def _validate_llvm_config(llvm_config: Path, llvm_major: str) -> None:
         )
 
 
-def _with_byollvm(goflags: str) -> str:
-    return goflags if "-tags=byollvm" in goflags else f"{goflags} -tags=byollvm".strip()
+def _with_go_llvm_tags(goflags: str, llvm_major: str) -> str:
+    tags = f"-tags={go_llvm_tags(llvm_major)}"
+    return goflags if tags in goflags else f"{goflags} {tags}".strip()
 
 
 def _append_env_flags(env: dict[str, str], key: str, value: str) -> None:
@@ -177,7 +178,7 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
             from msys2_env import compute_env
 
         required = compute_env(env)
-        env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
+        env["GOFLAGS"] = _with_go_llvm_tags(env.get("GOFLAGS", ""), llvm_major)
         for key, value in required.items():
             if key.startswith("CGO_"):
                 _append_env_flags(env, key, value)
@@ -192,7 +193,7 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
 
         env["LLVM_BIN"] = str(llvm_bin)
         env["LLVM_CONFIG"] = str(llvm_config)
-        env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
+        env["GOFLAGS"] = _with_go_llvm_tags(env.get("GOFLAGS", ""), llvm_major)
         clang_suffix = ".exe" if _is_windows_env(env) else ""
         clang = llvm_bin / f"clang{clang_suffix}"
         clangxx = llvm_bin / f"clang++{clang_suffix}"

@@ -191,7 +191,7 @@ func scalarUnrollCandidates(fn llvm.Value) []scalarUnrollLoop {
 	var loops []scalarUnrollLoop
 	for _, latch := range blocks {
 		term := latch.LastInstruction()
-		if term.IsNil() || term.InstructionOpcode() != llvm.Br {
+		if !isBranch(term) {
 			continue
 		}
 		for _, header := range succs[latch] {
@@ -215,22 +215,23 @@ func scalarUnrollCandidates(fn llvm.Value) []scalarUnrollLoop {
 }
 
 func branchSuccessors(term llvm.Value) []llvm.BasicBlock {
-	if term.IsNil() || term.InstructionOpcode() != llvm.Br {
+	if !isBranch(term) {
 		return nil
 	}
 
-	succs := make([]llvm.BasicBlock, 0, 2)
-	for i := 0; i < term.OperandsCount(); i++ {
-		op := term.Operand(i)
-		if op.IsNil() || !op.IsBasicBlock() {
-			continue
-		}
-		succ := op.AsBasicBlock()
-		if !succ.IsNil() {
-			succs = append(succs, succ)
-		}
+	succs := make([]llvm.BasicBlock, term.SuccessorsCount())
+	for i := range succs {
+		succs[i] = term.Successor(i)
 	}
 	return succs
+}
+
+func isBranch(term llvm.Value) bool {
+	if term.IsNil() {
+		return false
+	}
+	opcode := term.InstructionOpcode()
+	return opcode == llvm.UncondBr || opcode == llvm.CondBr
 }
 
 func computeDominators(blocks []llvm.BasicBlock, preds map[llvm.BasicBlock][]llvm.BasicBlock, entry llvm.BasicBlock) map[llvm.BasicBlock]map[llvm.BasicBlock]struct{} {

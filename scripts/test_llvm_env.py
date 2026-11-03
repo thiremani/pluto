@@ -87,7 +87,19 @@ class LLVMEnvTest(unittest.TestCase):
             self.assertEqual(result["CC"], f"clang{TOOL_SUFFIX}")
             self.assertEqual(result["CXX"], f"clang++{TOOL_SUFFIX}")
             self.assertEqual(result["PATH"].split(os.pathsep)[0], str(llvm_bin))
-            self.assertIn("-tags=byollvm", result["GOFLAGS"])
+            self.assertIn(f"-tags=byollvm,llvm{LLVM_MAJOR}", result["GOFLAGS"])
+
+    def test_go_llvm_tags_override_stale_tags(self) -> None:
+        tags = f"-tags=byollvm,llvm{LLVM_MAJOR}"
+        cases = (
+            ("", tags),
+            ("-tags=byollvm", f"-tags=byollvm {tags}"),
+            (f"-mod=mod {tags}", f"-mod=mod {tags}"),
+        )
+
+        for goflags, want in cases:
+            with self.subTest(goflags=goflags):
+                self.assertEqual(llvm_env._with_go_llvm_tags(goflags, LLVM_MAJOR), want)
 
     def test_rejects_mismatched_explicit_config(self) -> None:
         llvm_config = Path("/fake/llvm-config")

@@ -18,3 +18,8 @@ def read_llvm_major(path: Path = LLVM_VERSION_FILE) -> str:
         raise RuntimeError(f"{path} must contain one positive LLVM major version, got {value!r}")
 
     return value
+
+
+def go_llvm_tags(llvm_major: str) -> str:
+    """Return go-llvm's build tags for llvm_major; byollvm does not detect the major itself."""
+    return f"byollvm,llvm{llvm_major}"

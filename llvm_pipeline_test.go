@@ -278,6 +278,37 @@ exit:
 	}
 }
 
+func TestAnnotateScalarUnrollLoopsMarksUnconditionalLatch(t *testing.T) {
+	mod := parseTestIR(t, `
+define i64 @header_exit(i64 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ %n, %entry ], [ %dec, %body ]
+  %acc = phi i64 [ 0, %entry ], [ %next, %body ]
+  %done = icmp eq i64 %i, 0
+  br i1 %done, label %exit, label %body
+
+body:
+  %next = add i64 %acc, %i
+  %dec = add i64 %i, -1
+  br label %loop
+
+exit:
+  ret i64 %acc
+}
+`)
+
+	if got := annotateScalarUnrollLoops(mod); got != 1 {
+		t.Fatalf("annotateScalarUnrollLoops() = %d, want 1", got)
+	}
+	ir := mod.String()
+	if !strings.Contains(ir, "br label %loop, !llvm.loop") {
+		t.Fatalf("expected unroll metadata on the unconditional latch:\n%s", ir)
+	}
+}
+
 func TestScalarUnrollPipelineUnrollsPostInlineRecurrence(t *testing.T) {
 	mod := parseTestIR(t, `
 define i64 @post_inline_recurrence(i64 %outer_n) {
