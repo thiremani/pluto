@@ -1,0 +1,99 @@
+# INT64_MIN has no literal: 9223372036854775808 does not fit before the
+# minus applies.
+minInt = -9223372036854775807 - 1
+
+# A range ends where its next element would pass INT64_MAX, instead of
+# wrapping to INT64_MIN + 1 and 0.
+up = 2:4:9223372036854775807
+seenUp = [up + 0]
+"BigStepUp: -seenUp"
+
+# A one-element range near INT64_MAX ends; wrapping kept its elements even
+# and never reached the odd stop.
+one = 9223372036854775806:9223372036854775807:2
+seenOne = [one + 0]
+"OneElementUp: -seenOne"
+
+# A descending range ends where its next element would pass INT64_MIN.
+down = -2:-4:-9223372036854775807
+seenDown = [down + 0]
+"BigStepDown: -seenDown"
+
+# A step of INT64_MIN reaches the second element and stops before the third.
+minStep = 5:minInt:minInt
+seenMinStep = [minStep + 0]
+"MinStep: -seenMinStep"
+
+# An ascending range ending just above INT64_MIN: its last bound, stop - step,
+# saturates instead of wrapping to INT64_MAX.
+low = minInt:-9223372036854775807:2
+seenLow = [low + 0]
+"LowStop: -seenLow"
+
+# The descending mirror ends just below INT64_MAX: stop - step saturates
+# instead of wrapping to INT64_MIN.
+high = 9223372036854775807:9223372036854775806:-2
+seenHigh = [high + 0]
+"HighStop: -seenHigh"
+
+# A unit step reaches the last element before INT64_MAX.
+top = 9223372036854775805:9223372036854775807
+seenTop = [top + 0]
+"UnitStepTop: -seenTop"
+
+# A callee-owned Range over up visits only 2.
+last = 0
+last = Last(up)
+"CalleeLast: -last"
+
+# A callee-owned ArrayRange visits only index 2, which is out of bounds, so
+# the destination keeps its value.
+source = [42]
+got = 9
+got = Last(source[up])
+"CalleeArrayRange: -got"
+
+# The affine fast path checks only [start, stop - 1], so iteration must not
+# leave it: big[r] over up reads big[2] alone.
+big = [1 2 3 4 5]
+affine = 0
+affine = affine + big[up]
+"AffineWrappingRange: -affine"
+
+# The affine guard's endpoints can overflow over a range that never does:
+# 4611686018427387904 * 4 wraps to 0, though r = 1 to 3 index out of bounds.
+seven = [7]
+r = 0:5
+scaled = 0
+scaled = scaled + seven[4611686018427387904 * r]
+"AffineScaledIndex: -scaled"
+
+# With a negative coefficient the overflowing endpoint is the guard's minimum.
+negated = 0
+negated = negated + seven[-4611686018427387904 * r]
+"AffineNegatedIndex: -negated"
+
+# The bias can overflow too: every index here is out of bounds.
+biased = 0
+biased = biased + seven[r + 9223372036854775807]
+"AffineBiasedIndex: -biased"
+
+# An endpoint that wraps to 0 would let r = 1 read 2^43 bytes past the array.
+far = 0:16777217
+farSum = 0
+farSum = farSum + seven[1099511627776 * far]
+"AffineFarIndex: -farSum"
+
+# A step that is 0 only at run time yields no element.
+zs = [0]
+z = 0:3:zs[0]
+"ZeroStep: -z"
+zeroSeen = [z + 0]
+"ZeroStepElements: -zeroSeen"
+
+# A step held in a variable is no literal, even when the compiler folds it to
+# 0: the range yields no element.
+noStep = 0
+held = 0:3:noStep
+heldSeen = [held + 0]
+"HeldZeroStep: -heldSeen"

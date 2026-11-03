@@ -581,7 +581,9 @@ regions as two lowerings of the same PIR domain; PIR gains no generic `if` to
 expose that branch. Versioning never breaks out of a partially executed fast
 loop — switching mid-domain could duplicate side effects, appends, or carry
 updates — so a false whole-domain guard runs the checked version from the
-start.
+start. The guard evaluates the index form at both ends of the range with
+overflow checks: an end whose index overflows `I64` makes the guard false,
+since a wrapped index no longer bounds the ones between (#156).
 
 The validator rejects a versioned access whose array, range, index form, or
 relevant effects can change before or during the loop. Unsupported or
@@ -1456,7 +1458,8 @@ infix, prefix, calls, array indexing, and array-literal cells:
   decisions and statement bounds orchestration.
 - Affine proofs use overflow-safe arithmetic throughout — coefficients,
   endpoints, negative steps, extreme `I64` bounds — extending `addInt64` and
-  `mulInt64`.
+  `mulInt64`; the current guard already checks its endpoints at run time
+  (#156).
 - Delete the router and the old dispatchers. `compileLetStatement` and
   `compilePrintStatement` are the router's own entry points, so they are the
   last things to go, here. The helper-to-release-step inventory is Step 9's

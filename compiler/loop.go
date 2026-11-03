@@ -190,85 +190,176 @@ func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probes []ast.Expre
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
+// rangeLoop is one loop over a range's elements, threading an optional
+// loop-carried state from seed through bodyGen.
+type rangeLoop struct {
+	start, stop, step llvm.Value
+	seed              llvm.Value
+	stateType         llvm.Type
+	hasState          bool
+	bodyGen           func(iter llvm.Value, current llvm.Value) llvm.Value
+}
+
+// createLoopCore runs bodyGen once per element of range r. The range ends
+// where its next element would pass stop, even when computing that element
+// would overflow (#156): a constant step of 1 or -1 cannot overflow before it
+// passes stop, and any other step is tested before it is taken.
 func (c *Compiler) createLoopCore(r llvm.Value, seed llvm.Value, stateType llvm.Type, hasState bool, bodyGen func(iter llvm.Value, current llvm.Value) llvm.Value) llvm.Value {
 	start, stop, step := c.rangeComponents(r)
 	if step.IsUndef() || start.IsUndef() || stop.IsUndef() {
 		panic("range aggregate is undefined; likely received non-range value")
 	}
-	if step.IsConstant() && step.ZExtValue() == 0 {
-		panic("range step is zero; would loop forever")
-	}
 
+	loop := rangeLoop{start: start, stop: stop, step: step, seed: seed, stateType: stateType, hasState: hasState, bodyGen: bodyGen}
+	if unit, ok := unitStep(step); ok {
+		return c.createUnitStepLoop(loop, unit < 0)
+	}
+	return c.createTestedStepLoop(loop)
+}
+
+// unitStep returns a constant step of 1 or -1.
+func unitStep(step llvm.Value) (int64, bool) {
+	if step.IsAConstantInt().IsNil() {
+		return 0, false
+	}
+	value := step.SExtValue()
+	return value, value == 1 || value == -1
+}
+
+// createUnitStepLoop tests each element against stop before running it. An
+// element runs only below stop <= INT64_MAX, so adding 1 to it cannot
+// overflow; a step of -1 mirrors this above INT64_MIN.
+func (c *Compiler) createUnitStepLoop(loop rangeLoop, descending bool) llvm.Value {
 	preheader := c.builder.GetInsertBlock()
 	fn := preheader.Parent()
-
-	condPos := c.Context.AddBasicBlock(fn, "loop_cond_pos")
-	condNeg := c.Context.AddBasicBlock(fn, "loop_cond_neg")
+	cond := c.Context.AddBasicBlock(fn, "loop_cond")
 	body := c.Context.AddBasicBlock(fn, "loop_body")
 	exit := c.Context.AddBasicBlock(fn, "loop_exit")
-
-	// Preheader: compute sign and dispatch once
-	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
-	isNeg := c.builder.CreateICmp(llvm.IntSLT, step, zero, "step_is_neg")
-	c.builder.CreateCondBr(isNeg, condNeg, condPos)
-
-	// condPos: iter < stop
-	c.builder.SetInsertPointAtEnd(condPos)
-	iterPos := c.builder.CreatePHI(c.Context.Int64Type(), "iter_pos")
-	iterPos.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{preheader})
-	var statePos llvm.Value
-	if hasState {
-		statePos = c.builder.CreatePHI(stateType, "state_pos")
-		statePos.AddIncoming([]llvm.Value{seed}, []llvm.BasicBlock{preheader})
+	predicate := llvm.IntSLT
+	if descending {
+		predicate = llvm.IntSGT
 	}
-	cmpPos := c.builder.CreateICmp(llvm.IntSLT, iterPos, stop, "loop_cond_pos")
-	c.builder.CreateCondBr(cmpPos, body, exit)
+	c.builder.CreateBr(cond)
 
-	// condNeg: iter > stop
-	c.builder.SetInsertPointAtEnd(condNeg)
-	iterNeg := c.builder.CreatePHI(c.Context.Int64Type(), "iter_neg")
-	iterNeg.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{preheader})
-	var stateNeg llvm.Value
-	if hasState {
-		stateNeg = c.builder.CreatePHI(stateType, "state_neg")
-		stateNeg.AddIncoming([]llvm.Value{seed}, []llvm.BasicBlock{preheader})
-	}
-	cmpNeg := c.builder.CreateICmp(llvm.IntSGT, iterNeg, stop, "loop_cond_neg")
-	c.builder.CreateCondBr(cmpNeg, body, exit)
+	c.builder.SetInsertPointAtEnd(cond)
+	iter, current := c.loopPhis(loop, preheader)
+	c.builder.CreateCondBr(c.builder.CreateICmp(predicate, iter, loop.stop, "loop_in_range"), body, exit)
 
-	// Body
 	c.builder.SetInsertPointAtEnd(body)
-	iter := c.builder.CreatePHI(c.Context.Int64Type(), "iter")
-	iter.AddIncoming([]llvm.Value{iterPos}, []llvm.BasicBlock{condPos})
-	iter.AddIncoming([]llvm.Value{iterNeg}, []llvm.BasicBlock{condNeg})
-	var current llvm.Value
-	if hasState {
-		current = c.builder.CreatePHI(stateType, "loop_state")
-		current.AddIncoming([]llvm.Value{statePos}, []llvm.BasicBlock{condPos})
-		current.AddIncoming([]llvm.Value{stateNeg}, []llvm.BasicBlock{condNeg})
-	}
-
-	nextState := bodyGen(iter, current)
-
+	nextState := loop.bodyGen(iter, current)
 	latch := c.builder.GetInsertBlock()
-	iterNext := c.builder.CreateAdd(iter, step, "iter_next")
-	c.builder.CreateCondBr(isNeg, condNeg, condPos)
-
-	iterPos.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
-	iterNeg.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
-	if hasState {
-		statePos.AddIncoming([]llvm.Value{nextState}, []llvm.BasicBlock{latch})
-		stateNeg.AddIncoming([]llvm.Value{nextState}, []llvm.BasicBlock{latch})
-	}
+	iterNext := c.builder.CreateAdd(iter, loop.step, "iter_next")
+	c.builder.CreateBr(cond)
+	c.continueLoop(loop, iter, current, iterNext, nextState, latch)
 
 	c.builder.SetInsertPointAtEnd(exit)
-	if !hasState {
+	return current
+}
+
+// createTestedStepLoop steps only when another element follows: iter + step
+// before stop, tested as iter against stop - step, which saturates where no
+// element can follow. A zero step runs no iteration. The direction is a branch,
+// not a select, so LLVM can unswitch a loop whose step sign it cannot see.
+func (c *Compiler) createTestedStepLoop(loop rangeLoop) llvm.Value {
+	preheader := c.builder.GetInsertBlock()
+	fn := preheader.Parent()
+	body := c.Context.AddBasicBlock(fn, "loop_body")
+	testAsc := c.Context.AddBasicBlock(fn, "loop_test_asc")
+	testDesc := c.Context.AddBasicBlock(fn, "loop_test_desc")
+	latch := c.Context.AddBasicBlock(fn, "loop_latch")
+	exit := c.Context.AddBasicBlock(fn, "loop_exit")
+	descending, nonEmpty := c.rangeDirection(loop.start, loop.stop, loop.step)
+	lastBound := c.saturatingSub(loop.stop, loop.step, "loop_last_bound")
+	c.builder.CreateCondBr(nonEmpty, body, exit)
+
+	c.builder.SetInsertPointAtEnd(body)
+	iter, current := c.loopPhis(loop, preheader)
+	nextState := loop.bodyGen(iter, current)
+	c.builder.CreateCondBr(descending, testDesc, testAsc)
+
+	c.builder.SetInsertPointAtEnd(testAsc)
+	c.builder.CreateCondBr(c.builder.CreateICmp(llvm.IntSLT, iter, lastBound, "loop_more_asc"), latch, exit)
+
+	c.builder.SetInsertPointAtEnd(testDesc)
+	c.builder.CreateCondBr(c.builder.CreateICmp(llvm.IntSGT, iter, lastBound, "loop_more_desc"), latch, exit)
+
+	// Another element follows, so this increment yields it and cannot overflow.
+	c.builder.SetInsertPointAtEnd(latch)
+	iterNext := c.builder.CreateNSWAdd(iter, loop.step, "iter_next")
+	c.builder.CreateBr(body)
+	c.continueLoop(loop, iter, current, iterNext, nextState, latch)
+
+	c.builder.SetInsertPointAtEnd(exit)
+	if !loop.hasState {
 		return llvm.Value{}
 	}
-	finalState := c.builder.CreatePHI(stateType, "loop_final")
-	finalState.AddIncoming([]llvm.Value{statePos}, []llvm.BasicBlock{condPos})
-	finalState.AddIncoming([]llvm.Value{stateNeg}, []llvm.BasicBlock{condNeg})
-	return finalState
+	final := c.builder.CreatePHI(loop.stateType, "loop_final")
+	final.AddIncoming([]llvm.Value{loop.seed, nextState, nextState}, []llvm.BasicBlock{preheader, testAsc, testDesc})
+	return final
+}
+
+// loopPhis opens a loop header with the element and the carried state.
+func (c *Compiler) loopPhis(loop rangeLoop, preheader llvm.BasicBlock) (iter, current llvm.Value) {
+	iter = c.builder.CreatePHI(c.Context.Int64Type(), "iter")
+	iter.AddIncoming([]llvm.Value{loop.start}, []llvm.BasicBlock{preheader})
+	if loop.hasState {
+		current = c.builder.CreatePHI(loop.stateType, "loop_state")
+		current.AddIncoming([]llvm.Value{loop.seed}, []llvm.BasicBlock{preheader})
+	}
+	return iter, current
+}
+
+// continueLoop feeds the next element and carried state back from latch.
+func (c *Compiler) continueLoop(loop rangeLoop, iter, current, iterNext, nextState llvm.Value, latch llvm.BasicBlock) {
+	iter.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
+	if loop.hasState {
+		current.AddIncoming([]llvm.Value{nextState}, []llvm.BasicBlock{latch})
+	}
+}
+
+// rangeDirection reports whether a range steps downward, and whether it holds
+// an element; a zero step holds none.
+func (c *Compiler) rangeDirection(start, stop, step llvm.Value) (descending, nonEmpty llvm.Value) {
+	zero := c.ConstI64(0)
+	descending = c.builder.CreateICmp(llvm.IntSLT, step, zero, "step_is_neg")
+	ascends := c.builder.CreateAnd(
+		c.builder.CreateICmp(llvm.IntSGT, step, zero, "step_is_pos"),
+		c.builder.CreateICmp(llvm.IntSLT, start, stop, "start_below_stop"),
+		"range_ascends",
+	)
+	descends := c.builder.CreateAnd(
+		descending,
+		c.builder.CreateICmp(llvm.IntSGT, start, stop, "start_above_stop"),
+		"range_descends",
+	)
+	nonEmpty = c.builder.CreateOr(ascends, descends, "range_nonempty")
+	return descending, nonEmpty
+}
+
+// saturatingSub emits a - b clamped to the I64 range.
+func (c *Compiler) saturatingSub(a, b llvm.Value, name string) llvm.Value {
+	i64 := c.Context.Int64Type()
+	fnType := llvm.FunctionType(i64, []llvm.Type{i64, i64}, false)
+	return c.builder.CreateCall(fnType, c.intrinsic("llvm.ssub.sat.i64", fnType), []llvm.Value{a, b}, name)
+}
+
+// checkedArith emits an I64 overflow intrinsic, such as
+// llvm.smul.with.overflow.i64, and returns its result and overflow bit.
+func (c *Compiler) checkedArith(intrinsic string, a, b llvm.Value, name string) (result, overflow llvm.Value) {
+	i64 := c.Context.Int64Type()
+	pairType := c.Context.StructType([]llvm.Type{i64, c.Context.Int1Type()}, false)
+	fnType := llvm.FunctionType(pairType, []llvm.Type{i64, i64}, false)
+	pair := c.builder.CreateCall(fnType, c.intrinsic(intrinsic, fnType), []llvm.Value{a, b}, name)
+	return c.builder.CreateExtractValue(pair, 0, name+"_value"), c.builder.CreateExtractValue(pair, 1, name+"_overflow")
+}
+
+// intrinsic declares an LLVM intrinsic in the module once.
+func (c *Compiler) intrinsic(name string, fnType llvm.Type) llvm.Value {
+	fn := c.Module.NamedFunction(name)
+	if fn.IsNil() {
+		fn = llvm.AddFunction(c.Module, name, fnType)
+	}
+	return fn
 }
 
 func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {

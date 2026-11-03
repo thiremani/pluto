@@ -1,0 +1,3 @@
+# The last element a callee-owned range visits.
+out = Last(x)
+    out = x

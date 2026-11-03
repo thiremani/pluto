@@ -1609,6 +1609,20 @@ func (ts *TypeSolver) rejectRangeDependentBound(boundName string, expr ast.Expre
 	})
 }
 
+// rejectZeroStep reports a range literal whose step constantInt proves 0, such
+// as 0, -0, (1 - 1) or (n - n): the range would never advance. Any other zero
+// step yields no element.
+func (ts *TypeSolver) rejectZeroStep(step ast.Expression) {
+	if value, ok := constantInt(step); !ok || value != 0 {
+		return
+	}
+
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: step.Tok(),
+		Msg:   "range step is 0, so the range would never advance; use a nonzero step",
+	})
+}
+
 func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
 	// infer start and stop - these are nested expressions
 	startT := ts.TypeExpression(r.Start, false)
@@ -1634,6 +1648,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			ts.Errors = append(ts.Errors, ce)
 		}
 		ts.rejectRangeDependentBound("step", r.Step, r.Tok())
+		ts.rejectZeroStep(r.Step)
 		bounds = append(bounds, stepT[0])
 	}
 	// A bound still awaiting its type postpones these checks to a later pass.

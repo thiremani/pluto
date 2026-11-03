@@ -92,7 +92,7 @@ r`
 	falseArm := strings.Index(body, "\ncond_else:")
 	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
 	aMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
-	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new7)")
+	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new5)")
 	require.NotEqual(t, -1, aMask)
 	require.NotEqual(t, -1, bMask)
 	require.Less(t, bMask, aMask, "the failed condition frees its masks last first, as scopes free bindings")
@@ -874,7 +874,20 @@ res`
 
 	require.NotContains(t, scriptIR, "%sum = alloca i64", "descending loop-carried direct scalar outputs should stay in SSA form by default")
 	require.Contains(t, scriptIR, "phi i64", "descending loop-carried direct scalar outputs should converge through PHI state")
-	require.Contains(t, scriptIR, "loop_cond_neg", "descending loop-carried direct scalar outputs should use the negative-step loop path")
+	require.Contains(t, scriptIR, "%loop_more_desc = icmp sgt i64 %iter, %loop_last_bound", "a descending range continues while an element above its stop follows")
+}
+
+// A constant step of 1 or -1 tests each element against stop before running
+// it, the shape LLVM narrows best; any other step tests whether another
+// element follows before stepping, against stop - step saturated.
+func TestRangeLoopShapeFollowsStep(t *testing.T) {
+	unit, _ := compileScriptAndCodeIR(t, "unit_step_loop", "", "s = 0\ni = 0:10\ns = s + i\ns")
+	require.Contains(t, unit, "%loop_in_range = icmp slt i64 %iter, 10", "a unit step tests each element against stop")
+	require.NotContains(t, unit, "llvm.ssub.sat.i64", "a unit step needs no saturated last bound")
+
+	stepped, _ := compileScriptAndCodeIR(t, "tested_step_loop", "", "s = 0\ni = 0:10:3\ns = s + i\ns")
+	require.Contains(t, stepped, "%loop_last_bound = call i64 @llvm.ssub.sat.i64(i64 10, i64 3)", "another step tests against stop - step, saturated")
+	require.Contains(t, stepped, "%iter_next = add nsw i64 %iter, 3", "the tested increment always yields an element")
 }
 
 func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {

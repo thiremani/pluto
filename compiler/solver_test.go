@@ -1082,9 +1082,9 @@ j = 0:5:i`,
 	}
 }
 
-// TestRangeBoundTypes: a range reports the first rule its bounds break, once,
-// naming every bound's type.
-func TestRangeBoundTypes(t *testing.T) {
+// TestRangeBoundErrors: a range reports the first rule its bounds break, once.
+// A type error names every bound's type.
+func TestRangeBoundErrors(t *testing.T) {
 	cases := []struct {
 		name   string
 		script string
@@ -1095,6 +1095,11 @@ func TestRangeBoundTypes(t *testing.T) {
 		{"FloatStep", "x = 0:6:2.5\nx", "range bounds should be Integer. start type: I64, stop type: I64, step type: F64"},
 		{"NarrowStop", "x = 0:n\nx", "range bounds must have the same type. start type: I64, stop type: I32"},
 		{"NarrowStep", "x = 0:6:n\nx", "range bounds must have the same type. start type: I64, stop type: I64, step type: I32"},
+		{"ZeroStep", "x = 0:3:0\nx", "range step is 0, so the range would never advance; use a nonzero step"},
+		{"NegatedZeroStep", "x = 0:3:-0\nx", "range step is 0, so the range would never advance; use a nonzero step"},
+		{"DoublyNegatedZeroStep", "x = 0:3:--0\nx", "range step is 0, so the range would never advance; use a nonzero step"},
+		{"ArithmeticZeroStep", "x = 0:3:(2-1-1)\nx", "range step is 0, so the range would never advance; use a nonzero step"},
+		{"CancellingZeroStep", "m = 5\nx = 0:3:(m-m)\nx", "range step is 0, so the range would never advance; use a nonzero step"},
 	}
 
 	for _, tc := range cases {

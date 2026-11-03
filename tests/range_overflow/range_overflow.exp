@@ -1,0 +1,17 @@
+BigStepUp: [2]
+OneElementUp: [9223372036854775806]
+BigStepDown: [-2]
+MinStep: [5 -9223372036854775803]
+LowStop: [-9223372036854775808]
+HighStop: [9223372036854775807]
+UnitStepTop: [9223372036854775805 9223372036854775806]
+CalleeLast: 2
+CalleeArrayRange: 9
+AffineWrappingRange: 3
+AffineScaledIndex: 14
+AffineNegatedIndex: 14
+AffineBiasedIndex: 0
+AffineFarIndex: 14
+ZeroStep: 0:3:0
+ZeroStepElements: []
+HeldZeroStep: []
