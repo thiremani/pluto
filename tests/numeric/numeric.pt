@@ -14,3 +14,6 @@ res = QuoOr(x, n, fallback)
 res = QuoFrom(x, n)
     res = -1
     res = x ÷ (n != 0)
+
+res = Scale(x, n)
+    res = x << n

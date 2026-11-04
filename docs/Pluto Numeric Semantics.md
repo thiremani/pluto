@@ -59,6 +59,23 @@ divisor, not the quotient. The ones around the whole division are required:
 `a ÷ (n != 0) || -1` divides by -1 when `n` is 0. A function's output must always
 be written, so use `||` there or initialize the output first.
 
+## Shift counts
+
+`<<`, `>>` and `>>>` use the count's low 6 bits, `k = n & 63`, for every count on
+every machine. So a count of 64 means 0, and -1 means 63. A literal follows the
+same rule: `1 << 64` is 1.
+
+| Expression | Result |
+| --- | --- |
+| `x << n` | `x * 2^k`, wrapped |
+| `x >> n` | `floor(x / 2^k)` |
+| `x >>> n` | `k` zeros shifted in from the top |
+
+`>>` rounds down, unlike `÷`: `-7 >> 1` is -4, while `-7 ÷ 2` is -3.
+
+A program can ask for other behaviour by filtering the count:
+`(x << (n < 64)) || 0` gives 0 at `n = 64`.
+
 ## From I64 to F64
 
 `/` and `^` on two I64s give F64, and so do `√`, `∛` and `∜`: `7 / 2` is 3.5,

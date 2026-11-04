@@ -715,7 +715,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateShl(left.Val, right.Val, "shl_tmp")
+		s.Val = c.builder.CreateShl(left.Val, c.shiftCount(right.Val), "shl_tmp")
 		return
 	},
 
@@ -727,7 +727,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp")
+		s.Val = c.builder.CreateAShr(left.Val, c.shiftCount(right.Val), "ashr_tmp")
 		return
 	},
 
@@ -739,7 +739,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp")
+		s.Val = c.builder.CreateLShr(left.Val, c.shiftCount(right.Val), "lshr_tmp")
 		return
 	},
 
@@ -913,6 +913,12 @@ func (c *Compiler) i64QuoEdge(x, y llvm.Value) llvm.Value {
 // i64RemEdge is x % y for y in {0, -1}: x and 0.
 func (c *Compiler) i64RemEdge(x, y llvm.Value) llvm.Value {
 	return c.builder.CreateAnd(x, c.builder.CreateNot(y, "rem_edge_not"), "rem_edge")
+}
+
+// shiftCount keeps a count's low 6 bits. LLVM's shifts are poison for a count of
+// 64 or more, negative counts included.
+func (c *Compiler) shiftCount(count llvm.Value) llvm.Value {
+	return c.builder.CreateAnd(count, c.ConstI64(63), "shift_count")
 }
 
 // float = float ÷ float via truncation
