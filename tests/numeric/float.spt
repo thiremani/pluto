@@ -68,3 +68,35 @@ ag = nan >= 1.0
 ah = 5
 ah = 1 > nan
 ae, af, ag, ah
+
+# != succeeds for NaN and yields its left operand
+ai = 5.0
+ai = nan != nan
+aj = 5.0
+aj = nan != 1.0
+ak = 5
+ak = 1 != nan
+al = 5.0
+al = nan != 1
+ai, aj, ak, al
+
+# a NaN read at run time behaves the same
+am = v[1] / v[1]
+an = 5.0
+an = am != am
+an
+
+# a != filter lets NaN through instead of taking the fallback
+ao = (nan != 0.0) || -1.0
+ao
+
+# ordinary values are unaffected
+ap = 5.0
+ap = 1.0 != 1.0
+aq = 5.0
+aq = 1.0 != 2.0
+ap, aq
+
+# an array mask keeps a NaN cell under !=
+ar = [nan 1.0] != [1.0 1.0]
+ar

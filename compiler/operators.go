@@ -428,7 +428,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, left.Val, right.Val, "neq_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, right.Val, "neq_F64")
 		return
 	},
 	{Operator: token.SYM_NEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -439,7 +439,7 @@ var defaultOps = map[opKey]opFunc{
 		}
 
 		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, leftFP, right.Val, "neq_I64_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, leftFP, right.Val, "neq_I64_F64")
 		return
 	},
 	{Operator: token.SYM_NEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -450,7 +450,7 @@ var defaultOps = map[opKey]opFunc{
 		}
 
 		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, left.Val, rightFP, "neq_F64_I64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, rightFP, "neq_F64_I64")
 		return
 	},
 

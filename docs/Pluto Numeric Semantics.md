@@ -111,3 +111,5 @@ propagate as usual.
 between machines.
 
 `==`, `<`, `<=`, `>` and `>=` fail when either side is NaN, as failed conditions.
+`!=` succeeds, as IEEE says: `nan != nan` holds, so `x != x` is the usual NaN
+test, and `(n != 0.0) || -1.0` gives NaN, not -1.0.
