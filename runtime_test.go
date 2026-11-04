@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -290,6 +292,37 @@ func TestParseCLIArgsRejectsInvalidCombinations(t *testing.T) {
 			_, err := parseCLIArgs(tt.args)
 			require.Error(t, err)
 			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestConcatDimensionOverflowAborts(t *testing.T) {
+	cases := []struct {
+		name      string
+		doublings int
+		wantAbort string
+	}{
+		{"LargestDimensionFits", 62, ""},
+		{"NextDoublingAborts", 63, "pluto: array dimension overflow: 4611686018427387904 + 4611686018427387904"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "row = [[]0]\n" + strings.Repeat("row = row ⊕ row\n", tc.doublings) + "row[0]\n\"done\"\n"
+			p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
+				MOD_FILE:                "module github.com/thiremani/pluto/concat_overflow_test\n",
+				"overflow" + SPT_SUFFIX: source,
+			})
+			require.NoError(t, buildScript(t, p, cc, codeLL, "overflow", rtObjs))
+
+			out, err := exec.Command(filepath.Join(p.Cwd, "overflow")).CombinedOutput()
+			if tc.wantAbort == "" {
+				require.NoError(t, err)
+				require.Equal(t, "[]\ndone", strings.TrimSpace(string(out)))
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, string(out), tc.wantAbort)
+			require.NotContains(t, string(out), "done")
 		})
 	}
 }

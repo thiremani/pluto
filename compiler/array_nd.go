@@ -221,14 +221,20 @@ func (c *Compiler) requireSameArrayShapeWhen(condition llvm.Value, left, right [
 // The fail path only executes on mismatch, so expected/got are always the
 // offending dimension pair.
 func (c *Compiler) failShapeOnFalse(ok llvm.Value, expected, got llvm.Value, name string) {
+	c.abortOnFalse(ok, ARRAY_SHAPE_FAIL, expected, got, name)
+}
+
+// abortOnFalse calls the noreturn runtime function failName with the two
+// dimensions when ok is false.
+func (c *Compiler) abortOnFalse(ok llvm.Value, failName string, first, second llvm.Value, name string) {
 	fn := c.builder.GetInsertBlock().Parent()
 	failBlock := c.Context.AddBasicBlock(fn, name+"_fail")
 	contBlock := c.Context.AddBasicBlock(fn, name+"_cont")
 	c.builder.CreateCondBr(ok, contBlock, failBlock)
 
 	c.builder.SetInsertPointAtEnd(failBlock)
-	failTy, failFn := c.GetCFunc(ARRAY_SHAPE_FAIL)
-	c.builder.CreateCall(failTy, failFn, []llvm.Value{expected, got}, "")
+	failTy, failFn := c.GetCFunc(failName)
+	c.builder.CreateCall(failTy, failFn, []llvm.Value{first, second}, "")
 	c.builder.CreateUnreachable()
 
 	c.builder.SetInsertPointAtEnd(contBlock)

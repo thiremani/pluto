@@ -26,7 +26,8 @@ checks.
 | `7 % -3` | 1 |
 
 `&`, `|`, `⊻`, `~`, `!` and comparisons have a result for every input. Array
-cells use these same operators, one cell at a time.
+cells use these same operators, one cell at a time. An array operation can still
+abort, on a shape mismatch or when `⊕` would overflow a dimension.
 
 ## Dividing I64 by zero
 
