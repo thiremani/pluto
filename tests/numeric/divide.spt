@@ -1,0 +1,117 @@
+# a literal zero divisor gives 0 for ÷ and the dividend for %
+a = 7 ÷ 0
+b = 7 % 0
+c = -7 ÷ 0
+d = -7 % 0
+a, b, c, d
+
+# a zero divisor read at run time gives the same results
+v = [7 0 -1 2 3]
+e = v[0] ÷ v[1]
+f = v[0] % v[1]
+g = -v[0] ÷ v[1]
+h = -v[0] % v[1]
+e, f, g, h
+
+# MIN ÷ -1 wraps to MIN and MIN % -1 is 0 with a literal divisor
+min = -9223372036854775807 - 1
+i = min ÷ -1
+j = min % -1
+i, j
+
+# the same with a run-time divisor
+k = min ÷ v[2]
+l = min % v[2]
+k, l
+
+# a divisor of -1 negates any other dividend
+m = v[0] ÷ v[2]
+n = v[0] % v[2]
+m, n
+
+# ordinary divisors keep truncating
+o = -v[0] ÷ v[3]
+p = -v[0] % v[4]
+o, p
+
+# quotient and remainder rebuild the dividend, zero divisors included
+q1 = ((v[0] ÷ v[1]) * v[1] + (v[0] % v[1])) == v[0]
+q2 = ((min ÷ v[2]) * v[2] + (min % v[2])) == min
+q3 = ((-v[0] ÷ v[4]) * v[4] + (-v[0] % v[4])) == -v[0]
+q1, q2, q3
+
+# a range that reaches zero gives a defined first cell
+r = 0:3
+[7 ÷ r]
+
+# a computed divisor can be zero at run time
+s = 0:24
+[(s * 3) ÷ (s % 8)]
+
+# a long sum with computed zero divisors stays exact
+t = 0:1000000
+u = 0
+u = u + ((t * 3) ÷ (t % 8))
+u
+
+# a check after a division still runs
+w = v[1]
+x = 7 ÷ w
+y = w == 0 && 1
+x, y
+
+# array cells use the same rule
+aa = [7 8] ÷ [0 2]
+ab = [7 8] % [0 3]
+ac = [7 8] ÷ v[1]
+ad = 7 ÷ [0 2]
+aa, ab, ac, ad
+
+# a filtered divisor leaves the target unchanged
+ae = 5
+ae = v[0] ÷ (v[1] != 0)
+af = 5.5
+af = v[0] / (v[1] != 0)
+ae, af
+
+# the parentheses around the filter are optional
+ag = 5
+ag = v[0] ÷ v[1] != 0
+ag
+
+# a fallback covers the whole filtered division
+ah = (v[0] ÷ (v[1] != 0)) || -1
+ai = (v[0] / (v[1] != 0)) || -1.0
+ah, ai
+
+# without parentheses around the division the fallback becomes the divisor
+aj = v[0] ÷ (v[1] != 0) || -1
+aj
+
+# a filtered division inside a comparison leaves the target unchanged
+ak = 9
+ak = (v[0] ÷ (v[1] != 0)) > 0
+ak
+
+# a divisor reached through a call follows the same rule
+al = Quo(7, 0)
+am = Rem(7, 0)
+an = Quo(7, v[1])
+ao = Rem(7, v[1])
+al, am, an, ao
+
+# a function's output takes a fallback or a prior value
+ap = QuoOr(7, v[1], -1)
+aq = QuoFrom(7, v[1])
+ap, aq
+
+# the same function stays IEEE at F64
+ar = Quo(7.5, 0.0)
+at = Rem(7.5, 0.0)
+ar, at
+
+# each operand runs once, dividend first
+au = Loud(10) ÷ Loud(0)
+av = Loud(10) % Loud(0)
+aw = Loud(10) ÷ Loud(2)
+au, av, aw

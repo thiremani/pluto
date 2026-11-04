@@ -28,6 +28,37 @@ checks.
 `&`, `|`, `⊻`, `~`, `!` and comparisons have a result for every input. Array
 cells use these same operators, one cell at a time.
 
+## Dividing I64 by zero
+
+`÷` and `%` have a defined result for every pair of I64s, on every machine, and
+never trap. A literal operand follows the same rules.
+
+| Expression | Result |
+| --- | --- |
+| `x ÷ 0` | 0 |
+| `x % 0` | `x` |
+| `MIN ÷ -1` | `MIN` |
+| `MIN % -1` | 0 |
+
+So `((x ÷ y) * y + (x % y)) == x` holds for every pair. These are ordinary
+successful values, so `||` can't detect them, and an accidental zero divisor can
+pass unnoticed.
+
+A program that wants a zero divisor to count as failure filters it:
+
+```pluto
+q = a / (n != 0)             # F64; keeps q when n is 0
+q = (a / (n != 0)) || -1.0   # F64 fallback
+
+r = a ÷ (n != 0)             # I64; keeps r when n is 0
+r = (a ÷ (n != 0)) || -1     # I64 fallback
+```
+
+The parentheses around the comparison are optional, but they show it checks the
+divisor, not the quotient. The ones around the whole division are required:
+`a ÷ (n != 0) || -1` divides by -1 when `n` is 0. A function's output must always
+be written, so use `||` there or initialize the output first.
+
 ## From I64 to F64
 
 `/` and `^` on two I64s give F64, and so do `√`, `∛` and `∜`: `7 / 2` is 3.5,

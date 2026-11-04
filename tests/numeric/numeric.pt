@@ -1,0 +1,16 @@
+y = Loud(x)
+    x
+    y = x
+
+res = Quo(x, n)
+    res = x ÷ n
+
+res = Rem(x, n)
+    res = x % n
+
+res = QuoOr(x, n, fallback)
+    res = (x ÷ (n != 0)) || fallback
+
+res = QuoFrom(x, n)
+    res = -1
+    res = x ÷ (n != 0)

@@ -110,12 +110,51 @@ out`
 	ir, _ := compileScriptAndCodeIR(t, "stmt_and_short_circuit", "", script)
 	rhsLabel := strings.Index(ir, "stmt_and_rhs:")
 	falseLabel := strings.Index(ir, "stmt_and_false:")
-	division := strings.Index(ir, "sdiv i64")
+	guard := strings.Index(ir, "%div_is_edge")
 	require.NotEqual(t, -1, rhsLabel, "expected a short-circuit RHS block")
 	require.NotEqual(t, -1, falseLabel, "expected a short-circuit false block")
-	require.NotEqual(t, -1, division, "expected the second condition's division")
-	require.Less(t, rhsLabel, division, "the second condition must be emitted inside the lazy RHS block")
-	require.Less(t, division, falseLabel, "the second condition must not escape the lazy RHS block")
+	require.NotEqual(t, -1, guard, "expected the second condition's division guard")
+	require.Less(t, rhsLabel, guard, "the second condition must be emitted inside the lazy RHS block")
+	require.Less(t, guard, falseLabel, "the second condition must not escape the lazy RHS block")
+}
+
+func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
+	cases := []struct {
+		name, script, divide, edge string
+	}{
+		{"Quotient", "v = [7 0]\nx = v[0] ÷ v[1]\nx\n", "sdiv i64", "%quo_edge ="},
+		{"Remainder", "v = [7 0]\nx = v[0] % v[1]\nx\n", "srem i64", "%rem_edge ="},
+		{"InsideComparison", "v = [7 0]\nx = 9\nx = (v[0] ÷ (v[1] != 0)) > 0\nx\n", "sdiv i64", "%quo_edge ="},
+		{"ArrayCell", "x = [7 8] ÷ [0 2]\nx\n", "sdiv i64", "%quo_edge ="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ir, _ := compileScriptAndCodeIR(t, "division_guard", "", tc.script)
+			requireInstructionInBlock(t, ir, tc.divide, "div_divide")
+			requireInstructionInBlock(t, ir, tc.edge, "div_edge")
+			require.Less(t, strings.Index(ir, "div_edge:"), strings.Index(ir, "div_divide:"), "i64Divide emits the edge block first")
+		})
+	}
+}
+
+// requireInstructionInBlock checks that every occurrence of instruction sits
+// in a block whose label starts with blockPrefix.
+func requireInstructionInBlock(t *testing.T, ir, instruction, blockPrefix string) {
+	t.Helper()
+	block := ""
+	found := false
+	for _, line := range strings.Split(ir, "\n") {
+		head := strings.TrimSpace(strings.SplitN(line, ";", 2)[0])
+		if label, ok := strings.CutSuffix(head, ":"); ok {
+			block = label
+		}
+		if !strings.Contains(line, instruction) {
+			continue
+		}
+		found = true
+		require.True(t, strings.HasPrefix(block, blockPrefix), "%q runs in block %q", instruction, block)
+	}
+	require.True(t, found, "expected %q in the IR", instruction)
 }
 
 func TestDirectReturnSeedIndex(t *testing.T) {

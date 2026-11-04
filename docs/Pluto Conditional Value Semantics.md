@@ -516,7 +516,8 @@ collector cells follow when they migrate in Steps 7 and 8.
 - **No fabricated zeros:** a failed slot skips its commit instead of
   materializing a sentinel `0` that flows onward; zeros appear only where a
   resolver deliberately introduces them (a fresh seed, a cell's zero-fill, an
-  explicit `|| 0`).
+  explicit `|| 0`). `x ÷ 0` is 0 as well, but that is a successful value, not
+  a failed slot; see [Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md).
 - **Checks guard work:** a slot that fails runs nothing beyond its checks, so
   a comparison guards the calls beside it wherever it is written — a base
   case stops a recursion — the same way a statement gate or an `&&` does.

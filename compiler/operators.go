@@ -231,7 +231,6 @@ var defaultOps = map[opKey]opFunc{
 	{Operator: token.SYM_IMPL_MUL, LeftType: F64, RightType: I64}: mulF64I64,
 
 	// Division:
-	// For integers, this example uses integer division (CreateSDiv).
 	// For ÷ operator
 	{Operator: token.SYM_QUO, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
@@ -240,7 +239,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateSDiv(left.Val, right.Val, "div_tmp")
+		s.Val = c.i64Divide(left.Val, right.Val, c.i64QuoEdge, c.builder.CreateSDiv)
 		return
 	},
 	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -663,7 +662,6 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Integer Modulo (Signed)
-	// Note: Modulo by zero has undefined behavior (uses LLVM SRem)
 	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
@@ -671,7 +669,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateSRem(left.Val, right.Val, "srem_tmp")
+		s.Val = c.i64Divide(left.Val, right.Val, c.i64RemEdge, c.builder.CreateSRem)
 		return
 	},
 
@@ -881,6 +879,40 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = floatSqrt(c, sqrt)
 		return
 	},
+}
+
+// i64Divide lowers I64 ÷ and %. LLVM leaves sdiv and srem undefined for a zero
+// divisor and for MIN ÷ -1, and x86-64 faults on them, so divisors 0 and -1 take
+// the edge path. arm64 can if-convert this branch and run the edge every
+// iteration, so edge values stay bit operations (a mul costs 7-17%), and the edge
+// block comes first (the other order keeps a branch that random zeros mispredict).
+func (c *Compiler) i64Divide(left, right llvm.Value, edge func(x, y llvm.Value) llvm.Value, divide func(x, y llvm.Value, name string) llvm.Value) llvm.Value {
+	shifted := c.builder.CreateAdd(right, c.ConstI64(1), "div_shifted")
+	isEdge := c.builder.CreateICmp(llvm.IntULT, shifted, c.ConstI64(2), "div_is_edge")
+	edgeBlock, divideBlock, contBlock := c.createIfElseCont(isEdge, "div_edge", "div_divide", "div_cont")
+
+	c.builder.SetInsertPointAtEnd(edgeBlock)
+	edgeValue := edge(left, right)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(divideBlock)
+	divided := divide(left, right, "div_tmp")
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int64Type(), "div_result")
+	result.AddIncoming([]llvm.Value{edgeValue, divided}, []llvm.BasicBlock{edgeBlock, divideBlock})
+	return result
+}
+
+// i64QuoEdge is x ÷ y for y in {0, -1}: 0 and -x, which wraps at MIN.
+func (c *Compiler) i64QuoEdge(x, y llvm.Value) llvm.Value {
+	return c.builder.CreateAnd(c.builder.CreateNeg(x, "quo_edge_neg"), y, "quo_edge")
+}
+
+// i64RemEdge is x % y for y in {0, -1}: x and 0.
+func (c *Compiler) i64RemEdge(x, y llvm.Value) llvm.Value {
+	return c.builder.CreateAnd(x, c.builder.CreateNot(y, "rem_edge_not"), "rem_edge")
 }
 
 // float = float ÷ float via truncation
