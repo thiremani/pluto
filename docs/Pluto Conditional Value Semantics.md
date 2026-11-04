@@ -256,6 +256,9 @@ Tightest to loosest:
 | bitwise xor | `⊻` |
 | bitwise or | `\|` |
 
+[Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md) states what these
+operators do at their numeric limits.
+
 Ranges sit between comparisons and `&&`, so `0:n > 2` is a range with a
 conditional bound, and `c && 0:n` puts the whole range on the `&&`'s right
 side. `⊕` groups left to right with `+` and `-`, so arithmetic after a join
