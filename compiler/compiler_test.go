@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -110,7 +111,7 @@ out`
 	ir, _ := compileScriptAndCodeIR(t, "stmt_and_short_circuit", "", script)
 	rhsLabel := strings.Index(ir, "stmt_and_rhs:")
 	falseLabel := strings.Index(ir, "stmt_and_false:")
-	guard := strings.Index(ir, "%div_is_edge")
+	guard := strings.Index(ir, "%div_is_zero")
 	require.NotEqual(t, -1, rhsLabel, "expected a short-circuit RHS block")
 	require.NotEqual(t, -1, falseLabel, "expected a short-circuit false block")
 	require.NotEqual(t, -1, guard, "expected the second condition's division guard")
@@ -120,21 +121,37 @@ out`
 
 func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
 	cases := []struct {
-		name, script, divide, edge string
+		name, script, divide string
 	}{
-		{"Quotient", "v = [7 0]\nx = v[0] ÷ v[1]\nx\n", "sdiv i64", "%quo_edge ="},
-		{"Remainder", "v = [7 0]\nx = v[0] % v[1]\nx\n", "srem i64", "%rem_edge ="},
-		{"InsideComparison", "v = [7 0]\nx = 9\nx = (v[0] ÷ (v[1] != 0)) > 0\nx\n", "sdiv i64", "%quo_edge ="},
-		{"ArrayCell", "x = [7 8] ÷ [0 2]\nx\n", "sdiv i64", "%quo_edge ="},
+		{"Quotient", "v = [7 0]\nx = v[0] ÷ v[1]\nx\n", "sdiv"},
+		{"Remainder", "v = [7 0]\nx = v[0] % v[1]\nx\n", "srem"},
+		{"InsideComparison", "v = [7 0]\nx = 9\nx = (v[0] ÷ (v[1] != 0)) > 0\nx\n", "sdiv"},
+		{"ArrayCell", "x = [7 8] ÷ [0 2]\nx\n", "sdiv"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ir, _ := compileScriptAndCodeIR(t, "division_guard", "", tc.script)
-			requireInstructionInBlock(t, ir, tc.divide, "div_divide")
-			requireInstructionInBlock(t, ir, tc.edge, "div_edge")
-			require.Less(t, strings.Index(ir, "div_edge:"), strings.Index(ir, "div_divide:"), "i64Divide emits the edge block first")
+			requireInstructionInBlock(t, ir, tc.divide+" i64", "div_divide")
+			requireDivisionGuarded(t, ir, tc.divide)
 		})
 	}
+}
+
+// requireDivisionGuarded checks that the divide's operands are the ones tested:
+// a missing test still passes every fixture on arm64, whose divide doesn't fault.
+func requireDivisionGuarded(t *testing.T, ir, divide string) {
+	t.Helper()
+	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %\S+, label %div_check_min\d*, !prof`).FindStringSubmatch(ir)
+	require.NotNil(t, zero, "expected a rare branch on a zero divisor")
+	minimum := regexp.MustCompile(`%div_is_min\d* = icmp eq i64 (\S+), -9223372036854775808\n\s+br i1 %div_is_min\d*, label %div_check_minus_one\d*, label %div_divide\d*, !prof`).FindStringSubmatch(ir)
+	require.NotNil(t, minimum, "expected a rare branch on a MIN dividend")
+	minusOne := regexp.MustCompile(`%div_is_minus_one\d* = icmp eq i64 (\S+), -1\n\s+br i1 %div_is_minus_one\d*, label %div_cont\d*, label %div_divide\d*`).FindStringSubmatch(ir)
+	require.NotNil(t, minusOne, "expected the MIN path to test for a -1 divisor")
+	divided := regexp.MustCompile(divide + ` i64 (\S+), (\S+)\n`).FindStringSubmatch(ir)
+	require.NotNil(t, divided, "expected %s in the IR", divide)
+	require.Equal(t, minimum[1], divided[1], "the MIN test must read the dividend")
+	require.Equal(t, zero[1], divided[2], "the zero test must read the divisor")
+	require.Equal(t, minusOne[1], divided[2], "the -1 test must read the divisor")
 }
 
 // requireInstructionInBlock checks that every occurrence of instruction sits

@@ -239,7 +239,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.i64Divide(left.Val, right.Val, c.i64QuoEdge, c.builder.CreateSDiv)
+		s.Val = c.i64Divide(left.Val, right.Val, c.ConstI64(0), left.Val, c.builder.CreateSDiv)
 		return
 	},
 	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -669,7 +669,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.i64Divide(left.Val, right.Val, c.i64RemEdge, c.builder.CreateSRem)
+		s.Val = c.i64Divide(left.Val, right.Val, left.Val, c.ConstI64(0), c.builder.CreateSRem)
 		return
 	},
 
@@ -881,19 +881,38 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 }
 
-// i64Divide lowers I64 ÷ and %. LLVM leaves sdiv and srem undefined for a zero
-// divisor and for MIN ÷ -1, and x86-64 faults on them, so divisors 0 and -1 take
-// the edge path. arm64 can if-convert this branch and run the edge every
-// iteration, so edge values stay bit operations (a mul costs 7-17%), and the edge
-// block comes first (the other order keeps a branch that random zeros mispredict).
-func (c *Compiler) i64Divide(left, right llvm.Value, edge func(x, y llvm.Value) llvm.Value, divide func(x, y llvm.Value, name string) llvm.Value) llvm.Value {
-	shifted := c.builder.CreateAdd(right, c.ConstI64(1), "div_shifted")
-	isEdge := c.builder.CreateICmp(llvm.IntULT, shifted, c.ConstI64(2), "div_is_edge")
-	edgeBlock, divideBlock, contBlock := c.createIfElseCont(isEdge, "div_edge", "div_divide", "div_cont")
+// markRareExit tells LLVM a branch's first successor is rare.
+func (c *Compiler) markRareExit(branch llvm.Value) {
+	branch.SetMetadata(c.Context.MDKindID("prof"), c.Context.MDNode([]llvm.Metadata{
+		c.Context.MDString("branch_weights"),
+		llvm.ConstInt(c.Context.Int32Type(), 1, false).ConstantAsMetadata(),
+		llvm.ConstInt(c.Context.Int32Type(), 2000, false).ConstantAsMetadata(),
+	}))
+}
 
-	c.builder.SetInsertPointAtEnd(edgeBlock)
-	edgeValue := edge(left, right)
-	c.builder.CreateBr(contBlock)
+// i64Divide lowers I64 ÷ and %. LLVM leaves sdiv and srem undefined for a zero
+// divisor and for MIN ÷ -1, and x86-64 faults on them. Each test is its own rare
+// branch so a normal divide runs straight through: LLVM would split a combined
+// y == -1 && x == MIN and assume its first half is 50/50. Testing x first keeps a
+// -1 divisor off the rare path unless x is MIN.
+func (c *Compiler) i64Divide(left, right, zeroResult, overflowResult llvm.Value, divide func(x, y llvm.Value, name string) llvm.Value) llvm.Value {
+	head := c.builder.GetInsertBlock()
+	fn := head.Parent()
+	minBlock := c.Context.AddBasicBlock(fn, "div_check_min")
+	minusOneBlock := c.Context.AddBasicBlock(fn, "div_check_minus_one")
+	divideBlock := c.Context.AddBasicBlock(fn, "div_divide")
+	contBlock := c.Context.AddBasicBlock(fn, "div_cont")
+
+	isZero := c.builder.CreateICmp(llvm.IntEQ, right, c.ConstI64(0), "div_is_zero")
+	c.markRareExit(c.builder.CreateCondBr(isZero, contBlock, minBlock))
+
+	c.builder.SetInsertPointAtEnd(minBlock)
+	isMin := c.builder.CreateICmp(llvm.IntEQ, left, c.ConstI64(1<<63), "div_is_min")
+	c.markRareExit(c.builder.CreateCondBr(isMin, minusOneBlock, divideBlock))
+
+	c.builder.SetInsertPointAtEnd(minusOneBlock)
+	isMinusOne := c.builder.CreateICmp(llvm.IntEQ, right, c.ConstI64(^uint64(0)), "div_is_minus_one")
+	c.builder.CreateCondBr(isMinusOne, contBlock, divideBlock)
 
 	c.builder.SetInsertPointAtEnd(divideBlock)
 	divided := divide(left, right, "div_tmp")
@@ -901,18 +920,8 @@ func (c *Compiler) i64Divide(left, right llvm.Value, edge func(x, y llvm.Value) 
 
 	c.builder.SetInsertPointAtEnd(contBlock)
 	result := c.builder.CreatePHI(c.Context.Int64Type(), "div_result")
-	result.AddIncoming([]llvm.Value{edgeValue, divided}, []llvm.BasicBlock{edgeBlock, divideBlock})
+	result.AddIncoming([]llvm.Value{zeroResult, overflowResult, divided}, []llvm.BasicBlock{head, minusOneBlock, divideBlock})
 	return result
-}
-
-// i64QuoEdge is x ÷ y for y in {0, -1}: 0 and -x, which wraps at MIN.
-func (c *Compiler) i64QuoEdge(x, y llvm.Value) llvm.Value {
-	return c.builder.CreateAnd(c.builder.CreateNeg(x, "quo_edge_neg"), y, "quo_edge")
-}
-
-// i64RemEdge is x % y for y in {0, -1}: x and 0.
-func (c *Compiler) i64RemEdge(x, y llvm.Value) llvm.Value {
-	return c.builder.CreateAnd(x, c.builder.CreateNot(y, "rem_edge_not"), "rem_edge")
 }
 
 // shiftCount keeps a count's low 6 bits. LLVM's shifts are poison for a count of
