@@ -31,34 +31,53 @@ abort, on a shape mismatch or when `⊕` would overflow a dimension.
 
 ## Dividing I64 by zero
 
-`÷` and `%` have a defined result for every pair of I64s, on every machine, and
-never trap. A literal operand follows the same rules.
+`x ÷ 0` and `x % 0` stop the program on every machine with the message
+`pluto: division by zero`. Output printed so far is kept, and a program can't
+catch the stop. A literal operand follows the same rule: `7 ÷ 0` compiles and
+stops when it runs. An array divides one cell at a time, so one zero divisor cell
+stops it.
+
+`MIN ÷ -1` and `MIN % -1` wrap instead, so a `-1` used to replace a zero divisor
+can't stop the program:
 
 | Expression | Result |
 | --- | --- |
-| `x ÷ 0` | 0 |
-| `x % 0` | `x` |
 | `MIN ÷ -1` | `MIN` |
 | `MIN % -1` | 0 |
 
-So `((x ÷ y) * y + (x % y)) == x` holds for every pair. These are ordinary
-successful values, so `||` can't detect them, and an accidental zero divisor can
-pass unnoticed.
-
-A program that wants a zero divisor to count as failure filters it:
+So `((x ÷ y) * y + (x % y)) == x` holds for every nonzero divisor. To keep going
+past a zero divisor, check it first, on the spot or on the call:
 
 ```pluto
-q = a / (n != 0)             # F64; keeps q when n is 0
-q = (a / (n != 0)) || -1.0   # F64 fallback
+q = a / n                         # F64: ±Inf or NaN, and it keeps going
 
-r = a ÷ (n != 0)             # I64; keeps r when n is 0
-r = (a ÷ (n != 0)) || -1     # I64 fallback
+r = a ÷ (n != 0)                  # keeps r when n is 0
+r = (a ÷ (n != 0)) || -1          # fallback
+x = n != 0 Div(a, n)              # skips the call; keeps x
+
+y = [8 ÷ (d[i] != 0)]             # per cell; a failed cell is 0
+z = [(v[i] ÷ (d[i] != 0)) || -1]  # per cell fallback
+d = [d[i] != 0 || 1]              # replaces zeros before dividing
 ```
 
 The parentheses around the comparison are optional, but they show it checks the
 divisor, not the quotient. The ones around the whole division are required:
 `a ÷ (n != 0) || -1` divides by -1 when `n` is 0. A function's output must always
 be written, so use `||` there or initialize the output first.
+
+A check protects only the statement it gates, because there's no early return.
+`y = n != 0 1` on its own line doesn't protect the next line, and it can keep an
+old 1. Save a flag with `ok = n != 0 && 1 || 0`, then gate on it:
+`x = ok == 1 Div(a, n)`.
+
+An out-of-bounds divisor counts as a failed check: `x = a ÷ v[9]` keeps `x`. An
+array comparison doesn't: `d != 0` leaves zero cells in place, so
+`[8 8] ÷ (d != 0)` stops, and a `||` fallback on whole arrays is a compile error.
+
+Two spellings stop despite a check, because today the function runs before the
+check does: `x = Div(a, n != 0) > 0`, and `x = [Div(7, d[k])]` with `k` past the
+end. `x = n != 0 Div(a, n) > 0` and `x = [Div(7, d[k] != 0)]` keep going. PIR's
+checks-first work (Steps 6-8) is planned to fix both.
 
 ## Shift counts
 

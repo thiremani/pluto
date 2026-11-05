@@ -498,9 +498,10 @@ prints, but runs every one of them before testing any, so
 first yet: an out-of-bounds read is checked where it is read
 (`Loud(1) + arr[oob]` calls `Loud`), and work inside a comparison's operands,
 an `&&` right side, an `||` left side or multi-slot arithmetic runs before the
-checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). PIR Step 6
-makes non-ranged statements and prints check first, and ranged statements and
-collector cells follow when they migrate in Steps 7 and 8.
+checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). A zero divisor
+reached this way stops the program only if no check in its statement has failed
+yet. PIR Step 6 makes non-ranged statements and prints check first, and ranged
+statements and collector cells follow when they migrate in Steps 7 and 8.
 
 ## Why this model
 
@@ -516,8 +517,8 @@ collector cells follow when they migrate in Steps 7 and 8.
 - **No fabricated zeros:** a failed slot skips its commit instead of
   materializing a sentinel `0` that flows onward; zeros appear only where a
   resolver deliberately introduces them (a fresh seed, a cell's zero-fill, an
-  explicit `|| 0`). `x ÷ 0` is 0 as well, but that is a successful value, not
-  a failed slot; see [Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md).
+  explicit `|| 0`). `x ÷ 0` makes no zero either: it stops the program; see
+  [Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md).
 - **Checks guard work:** a slot that fails runs nothing beyond its checks, so
   a comparison guards the calls beside it wherever it is written — a base
   case stops a recursion — the same way a statement gate or an `&&` does.
