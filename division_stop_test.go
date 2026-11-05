@@ -78,8 +78,8 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 
 			var exit *exec.ExitError
 			require.True(t, errors.As(cmd.Run(), &exit), "the program must not exit normally")
-			require.Equal(t, "pluto: division by zero\n", stderr.String())
-			require.Equal(t, "before\n", stdout.String(), "output printed before the stop must survive it")
+			require.Equal(t, "pluto: division by zero\n", unixNewlines(stderr.String()))
+			require.Equal(t, "before\n", unixNewlines(stdout.String()), "output printed before the stop must survive it")
 		})
 	}
 }

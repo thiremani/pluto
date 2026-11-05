@@ -296,6 +296,11 @@ func TestParseCLIArgsRejectsInvalidCombinations(t *testing.T) {
 	}
 }
 
+// unixNewlines undoes Windows's text-mode stdout and stderr, which write \n as \r\n.
+func unixNewlines(output string) string {
+	return strings.ReplaceAll(output, "\r\n", "\n")
+}
+
 func TestConcatDimensionOverflowAborts(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -317,7 +322,7 @@ func TestConcatDimensionOverflowAborts(t *testing.T) {
 			out, err := exec.Command(filepath.Join(p.Cwd, "overflow")).CombinedOutput()
 			if tc.wantAbort == "" {
 				require.NoError(t, err)
-				require.Equal(t, "[]\ndone", strings.TrimSpace(string(out)))
+				require.Equal(t, "[]\ndone", strings.TrimSpace(unixNewlines(string(out))))
 				return
 			}
 			require.Error(t, err)
