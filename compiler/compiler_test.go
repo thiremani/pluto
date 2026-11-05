@@ -133,6 +133,7 @@ func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
 			ir, _ := compileScriptAndCodeIR(t, "division_guard", "", tc.script)
 			requireInstructionInBlock(t, ir, tc.divide+" i64", "div_divide")
 			requireDivisionGuarded(t, ir, tc.divide)
+			require.Contains(t, ir, "call void @div_zero_fail()\n  unreachable")
 		})
 	}
 }
@@ -141,7 +142,7 @@ func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
 // a missing test still passes every fixture on arm64, whose divide doesn't fault.
 func requireDivisionGuarded(t *testing.T, ir, divide string) {
 	t.Helper()
-	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %\S+, label %div_check_min\d*, !prof`).FindStringSubmatch(ir)
+	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %div_zero\d*, label %div_check_min\d*, !prof`).FindStringSubmatch(ir)
 	require.NotNil(t, zero, "expected a rare branch on a zero divisor")
 	minimum := regexp.MustCompile(`%div_is_min\d* = icmp eq i64 (\S+), -9223372036854775808\n\s+br i1 %div_is_min\d*, label %div_check_minus_one\d*, label %div_divide\d*, !prof`).FindStringSubmatch(ir)
 	require.NotNil(t, minimum, "expected a rare branch on a MIN dividend")

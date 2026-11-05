@@ -23,6 +23,7 @@ const (
 	TABLE_STR        = "table_str"
 
 	ARRAY_DIM_OVERFLOW = "array_dim_overflow"
+	DIV_ZERO_FAIL      = "div_zero_fail"
 
 	// Array I64 functions
 	ARR_I64_NEW    = "arr_i64_new"
@@ -106,6 +107,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i32, i64, llvm.PointerType(i64, 0)}, false)
 	case ARRAY_SHAPE_FAIL, ARRAY_DIM_OVERFLOW:
 		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{i64, i64}, false)
+	case DIV_ZERO_FAIL:
+		return llvm.FunctionType(c.Context.VoidType(), nil, false)
 	case TABLE_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{i64, i64, charPtr, charPtr, charPtr}, false)
 

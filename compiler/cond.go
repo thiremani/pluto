@@ -632,6 +632,11 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	// on every lane the operand feeds (the read yields nothing, so nothing
 	// computed from it does either).
 	guardPtr := c.pushBoundsGuard("cmp_bounds_guard")
+	if c.trackDivideChecks(infix) {
+		if checks := c.andConds(c.foldSlotConds(lConds), c.foldSlotConds(rConds), "operand_checks"); !checks.IsNil() {
+			c.recordDivideCheck(checks)
+		}
+	}
 	left := c.compileExpression(infix.Left, nil)
 	right := c.compileExpression(infix.Right, nil)
 	var boundsOK llvm.Value

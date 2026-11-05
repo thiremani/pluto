@@ -61,6 +61,7 @@ func (c *Compiler) compileArrayValuedCell(child ast.Expression) *Symbol {
 
 	c.pushBoundsGuard("array_cell_bounds_guard")
 	defer c.popBoundsGuard()
+	c.trackDivideChecks(child)
 
 	c.withArrayLiteralCellMode(func() {
 		c.compileCondExprValue(child, func() {

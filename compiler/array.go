@@ -451,6 +451,7 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 
 	c.pushBoundsGuard("array_cell_bounds_guard")
 	defer c.popBoundsGuard()
+	c.trackDivideChecks(cell)
 
 	c.withArrayLiteralCellMode(func() {
 		c.compileCondExprValue(cell, func() {
@@ -1101,8 +1102,12 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
 	ctx := c.currentStmtCtx()
-	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
-		c.recordStmtBoundsCheck(inBounds)
+	if ctx != nil && len(ctx.boundsStack) > 0 {
+		if c.inArrayLiteralCellMode() {
+			c.recordDivideCheck(inBounds)
+		} else {
+			c.recordStmtBoundsCheck(inBounds)
+		}
 	}
 	if arrType.Rank > 1 {
 		return []*Symbol{{Type: resultType, Val: c.checkedArraySubarray(arraySym, idxVal, inBounds)}}

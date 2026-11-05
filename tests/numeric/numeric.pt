@@ -17,3 +17,10 @@ res = QuoFrom(x, n)
 
 res = Scale(x, n)
     res = x << n
+
+res = Id(x)
+    res = x
+
+p, q = Pair(x, y)
+    p = x
+    q = y
