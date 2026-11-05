@@ -83,6 +83,111 @@ x = 5
 x = n != 0 Quo(a, n) > 0
 x
 
+# a filtered call argument inside a comparison skips the call
+x = 5
+x = Quo(a, n != 0) > 0
+x
+
+# the same for a remainder
+x = 5
+x = Rem(a, n != 0) == 0
+x
+
+# the same with the filter inside &&
+x = 5
+x = Quo(a, n != 0 && n) > 0
+x
+
+# a fallback around that comparison
+x = (Quo(a, n != 0) > 0) || -1
+x
+
+# a filtered argument two calls deep
+x = 5
+x = Quo(Quo(a, n != 0), 1) > 0
+x
+
+# a chain over a filtered argument
+x = 5
+x = 0 < Quo(a, n != 0) < 9
+x
+
+# a print of a filtered argument's comparison prints nothing
+Quo(a, n != 0) > 0
+
+# a check beside a divide guards it in a fallback's left side
+x = ((n != 0) + 7 ÷ n) || 6
+x
+
+# the same with the divide first
+x = (7 ÷ n + (n != 0)) || 6
+x
+
+# the same for a call
+x = ((n != 0) + Quo(7, n)) || 6
+x
+
+# the same in an && right side
+x = 5
+x = (a > 0) && ((n != 0) + 7 ÷ n)
+x
+
+# the same for a call there
+x = 5
+x = (a > 0) && ((n != 0) + Quo(7, n))
+x
+
+# a passing check lets the divide run
+x = ((m != 0) + 7 ÷ m) || 6
+x
+
+# a read that failed outside a cell skips the call inside it
+x = 5
+x = v[9] + [Quo(7, n)][0]
+x
+
+# it also keeps a divide inside the cell from stopping
+x = 5
+x = v[9] + [e[0] + 7 ÷ n][0]
+x
+
+# a failed check keeps a later check's divide from stopping
+x = 5
+x = (n != 0) + ((7 ÷ n) > 0)
+x
+
+# the same for a call
+x = 5
+x = (n != 0) + (Quo(7, n) > 0)
+x
+
+# the same across a comparison's operands
+x = 5
+x = (n != 0) > (Quo(7, n) > 0)
+x
+
+# the same across a call's arguments
+p = 8
+q = 9
+p, q = Pair(n != 0, Quo(7, n) > 0)
+p, q
+
+# the same across a print's arguments
+"first failure", n != 0, Quo(7, n) > 0
+
+# the same in a cell
+[(n != 0) + (Quo(7, n) > 0)]
+
+# the same across tuple slots
+p = 8
+q = 9
+p, q = (Pair(n, n) != Pair(0, 0)) + (Pair(Quo(7, n), 1) > Pair(0, 0))
+p, q
+
+# a check nested deep in the arithmetic still runs first
+x = (7 ÷ n + (m != 0) + (n != 0)) || 6
+x
+
 # tuple slots fail one by one inside a comparison
 p = 8
 q = 9
@@ -93,6 +198,44 @@ p, q
 p = 8
 q = 9
 p, q = (Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0))) > Pair(0, 0)
+p, q
+
+# a check beside a tuple divide guards its own slot
+p = 8
+q = 9
+p, q = (Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))
+p, q
+
+# the same in a fallback's left side
+p, q = ((Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))) || Pair(1, 9)
+p, q
+
+# a fallback around a filtered tuple divide's comparison
+p, q = ((Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0))) > Pair(0, 0)) || Pair(1, 9)
+p, q
+
+# a call beside failed slots doesn't run
+p = 8
+q = 9
+p, q = (Pair(n, n) != Pair(0, 0)) + Pair(Quo(7, n), 1)
+p, q
+
+# a call a passing slot needs still runs
+p = 8
+q = 9
+p, q = (Pair(n, m) != Pair(0, 0)) + Pair(Quo(7, m), 1)
+p, q
+
+# a filtered tuple divide on a comparison's right side
+p = 8
+q = 1
+p, q = Pair(9, 9) > (Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0)))
+p, q
+
+# a filtered tuple divide under a negation
+p = 8
+q = 9
+p, q = -(Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0))) < Pair(0, 0)
 p, q
 
 # a loop skips the iteration its filter rejects
@@ -173,6 +316,15 @@ s
 # a filtered call argument in a cell skips the call
 [Quo(7, e[k] != 0)]
 
+# a read past the end skips a cell's call
+[Quo(7, e[k])]
+
+# the same inside arithmetic
+[Quo(7, e[9]) + 1]
+
+# a filtered call argument under a comparison in a cell
+[Quo(a, n != 0) > 0]
+
 # an array-valued cell past the end zero-fills
 [[8 8] ÷ e[9]]
 
@@ -189,6 +341,9 @@ arr = [0 2 -3 0]
 g = 0:4
 arr = [arr[g] != 0 || -1]
 arr
+
+# a scalar check can fall back to a whole array
+([6 8 10] ÷ (n != 0)) || [3 4 5]
 
 # MIN divided by a replaced -1 doesn't stop
 b = -9223372036854775807 - 1

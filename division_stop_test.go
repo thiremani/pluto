@@ -18,6 +18,9 @@ const zeroDivisorLib = `res = Quo(x, n)
 p, q = Pair(x, y)
     p = x
     q = y
+
+res = Row(x, n)
+    res = [(x ÷ n) x]
 `
 
 // buildZeroDivisorPrograms compiles one script per case into a fresh module and
@@ -59,9 +62,30 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 		{"tuple_in_comparison", "v = [7 0]\na = v[0]\nn = v[1]\np, q = (Pair(a, a) ÷ Pair(1, n)) > Pair(0, 0)\np, q"},
 		{"check_on_its_own_line", "v = [7 0]\nn = v[1]\ny = n != 0 1\nx = v[0] ÷ n\ny, x"},
 		{"stale_flag", "v = [7 0]\nn = v[1]\nok = 1\nok = n != 0 1\nx = 5\nx = ok == 1 Quo(v[0], n)\nok, x"},
-		// PIR's checks-first work is planned to make these two keep going.
-		{"filtered_argument_in_comparison", "v = [7 0]\nx = 5\nx = Quo(v[0], v[1] != 0) > 0\nx"},
-		{"call_past_the_end_in_cell", "d = [1 2]\nk = 0:4\n[Quo(7, d[k])]"},
+		{"tuple_failed_slot_beside_zero", "v = [7 0]\na = v[0]\nn = v[1]\np = 99\nq = 88\np, q = (Pair(a, a) ÷ (Pair(n, n) != Pair(0, 5))) > Pair(0, 0)\np, q"},
+		{"tuple_zero_beside_failed_slot", "v = [7 0]\na = v[0]\nn = v[1]\np = 99\nq = 88\np, q = (Pair(a, a) ÷ (Pair(n, n) != Pair(5, 0))) > Pair(0, 0)\np, q"},
+		{"tuple_fallback_beside_zero", "v = [7 0]\na = v[0]\nn = v[1]\np, q = ((Pair(a, a) ÷ (Pair(n, n) != Pair(0, 5))) > Pair(0, 0)) || Pair(1, 9)\np, q"},
+		{"tuple_call_feeds_passing_slot", "v = [7 0]\na = v[0]\nn = v[1]\np = 99\nq = 88\np, q = Pair(a ÷ n, 1) > (Pair(n, 1) != Pair(0, 0))\np, q"},
+		{"tuple_repeated_zero_feeds_passing_slot", "v = [7 0]\na = v[0]\nn = v[1]\np = 99\nq = 88\np, q = ((a ÷ n) + (Pair(n, 1) != Pair(0, 0))) > Pair(0, 0)\np, q"},
+		{"tuple_check_beside_zero", "v = [7 0]\na = v[0]\nn = v[1]\np, q = ((Pair(n, n) != Pair(0, 5)) + (Pair(a, a) ÷ Pair(n, n))) || Pair(1, 9)\np, q"},
+		{"resolved_read_in_cell", "d = [1 2]\nv = [0]\nn = v[0]\nx = [((d[9] > 0) || 2) + 7 ÷ n]\nx"},
+		{"resolved_read_in_nested_cell", "d = [1 2]\nv = [0]\nn = v[0]\nx = [[((d[9] > 0) || 2) 7 ÷ n]]\nx"},
+		{"resolved_check_in_cell", "v = [7 0]\na = v[0]\nn = v[1]\nx = [((a ÷ (n != 0)) || 2) + 7 ÷ n]\nx"},
+		{"resolved_check_in_value", "v = [7 0]\na = v[0]\nn = v[1]\nx = ((a ÷ (n != 0)) || 2) + 7 ÷ n\nx"},
+		{"failed_cell_beside_zero", "d = [1 2]\nv = [0]\nn = v[0]\nx = [[d[9] 7 ÷ n]]\nx"},
+		{"failed_row_beside_zero", "d = [1 2]\nv = [0]\nn = v[0]\nx = [[d[9]] ⊕ [7 ÷ n]]\nx"},
+		{"failed_cell_divides_as_zero", "d = [1 2]\nx = [8 8] ÷ [d[9] 2]\nx"},
+		{"fallback_right_side", "d = [1 2]\nv = [0]\nn = v[0]\nx = (d[9] > 0) || (7 ÷ n)\nx"},
+		{"fallback_right_side_after_check", "v = [0]\nn = v[0]\nx = ((n != 0) + 7) || (7 ÷ n)\nx"},
+		{"passing_check_in_fallback", "v = [3 0]\nm = v[0]\nn = v[1]\nx = ((m != 0) + 7 ÷ n) || 6\nx"},
+		{"passing_check_in_and", "v = [3 0]\nm = v[0]\nn = v[1]\nx = 5\nx = (m > 0) && ((m != 0) + 7 ÷ n)\nx"},
+		{"call_beside_passing_check", "v = [7 0]\nx = 5\nx = Quo(v[0], v[1]) > (v[0] != 0)\nx"},
+		{"passing_check_before_a_call", "v = [3 0]\nm = v[0]\nn = v[1]\nx = 5\nx = (m != 0) + (Quo(7, n) > 0)\nx"},
+		{"check_needs_the_divide", "v = [0]\nn = v[0]\nx = 5\nx = ((7 ÷ n) > 0) + (n != 0)\nx"},
+		// PIR's checks-first work is planned to make these three keep going.
+		{"read_after_the_divide", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (7 ÷ n + d[9]) > 0\nx"},
+		{"fallback_before_a_failed_check", "v = [7 0]\na = v[0]\nn = v[1]\nx = 5\nx = ((a > 9) || Quo(7, n)) + (n != 0)\nx"},
+		{"read_past_the_end_in_array_cell", "d = [1 2]\nx = [Row(7, d[9])]\nx"},
 	}
 	dir := buildZeroDivisorPrograms(t, cases)
 

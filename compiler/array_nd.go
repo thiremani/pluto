@@ -59,9 +59,8 @@ func (c *Compiler) compileArrayValuedCell(child ast.Expression) *Symbol {
 	info := c.ExprCache[key(c.FuncNameMangled, child)]
 	cellSlot := c.newArrayCellSlot(info.OutTypes[0])
 
-	c.pushBoundsGuard("array_cell_bounds_guard")
+	c.pushQuietBoundsGuard("array_cell_bounds_guard")
 	defer c.popBoundsGuard()
-	c.trackDivideChecks(child)
 
 	c.withArrayLiteralCellMode(func() {
 		c.compileCondExprValue(child, func() {

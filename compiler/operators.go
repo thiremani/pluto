@@ -930,11 +930,11 @@ func (c *Compiler) i64Divide(left, right, overflowResult llvm.Value, divide func
 	return result
 }
 
-// stopOnZeroDivisor ends the current block by stopping the program. A check that
-// already failed in this statement means the result won't be used, so it first
-// branches to cont in that case, and reports whether it can.
+// stopOnZeroDivisor ends the current block by stopping the program. A failed guard
+// around this divide means its result won't be used, so it first branches to cont
+// in that case, and reports whether it can.
 func (c *Compiler) stopOnZeroDivisor(cont llvm.BasicBlock) bool {
-	passed, canFail := c.statementChecksPassed()
+	passed, canFail := c.activeBoundsGuardValue("div_guard", true)
 	if canFail {
 		stopBlock := c.Context.AddBasicBlock(c.builder.GetInsertBlock().Parent(), "div_stop")
 		c.builder.CreateCondBr(passed, stopBlock, cont)

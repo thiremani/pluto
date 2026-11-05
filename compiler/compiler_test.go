@@ -92,11 +92,10 @@ r`
 	}
 	falseArm := strings.Index(body, "\ncond_else:")
 	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
-	aMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
-	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new5)")
-	require.NotEqual(t, -1, aMask)
-	require.NotEqual(t, -1, bMask)
-	require.Less(t, bMask, aMask, "the failed condition frees its masks last first, as scopes free bindings")
+	frees := regexp.MustCompile(`call void @arr_i64_free\(ptr (%arr_new\d*)\)`).FindAllStringSubmatch(body[falseArm:], 2)
+	require.Len(t, frees, 2)
+	require.NotEqual(t, "%arr_new", frees[0][1], "the failed condition frees its masks last first, as scopes free bindings")
+	require.Equal(t, "%arr_new", frees[1][1])
 	for range 10 {
 		got, _ := compileScriptAndCodeIR(t, "mask_cleanup_order", code, script)
 		require.Equal(t, want, got)

@@ -859,8 +859,8 @@ ngD = 9
 ngC, ngD = Pair(1, 2) > Pair(0, 5) && -(Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 5))
 "NegationPerSlot: -ngA -ngB -ngC -ngD"
 
-# The calls inside a negation run where they run inside the same arithmetic:
-# inside && and in multi-slot arithmetic. A single-slot root still skips them.
+# A call inside a negation skips as it does inside the same arithmetic, and a
+# call a passing slot needs still runs.
 ngE = 9
 ngE = (1 > 0) && -((1 > 2) + Loud(1))
 ngF = 9
@@ -1328,9 +1328,8 @@ msX = 0
 msX = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3
 "MixedSlotOrGate: -msX"
 
-# Beside a failed comparison: today's evaluation, pinned so that PIR Step 6,
-# planned to run every check before the work beside it, shows here as a diff.
-# Outside every condition, a single-slot value skips its call, on either side.
+# Beside a failed comparison no call runs. A single-slot value skips its call,
+# on either side.
 pbA, pbB = 9, 9
 pbA = (1 > 2) + Loud(1)
 pbB = Loud(2) + (1 > 2)
@@ -1345,7 +1344,7 @@ pcC, pcD = Pair(Loud(3), 1 > 2)
 pcE, pcF = Pair(1 > 2, Loud(4))
 "PosCallArgs: -pcA -pcB -pcC -pcD -pcE -pcF"
 
-# Inside a comparison, an || or an &&, the call runs.
+# The same inside a comparison, an || or an &&.
 pdA, pdB, pdD, pdE = 9, 9, 9, 9
 pdA = ((1 > 2) + Loud(1)) > 0
 pdB = 1 > 2 > Loud(2)
@@ -1359,8 +1358,8 @@ peA = [(1 > 2) + Loud(1)]
 peB = [((1 > 2) + Loud(2)) > 0]
 "PosCells: -peA -peB"
 
-# Multi-slot arithmetic runs every leaf, also when a repeat makes it
-# multi-slot.
+# Multi-slot arithmetic skips a leaf when every slot failed, also when a repeat
+# makes it multi-slot.
 pfA, pfB, pfC, pfD = 9, 9, 9, 9
 pfA, pfB = (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(1), Loud(2))
 pfC, pfD = (Pair(1, 2) > Pair(5, 5)) + Loud(3)
@@ -1380,6 +1379,36 @@ pfC, pfD = (Pair(1, 2) > Pair(5, 5)) + Loud(3)
 "PosPrintCell:", [((1 > 2) + Loud(10)) > 0]
 "PosPrintMultiSlot:", (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(11), Loud(12))
 "PosPrintRepeat:", (Pair(1, 2) > Pair(5, 5)) + Loud(13)
+
+# A read past the end skips a cell's call.
+pgArr = [1 2]
+phA = [Loud(pgArr[5])]
+"PosCellRead: -phA"
+
+# A slot stops at its first failed check, so a later check's call doesn't run.
+piA, piB = 9, 9
+piA, piB = Pair(1 > 2, Loud(1) > 0)
+piC, piD = 9, 9
+piC = (1 > 2) + (Loud(2) > 0)
+piD = (1 > 2) > (Loud(3) > 0)
+"PosFirstFailure: -piA -piB -piC -piD"
+"PosPrintFirstFailure:", 1 > 2, Loud(4) > 0
+
+# Passing checks keep source order, and a check's call runs before the work
+# beside it.
+pjA = (Loud(1) > 0) + (Loud(2) > 0)
+pjB = Loud(3) + (Loud(4) > 0)
+pjC = (Loud(5) + (Loud(6) > 0)) || 9
+pjD, pjE = Pair(Loud(7), 1) + (Pair(Loud(8), 2) > Pair(0, 0))
+"PosOrder: -pjA -pjB -pjC -pjD -pjE"
+
+# Not checked first yet, pinned so that PIR Step 6, planned to run every check
+# before the work beside it, shows here as a diff: a read is tested where it is
+# read, and an || runs where it stands among the checks.
+pgA, pgB = 9, 9
+pgA = Loud(1) + pgArr[5]
+pgB = ((1 > 9) || Loud(2)) + (1 > 2)
+"PosNotYet: -pgA -pgB"
 
 # Checking every result of a call in a cell takes a helper that returns one
 # value per call; a gate checks every slot itself.

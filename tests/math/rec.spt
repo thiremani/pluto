@@ -27,3 +27,6 @@ o1, o2
 
 x1, x2 = IsOdd(6)
 x1, x2
+
+s1 = SumDown(3)
+s1

@@ -135,12 +135,13 @@ type Compiler struct {
 }
 
 type stmtCtx struct {
-	condStack         []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
-	boundsStack       []boundsGuardFrame      // Nested bounds guards active within this statement
-	loopBoundsStack   []loopBoundsFrame       // Loop bounds mode stack active within this statement
-	arrayLitCellDepth int                     // Nested array-literal cell compilation frames active within this statement
-	condTempDest      map[string]string       // Synthetic conditional destination -> the source destination it stands in for
-	stagedSlots       map[llvm.Value]struct{} // Slots standing in for destinations; a loop over the statement may write them
+	condStack         []map[ExprKey][]*Symbol  // Cond-expr frames (one map per compileCondExprValue invocation)
+	boundsStack       []boundsGuardFrame       // Nested bounds guards active within this statement
+	loopBoundsStack   []loopBoundsFrame        // Loop bounds mode stack active within this statement
+	arrayLitCellDepth int                      // Nested array-literal cell compilation frames active within this statement
+	condTempDest      map[string]string        // Synthetic conditional destination -> the source destination it stands in for
+	stagedSlots       map[llvm.Value]struct{}  // Slots standing in for destinations; a loop over the statement may write them
+	slotChecks        map[ExprKey][]llvm.Value // Checks guarding each slot of a tuple's operators
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -1838,7 +1839,7 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 		case CondOr, CondAnd:
 			panic("internal: value-position logical OR/AND must be lowered through conditional expression branching")
 		case CondNone:
-			res = append(res, c.compileInfix(expr.Operator, l, r, info.OutTypes[i]))
+			res = append(res, c.compileInfixSlot(expr, i, l, r, info.OutTypes[i]))
 		default:
 			// A new CondMode must be classified here deliberately: falling
 			// through would lower a conditional slot as plain arithmetic.
@@ -1852,6 +1853,20 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	c.freeConsumedTemporary(expr.Right, right)
 
 	return res
+}
+
+// compileInfixSlot applies expr's operator to one slot, under that slot's own
+// check if the slot has one.
+func (c *Compiler) compileInfixSlot(expr *ast.InfixExpression, i int, l, r *Symbol, outType Type) *Symbol {
+	check := slotCondAt(c.currentStmtCtx().slotChecks[key(c.FuncNameMangled, expr)], i)
+	if check.IsNil() {
+		return c.compileInfix(expr.Operator, l, r, outType)
+	}
+
+	c.pushBoundsGuard("slot_bounds_guard")
+	defer c.popBoundsGuard()
+	c.recordStmtBoundsCheck(check)
+	return c.compileInfix(expr.Operator, l, r, outType)
 }
 
 // compileShortCircuitAnd emits a lazy i1 conjunction. compileRight is invoked
@@ -3124,7 +3139,7 @@ func (c *Compiler) runCallWithBounds(run func()) {
 }
 
 func (c *Compiler) runCallWithBoundsElse(run func(), onSkip func()) {
-	if !c.withStmtBoundsGuard(
+	if !c.withActiveBoundsGuard(
 		"call_bounds_ok",
 		"call_bounds_run",
 		"call_bounds_skip",

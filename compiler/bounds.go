@@ -12,10 +12,9 @@ import (
 type boundsGuardFrame struct {
 	guard llvm.Value
 	used  bool
-	// divChecks holds checks that only keep a zero divisor from stopping the
-	// program: a read a cell materializes as zero, or an operand's own check.
-	// Nil unless the frame's expression divides.
-	divChecks llvm.Value
+	// quiet means a failed check skips no work here, because a failed array-valued
+	// cell must keep its shape. It still keeps a zero divisor from stopping.
+	quiet bool
 }
 
 type loopBoundsMode int
@@ -39,7 +38,7 @@ func (c *Compiler) stmtBoundsUsed() bool {
 	return ctx.boundsStack[len(ctx.boundsStack)-1].used
 }
 
-func (c *Compiler) activeBoundsGuardValue(loadName string) (llvm.Value, bool) {
+func (c *Compiler) activeBoundsGuardValue(loadName string, includeQuiet bool) (llvm.Value, bool) {
 	ctx := c.currentStmtCtx()
 	if ctx == nil || len(ctx.boundsStack) == 0 {
 		return llvm.Value{}, false
@@ -48,7 +47,7 @@ func (c *Compiler) activeBoundsGuardValue(loadName string) (llvm.Value, bool) {
 	var guard llvm.Value
 	used := false
 	for i, frame := range ctx.boundsStack {
-		if !frame.used {
+		if !frame.used || (frame.quiet && !includeQuiet) {
 			continue
 		}
 		curr := c.createLoad(frame.guard, Int{Width: 1}, fmt.Sprintf("%s_%d", loadName, i))
@@ -73,68 +72,16 @@ func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 	return guardPtr
 }
 
+// pushQuietBoundsGuard pushes a guard whose failed checks skip no work.
+func (c *Compiler) pushQuietBoundsGuard(name string) {
+	c.pushBoundsGuard(name)
+	ctx := c.currentStmtCtx()
+	ctx.boundsStack[len(ctx.boundsStack)-1].quiet = true
+}
+
 func (c *Compiler) popBoundsGuard() {
 	ctx := c.currentStmtCtx()
 	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
-}
-
-// exprDivides reports whether expr holds a ÷ or %.
-func exprDivides(expr ast.Expression) bool {
-	if infix, ok := expr.(*ast.InfixExpression); ok && (infix.Operator == token.SYM_QUO || infix.Operator == token.SYM_MOD) {
-		return true
-	}
-	for _, child := range ast.ExprChildren(expr) {
-		if exprDivides(child) {
-			return true
-		}
-	}
-	return false
-}
-
-// trackDivideChecks gives the top frame a divChecks guard when expr divides, and
-// reports whether it did.
-func (c *Compiler) trackDivideChecks(expr ast.Expression) bool {
-	if !exprDivides(expr) {
-		return false
-	}
-
-	ctx := c.currentStmtCtx()
-	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
-	frame.divChecks = c.createEntryBlockAlloca(c.Context.Int1Type(), "div_checks")
-	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), frame.divChecks, Int{Width: 1})
-	return true
-}
-
-// recordDivideCheck ANDs ok into the nearest divChecks guard, if there is one.
-func (c *Compiler) recordDivideCheck(ok llvm.Value) {
-	ctx := c.currentStmtCtx()
-	for i := len(ctx.boundsStack) - 1; i >= 0; i-- {
-		frame := ctx.boundsStack[i]
-		if frame.divChecks.IsNil() {
-			continue
-		}
-		curr := c.createLoad(frame.divChecks, Int{Width: 1}, "div_checks_curr")
-		c.createStore(c.builder.CreateAnd(curr, ok, "div_checks_and"), frame.divChecks, Int{Width: 1})
-		return
-	}
-}
-
-// statementChecksPassed reports whether every check so far in this statement
-// passed, and whether any could have failed.
-func (c *Compiler) statementChecksPassed() (llvm.Value, bool) {
-	passed, canFail := c.activeBoundsGuardValue("div_guard")
-	for _, frame := range c.currentStmtCtx().boundsStack {
-		if frame.divChecks.IsNil() {
-			continue
-		}
-		curr := c.createLoad(frame.divChecks, Int{Width: 1}, "div_checks_load")
-		if !canFail {
-			passed, canFail = curr, true
-			continue
-		}
-		passed = c.builder.CreateAnd(passed, curr, "div_checks_all")
-	}
-	return passed, canFail
 }
 
 // recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
@@ -214,7 +161,7 @@ func (c *Compiler) withActiveBoundsGuard(
 	// Active guards compose across nested contexts. This is intentional for mixed
 	// ranged lowering: an inner tuple/cell guard may only proceed when every
 	// outer statement/iteration guard is still true.
-	guard, ok := c.activeBoundsGuardValue(loadName)
+	guard, ok := c.activeBoundsGuardValue(loadName, false)
 	if !ok {
 		return false
 	}
