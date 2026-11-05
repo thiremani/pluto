@@ -491,17 +491,15 @@ follow the same order: a check's own calls run before the work it gates, so
 `x = io() + (io() > 0)` runs the second `io()` first, and a statement boundary
 keeps text order (`v = io()`, then `x = v + (v > 0)`).
 
-**Status (decided; PIR Steps 6–8):** today's lowering evaluates comparisons
-before the other operands in single-slot values, call arguments, cells and
-prints, but runs every one of them before testing any, so
-`a, b = Pair(1 > 2, Loud(7) > 0)` calls `Loud`. Elsewhere it doesn't check
-first yet: an out-of-bounds read is checked where it is read
-(`Loud(1) + arr[oob]` calls `Loud`), and work inside a comparison's operands,
-an `&&` right side, an `||` left side or multi-slot arithmetic runs before the
-checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). A zero divisor
-reached this way stops the program only if no check in its statement has failed
-yet. PIR Step 6 makes non-ranged statements and prints check first, and ranged
-statements and collector cells follow when they migrate in Steps 7 and 8.
+**Status (decided; PIR Steps 6–8):** today's lowering follows this order for
+comparisons: after a failed comparison, the calls and divides in that slot's
+later checks and other work don't run. An out-of-bounds read isn't a check yet.
+It is tested where it is read, so `Loud(1) + arr[oob]` calls `Loud`. An `||` runs
+where it stands among the checks, so `((1 > 9) || Loud(2)) + (1 > 2)` calls
+`Loud`. A zero divisor stops the program unless a check of its own scope and slot
+has failed by then, so `(7 ÷ n + arr[oob]) > 0` stops. PIR Step 6 makes non-ranged
+statements and prints check first, and ranged statements and collector cells
+follow when they migrate in Steps 7 and 8.
 
 ## Why this model
 
@@ -570,10 +568,10 @@ statements and collector cells follow when they migrate in Steps 7 and 8.
   the atomic unit, not one physical line: a slot's formatted representation
   may itself span lines, as whole-`Struct` printing does, and suppression
   removes all of it. Failed-conditional suppression is today's behavior,
-  retained with its order — the arguments' checks run first, so a suppressed
-  invocation evaluates none of its other arguments ("Evaluation order: checks
-  first" above) — except that checks now stop at the first failure: today
-  `"print", 1 > 2, Loud(8) > 0` still calls `Loud`. This is the general
+  retained with its order — the arguments' checks run first and stop at the
+  first failure, so `"print", 1 > 2, Loud(8) > 0` calls no `Loud` and a
+  suppressed invocation evaluates none of its other arguments ("Evaluation
+  order: checks first" above). This is the general
   invocation rule, not a print special case: neither
   `F(sideEffect(), failingArg)` nor `F(failingArg, sideEffect())` runs the
   side effect. The out-of-bounds case changes: today an OOB argument

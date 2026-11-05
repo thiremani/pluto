@@ -146,21 +146,14 @@ comparison guards the work beside it wherever it is written, as a gate or an
 checks first and placing the rest of its work in a `require` region on them
 (§4).
 
-Today's lowering already evaluates comparisons before the other operands in
-a single-slot value, a call's arguments, a cell and a print:
-`compileCondExprValue` and `compileCondOperands` evaluate every extracted
-condition first and compile the other operands only on the success branch.
-The rest of the order is a **behavior change**:
-
-- Checks stop at the first failure. Today every extracted condition runs
-  before any is tested, so `a, b = Pair(1 > 2, Loud(7) > 0)` and
-  `"print", 1 > 2, Loud(8) > 0` call `Loud`; afterward neither does.
-- A checked access becomes a check, so `Loud(1) + arr[oob]` stops calling
-  `Loud`, and an OOB print argument suppresses the invocation instead of
-  printing its materialized zero (§9).
-- Work beside a failed check inside a comparison's operands, an `&&` right
-  side, a `fallback`'s left side or multi-slot arithmetic stops running, so
-  `(1 > 0) && ((1 > 2) + Loud(1))` stops calling `Loud`.
+Today's lowering already follows this order for comparisons: extraction
+evaluates each one under a guard of those before it, and the other operands
+run under a guard of the checks, so `a, b = Pair(1 > 2, Loud(7) > 0)` and
+`(1 > 0) && ((1 > 2) + Loud(1))` call no `Loud`. The rest of the order is a
+**behavior change**: a checked access becomes a check, so `Loud(1) + arr[oob]`
+stops calling `Loud`, and an OOB print argument suppresses the invocation
+instead of printing its materialized zero (§9); and an `||` that can't fail
+becomes work, so `((1 > 9) || Loud(2)) + (1 > 2)` stops calling `Loud`.
 
 Step 6 makes these changes for non-ranged statements and prints, including
 the checked-only assignments Step 5 migrates in today's order; ranged
@@ -1332,16 +1325,14 @@ append.
   `F(failingArg, sideEffect())` runs the side effect, and
   `F(sideEffect(), passingArg)` runs it once. After #123 no non-ranged call
   defers here for its callee's write effects. `value_cond_expr`'s `Pos` blocks
-  pin today's evaluation beside a failed comparison, in values, calls, cells
-  and prints, so their `.exp` changes here: no call beside a failed check
-  runs, so every `called` line in the `Pos` blocks goes, as does
-  `NegationCalls`' `called 1`.
+  pin that no call beside a failed check runs, in values, calls, cells and
+  prints, and its `PosNotYet` block pins the evaluation still to change, so that
+  block's `called` lines go here.
 - All non-ranged prints lower as `PrintPlan`s (§3), including call
   arguments: a call that runs writes every output, so a call argument fails
   only through its own arguments or invocation.
-  The conditional suppression outcome is retained, checks now stop at the
-  first failure, and an OOB read becomes a check, so its materialized zero
-  becomes invocation suppression (§3, §9). Update
+  The conditional suppression outcome is retained, and an OOB read becomes a
+  check, so its materialized zero becomes invocation suppression (§3, §9). Update
   `tests/array/oob_print.exp` in the same PR, with regressions for a
   side-effecting or owned-heap sibling of a failed conditional or OOB read,
   which never runs or allocates, and for a failed sibling suppressing a

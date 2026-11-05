@@ -72,12 +72,22 @@ old 1. Save a flag with `ok = n != 0 && 1 || 0`, then gate on it:
 
 An out-of-bounds divisor counts as a failed check: `x = a ÷ v[9]` keeps `x`. An
 array comparison doesn't: `d != 0` leaves zero cells in place, so
-`[8 8] ÷ (d != 0)` stops, and a `||` fallback on whole arrays is a compile error.
+`[8 8] ÷ (d != 0)` stops, and `([8 8] ÷ (d != 0)) || -1` is a compile error
+because nothing in it can fail. A scalar check can fail, so
+`([6 8 10] ÷ (n != 0)) || [3 4 5]` gives `[3 4 5]`.
 
-Two spellings stop despite a check, because today the function runs before the
-check does: `x = Div(a, n != 0) > 0`, and `x = [Div(7, d[k])]` with `k` past the
-end. `x = n != 0 Div(a, n) > 0` and `x = [Div(7, d[k] != 0)]` keep going. PIR's
-checks-first work (Steps 6-8) is planned to fix both.
+A failed check protects only the work in its own scope and slot. A failure that a
+`||` or a cell resolves protects nothing after it, so
+`[((v[9] > 0) || 2) + 7 ÷ n]` stops. In
+`p, q = (Pair(a, a) ÷ (Pair(n, n) != Pair(0, 5))) > Pair(0, 0)` the first slot's
+check fails and the second's passes, so the second slot's divide stops.
+
+Three spellings stop despite a check, because today the divide or call runs
+before the check does: a read after the divide, `x = (7 ÷ n + v[9]) > 0`; a
+fallback's right side before a later check, `x = ((a > 9) || Div(7, n)) + (n != 0)`;
+and a function that divides, called with a read past the end in an array-valued
+cell, `x = [Row(7, d[9])]`. PIR's checks-first work (Steps 6-8) is planned to fix
+these.
 
 ## Shift counts
 
