@@ -439,9 +439,9 @@ evaluated only when a slot its context still needs depends on it — a needed
 slot whose left side yielded, for an `&&`, or that its left side left empty,
 for an `||`. A statement needs every slot of its value
 and a gate every slot of its condition; an `&&` or `||` passes its need to its
-left side, arithmetic and negation pass each slot's need to their operands, and
-a call, an index or a comparison needs every slot of its operands whenever it
-runs. So `c > 0 && (a > 2 || 7)` composes (the inner `||` resolves inside the
+left side, arithmetic and negation pass each slot's need to their operands, less
+the slots a check before that operand has failed, and a call, an index or a
+comparison needs every slot of its operands whenever it runs. So `c > 0 && (a > 2 || 7)` composes (the inner `||` resolves inside the
 gated arm), and regrouping a chain keeps the calls it makes: with `p` standing
 for `Pair(1, 2) > Pair(0, 5)`, which fails its second slot, and `q` for
 `Pair(1, 2) > Pair(5, 0)`, which fails its first, neither `p && (q && F())` nor
@@ -496,8 +496,9 @@ comparisons: after a failed comparison, the calls and divides in that slot's
 later checks and other work don't run. An out-of-bounds read isn't a check yet.
 It is tested where it is read, so `Loud(1) + arr[oob]` calls `Loud`. An `||` runs
 where it stands among the checks, so `((1 > 9) || Loud(2)) + (1 > 2)` calls
-`Loud`. A zero divisor stops the program unless a check of its own scope and slot
-has failed by then, so `(7 ÷ n + arr[oob]) > 0` stops. PIR Step 6 makes non-ranged
+`Loud`. A comparison with no range runs before the loop of a ranged check beside
+it. A zero divisor stops the program unless a check of its own scope and slot has
+failed by then, so `(7 ÷ n + arr[oob]) > 0` stops. PIR Step 6 makes non-ranged
 statements and prints check first, and ranged statements and collector cells
 follow when they migrate in Steps 7 and 8.
 

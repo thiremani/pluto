@@ -1318,7 +1318,9 @@ append.
   `x, y = A && ((A || G(7)) > 0)` calls no `G`, and
   `x, y = A && ((Pair(10, 10) ÷ (A || Pair(G(7), G(8)))) > 0)` calls no `G`
   and doesn't divide by the slot the `||` leaves empty. `logical_ops`'s
-  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here.
+  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here. So
+  does the stop test's `need_stops_at_a_comparison`: a zero divisor in that right
+  side stops the program today, even for a slot an earlier check failed.
 - Calls with an argument whose conditional or checked failure remains
   unresolved (matrix row 6c), which gain checks-first evaluation (§3) with
   regressions: neither `F(sideEffect(), failingArg)` nor
@@ -1345,7 +1347,9 @@ append.
 - Then ranged gates and ranged conditional combinations, including the ranged
   logical trees `compileCondExprStatement` routes to staging today; `continue`
   versus `skip` scopes become explicit. Each iteration's failure scopes take
-  §3's checks-first order here.
+  §3's checks-first order here, so a comparison with no range stops running
+  before the loop of a ranged check beside it. The stop test's
+  `ranged_check_before_a_divide` pins today's stop.
 - Step 6's need through comparison operands, for ranged conditionals. Over
   `i = 0:3`, `x, y = Pair(i, 1) > Pair(0, 5) && ((Pair(i, 1) > Pair(0, 5) ||
   G(i)) > 0)` calls `G` on no iteration (legacy lowering calls it on 1 and 2).

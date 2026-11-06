@@ -80,14 +80,27 @@ A failed check protects only the work in its own scope and slot. A failure that 
 `||` or a cell resolves protects nothing after it, so
 `[((v[9] > 0) || 2) + 7 ÷ n]` stops. In
 `p, q = (Pair(a, a) ÷ (Pair(n, n) != Pair(0, 5))) > Pair(0, 0)` the first slot's
-check fails and the second's passes, so the second slot's divide stops.
+check fails and the second's passes, so the second slot's divide stops. A slot
+that failed stays failed through the checks after it, so
+`p, q = (Pair(1, 1) > Pair(2, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)` keeps `p` and
+sets `q`.
 
-Three spellings stop despite a check, because today the divide or call runs
-before the check does: a read after the divide, `x = (7 ÷ n + v[9]) > 0`; a
-fallback's right side before a later check, `x = ((a > 9) || Div(7, n)) + (n != 0)`;
-and a function that divides, called with a read past the end in an array-valued
-cell, `x = [Row(7, d[9])]`. PIR's checks-first work (Steps 6-8) is planned to fix
-these.
+These spellings stop despite a check, because today the divide or call runs before
+the check does, or for a slot that has already failed:
+
+- A read runs after the comparisons beside it: `x = (7 ÷ n + v[9]) > 0` and
+  `x = (v[9] + 1) + ((7 ÷ n) > 0)`.
+- A fallback's right side runs before a later check:
+  `x = ((a > 9) || Div(7, n)) + (n != 0)`.
+- A function that divides is called with a read past the end in an array-valued
+  cell: `x = [Row(7, d[9])]`.
+- A comparison with no range runs before the loop of a ranged check beside it:
+  `x = (i > 5) + ((7 ÷ n) > 0)`.
+- An `||` inside a comparison runs its right side for every slot its left side
+  missed, even one an earlier check failed:
+  `p, q = (Pair(1, 1) > Pair(2, n)) + (((Pair(1, 1) > Pair(2, n)) || (7 ÷ n)) > -99)`.
+
+PIR's checks-first work (Steps 6-8) is planned to fix these.
 
 ## Shift counts
 
