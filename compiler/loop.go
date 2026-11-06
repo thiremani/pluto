@@ -129,9 +129,9 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRangeExpression]struct{}) {
 	ctx := c.currentStmtCtx()
 	ctx.loopBoundsStack = append(ctx.loopBoundsStack, loopBoundsFrame{
-		mode:       mode,
-		fastAccess: fast,
-		slotChecks: maps.Clone(ctx.slotChecks),
+		mode:            mode,
+		fastAccess:      fast,
+		savedSlotChecks: maps.Clone(ctx.slotChecks),
 	})
 }
 
@@ -140,7 +140,7 @@ func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRa
 func (c *Compiler) popLoopBoundsMode() {
 	ctx := c.currentStmtCtx()
 	last := len(ctx.loopBoundsStack) - 1
-	ctx.slotChecks = ctx.loopBoundsStack[last].slotChecks
+	ctx.slotChecks = ctx.loopBoundsStack[last].savedSlotChecks
 	ctx.loopBoundsStack = ctx.loopBoundsStack[:last]
 }
 

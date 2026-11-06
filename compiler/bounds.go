@@ -26,9 +26,9 @@ const (
 )
 
 type loopBoundsFrame struct {
-	mode       loopBoundsMode
-	fastAccess map[*ast.ArrayRangeExpression]struct{}
-	slotChecks map[ExprKey][]llvm.Value
+	mode            loopBoundsMode
+	fastAccess      map[*ast.ArrayRangeExpression]struct{}
+	savedSlotChecks map[ExprKey][]llvm.Value
 }
 
 func (c *Compiler) stmtBoundsUsed() bool {

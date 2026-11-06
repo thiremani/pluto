@@ -754,7 +754,10 @@ func (c *Compiler) guardSlots(node ast.Expression, conds []llvm.Value) []llvm.Va
 	return checks
 }
 
-// slotChecksWith ANDs conds into the checks marked on node.
+// slotChecksWith returns the checks marked on node ANDed with conds, and leaves the
+// marks as they are. Marks say which checks a slot must have passed, so they cross
+// a comparison. needed says which results are wanted, so it stops at a comparison,
+// which reads every operand slot.
 func (c *Compiler) slotChecksWith(node ast.Expression, conds []llvm.Value) []llvm.Value {
 	marked := c.currentStmtCtx().slotChecks[key(c.FuncNameMangled, node)]
 	if len(marked) == 0 {
@@ -763,8 +766,8 @@ func (c *Compiler) slotChecksWith(node ast.Expression, conds []llvm.Value) []llv
 	return c.andOperandConds([][]llvm.Value{marked, conds}, len(marked), "slot_check")
 }
 
-// markSlotChecks records the checks each slot must have passed, for expr and the
-// operators under it whose slots line up with checks.
+// markSlotChecks replaces the marks on expr and the operators under it whose slots
+// line up with checks, so checks must already include what those slots answer to.
 func (c *Compiler) markSlotChecks(expr ast.Expression, checks []llvm.Value) {
 	op, ok := expr.(ast.Operation)
 	if !ok || len(checks) < 2 || len(c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes) != len(checks) {
