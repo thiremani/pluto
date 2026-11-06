@@ -141,7 +141,7 @@ type stmtCtx struct {
 	arrayLitCellDepth int                      // Nested array-literal cell compilation frames active within this statement
 	condTempDest      map[string]string        // Synthetic conditional destination -> the source destination it stands in for
 	stagedSlots       map[llvm.Value]struct{}  // Slots standing in for destinations; a loop over the statement may write them
-	slotChecks        map[ExprKey][]llvm.Value // Checks guarding each slot of a tuple's operators
+	slotChecks        map[ExprKey][]llvm.Value // Checks each slot of a tuple's operators must have passed
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {

@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/thiremani/pluto/ast"
 	"tinygo.org/x/go-llvm"
@@ -130,12 +131,17 @@ func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRa
 	ctx.loopBoundsStack = append(ctx.loopBoundsStack, loopBoundsFrame{
 		mode:       mode,
 		fastAccess: fast,
+		slotChecks: maps.Clone(ctx.slotChecks),
 	})
 }
 
+// popLoopBoundsMode restores the slot checks: each version of a loop lowers the
+// same expressions, and the checks one marks are values of its own blocks.
 func (c *Compiler) popLoopBoundsMode() {
 	ctx := c.currentStmtCtx()
-	ctx.loopBoundsStack = ctx.loopBoundsStack[:len(ctx.loopBoundsStack)-1]
+	last := len(ctx.loopBoundsStack) - 1
+	ctx.slotChecks = ctx.loopBoundsStack[last].slotChecks
+	ctx.loopBoundsStack = ctx.loopBoundsStack[:last]
 }
 
 func (c *Compiler) currentLoopBoundsMode() loopBoundsMode {

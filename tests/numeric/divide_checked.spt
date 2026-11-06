@@ -206,6 +206,112 @@ q = 9
 p, q = (Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))
 p, q
 
+# a failed slot stays failed through a later comparison
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# the same when the second slot failed
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(n, m)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)
+p, q
+
+# the same inside a comparison
+p = 8
+q = 9
+p, q = ((Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)) > 0
+p, q
+
+# the same on a comparison's right side
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (Pair(9, 9) > (Pair(a, a) ÷ Pair(n, 1)))
+p, q
+
+# the same after a negation
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((-(Pair(a, a) ÷ Pair(n, 1))) < 0)
+p, q
+
+# the same for a remainder
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) % Pair(n, 2)) > 0)
+p, q
+
+# the same through a function
+p, q = SlotChecks(a, n)
+p, q
+
+# two slots that failed in turn leave nothing to run
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(n, m)) + ((7 ÷ n) > 0))
+p, q
+
+# an && right side divides only for the slots it takes
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) && (Pair(a, a) ÷ Pair(n, 1))
+p, q
+
+# the same inside a comparison
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# an || right side divides only for the slots it fills
+p, q = (Pair(1, 1) > Pair(n, m)) || (Pair(a, a) ÷ Pair(n, 1))
+p, q
+
+# the same when it isn't a plain value
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(m, m)) || (Pair(a, a) ÷ (Pair(n, 1) > Pair(-1, -1))))
+p, q
+
+# an || left side skips a slot that already failed
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(a, a) ÷ Pair(n, 1)) > 0) || Pair(5, 5))
+p, q
+
+# an || right side nothing needs doesn't run
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(m, n)) || Quo(7, n))
+p, q
+
+# an || inside a comparison keeps an earlier failure
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(1, 1) > Pair(m, n)) || (Pair(a, a) ÷ Pair(n, 1))) > -99)
+p, q
+
+# and so does an &&
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(1, 1) > Pair(n, n)) && (Pair(a, a) ÷ Pair(n, 1))) > -99)
+p, q
+
+# a failed read guards the plain operands after it
+x = ((e[9] + (1 > 0)) + Quo(7, n)) || -1
+x
+
+# each version of a loop checks slot by slot
+p, q = ((Pair(e[j], e[j]) > Pair(5, 0)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)) || Pair(3, 3)
+p, q
+
+# the same with an &&
+p = 8
+q = 9
+p, q = (Pair(e[j], e[j]) > Pair(5, 0)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
 # the same in a fallback's left side
 p, q = ((Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))) || Pair(1, 9)
 p, q

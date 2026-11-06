@@ -24,3 +24,7 @@ res = Id(x)
 p, q = Pair(x, y)
     p = x
     q = y
+
+p, q = SlotChecks(x, n)
+    p, q = 8, 9
+    p, q = (Pair(1, 1) > Pair(2, n)) + ((Pair(x, x) ÷ Pair(n, 1)) > 0)

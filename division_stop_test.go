@@ -82,10 +82,21 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 		{"call_beside_passing_check", "v = [7 0]\nx = 5\nx = Quo(v[0], v[1]) > (v[0] != 0)\nx"},
 		{"passing_check_before_a_call", "v = [3 0]\nm = v[0]\nn = v[1]\nx = 5\nx = (m != 0) + (Quo(7, n) > 0)\nx"},
 		{"check_needs_the_divide", "v = [0]\nn = v[0]\nx = 5\nx = ((7 ÷ n) > 0) + (n != 0)\nx"},
-		// PIR's checks-first work is planned to make these three keep going.
+		{"later_check_other_slot_failed", "v = [7 0]\na = v[0]\nn = v[1]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)\np, q"},
+		{"later_check_both_slots_passed", "v = [7 0]\na = v[0]\nn = v[1]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(n, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)\np, q"},
+		{"later_check_repeated_divide", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + ((7 ÷ n) > 0)\np, q"},
+		{"later_call_feeds_passing_slot", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + Pair(Quo(7, n), 1)\np, q"},
+		{"later_check_call_feeds_passing_slot", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + (Pair(Quo(7, n), 1) > 0)\np, q"},
+		{"later_check_after_resolved_slot", "v = [7 0]\na = v[0]\nn = v[1]\np, q = 8, 9\np, q = ((Pair(1, 1) > Pair(2, n)) || Pair(5, 5)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)\np, q"},
+		{"fallback_needed_by_passing_slot", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(n, n)) + ((Pair(1, 1) > Pair(2, n)) || Quo(7, n))\np, q"},
+		{"failed_slot_under_a_gate", "v = [7 0]\na = v[0]\nn = v[1]\nx = 5\nx = ((Pair(1, 1) > Pair(2, n)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)) > 0 6\nx"},
+		// PIR's checks-first work is planned to make these keep going.
 		{"read_after_the_divide", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (7 ÷ n + d[9]) > 0\nx"},
+		{"read_beside_a_later_check", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (d[9] + 1) + ((7 ÷ n) > 0)\nx"},
 		{"fallback_before_a_failed_check", "v = [7 0]\na = v[0]\nn = v[1]\nx = 5\nx = ((a > 9) || Quo(7, n)) + (n != 0)\nx"},
 		{"read_past_the_end_in_array_cell", "d = [1 2]\nx = [Row(7, d[9])]\nx"},
+		{"ranged_check_before_a_divide", "v = [0]\nn = v[0]\ni = 0:2\nx = 5\nx = (i > 5) + ((7 ÷ n) > 0)\nx"},
+		{"need_stops_at_a_comparison", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + (((Pair(1, 1) > Pair(2, n)) || (7 ÷ n)) > -99)\np, q"},
 	}
 	dir := buildZeroDivisorPrograms(t, cases)
 
