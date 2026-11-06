@@ -7,12 +7,19 @@ a, b
 c = 9223372036854775807 * 2
 c
 
-# run-time operands wrap the same way
-v = [9223372036854775807 1 2]
-d = v[0] + v[1]
-e = v[0] * v[2]
-f = -d
-d, e, f
+# run-time operands wrap, and comparisons can't assume they don't
+v = [9223372036854775807 1]
+hi = v[0]
+lo = hi + v[1]
+x = 5
+x = (hi + 1) > hi
+y = 5
+y = (lo - 1) < lo
+z = 5
+z = ((hi * 2) ÷ 2) == hi
+n = 5
+n = (-lo) == lo
+lo, x, y, z, n
 
 # ÷ truncates toward zero and % takes the dividend's sign
 w = [7 2 3]
