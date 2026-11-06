@@ -588,32 +588,54 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 	}
 
 	if op, ok := expr.(ast.Operation); ok {
-		var operandConds [][]llvm.Value
-		for _, operand := range op.Operands() {
-			var conds []llvm.Value
-			conds, temps = c.extractSlotConds(operand, temps)
-			if len(conds) > 0 {
-				operandConds = append(operandConds, conds)
-			}
-		}
-		if len(operandConds) == 0 {
-			return nil, temps
-		}
-		return c.andOperandConds(operandConds, len(info.OutTypes), "slot_and"), temps
+		return c.extractOperandConds(op, info, temps)
 	}
 
 	// Non-aligned nodes (calls, indexing, ranges, ...): every child feeds all
 	// output slots, so child conditions AND together and broadcast.
+	all, temps := c.extractChildConds(expr, temps)
+	if all.IsNil() {
+		return nil, temps
+	}
+	return broadcastConds(all, len(info.OutTypes)), temps
+}
+
+// extractOperandConds ANDs an operator's operand conditions slot-wise. Each
+// operand runs under a guard of the checks before it, so a slot stops at its
+// first failed check.
+func (c *Compiler) extractOperandConds(op ast.Operation, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
+	c.pushBoundsGuard("operand_checks_guard")
+	defer c.popBoundsGuard()
+
+	var conds []llvm.Value
+	for _, operand := range op.Operands() {
+		var operandConds []llvm.Value
+		operandConds, temps = c.extractSlotConds(operand, temps)
+		if len(operandConds) == 0 {
+			continue
+		}
+		conds = c.andOperandConds([][]llvm.Value{conds, operandConds}, len(info.OutTypes), "slot_and")
+		c.guardOperands(op, conds)
+	}
+	return conds, temps
+}
+
+// extractChildConds ANDs the conditions of expr's children, each child running
+// under a guard of the checks before it.
+func (c *Compiler) extractChildConds(expr ast.Expression, temps []condTemp) (llvm.Value, []condTemp) {
+	c.pushBoundsGuard("child_checks_guard")
+	defer c.popBoundsGuard()
+
 	var all llvm.Value
 	for _, child := range ast.ExprChildren(expr) {
 		var childConds []llvm.Value
 		childConds, temps = c.extractSlotConds(child, temps)
 		all = c.andConds(all, c.foldSlotConds(childConds), "child_and")
+		if !all.IsNil() {
+			c.recordStmtBoundsCheck(all)
+		}
 	}
-	if all.IsNil() {
-		return nil, temps
-	}
-	return broadcastConds(all, len(info.OutTypes)), temps
+	return all, temps
 }
 
 // extractComparisonSlots evaluates one value-position comparison. Operands are
@@ -624,14 +646,13 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 // conditions. LHS values are retained in the condLHS frame; the left operand
 // is tracked as a temporary unless it is a chained comparison already tracked.
 func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	var lConds, rConds []llvm.Value
-	lConds, temps = c.extractSlotConds(infix.Left, temps)
-	rConds, temps = c.extractSlotConds(infix.Right, temps)
+	checks, temps := c.extractOperandConds(infix, info, temps)
 
 	// An out-of-bounds read while evaluating an operand is a failed condition
 	// on every lane the operand feeds (the read yields nothing, so nothing
 	// computed from it does either).
 	guardPtr := c.pushBoundsGuard("cmp_bounds_guard")
+	c.guardOperands(infix, checks)
 	left := c.compileExpression(infix.Left, nil)
 	right := c.compileExpression(infix.Right, nil)
 	var boundsOK llvm.Value
@@ -650,8 +671,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	conds := make([]llvm.Value, n)
 	lhsSyms := make([]*Symbol, n)
 	for i := range n {
-		operandCond := c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("operand_cond_%d", i))
-		operandCond = c.andConds(operandCond, boundsOK, fmt.Sprintf("operand_bounds_%d", i))
+		operandCond := c.andConds(slotCondAt(checks, i), boundsOK, fmt.Sprintf("operand_bounds_%d", i))
 		switch info.CompareModes[i] {
 		case CondArray:
 			// compileArrayMask handles deref internally. The mask copies the
@@ -714,6 +734,56 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	return conds, temps
 }
 
+// guardOperands makes conds guard what op's operands run from here on, and gives
+// each slot of a tuple operand its own checks.
+func (c *Compiler) guardOperands(op ast.Operation, conds []llvm.Value) {
+	checks := c.guardSlots(op, conds)
+	for _, operand := range op.Operands() {
+		c.markSlotChecks(operand, checks)
+	}
+}
+
+// guardSlots makes conds a real guard on the top frame, on top of the checks
+// marked on node, and returns them all: a slot that failed runs nothing more, so
+// later work runs only if some slot passed.
+func (c *Compiler) guardSlots(node ast.Expression, conds []llvm.Value) []llvm.Value {
+	checks := c.slotChecksWith(node, conds)
+	if alive := c.orSlotConds(checks, "slots_alive"); !alive.IsNil() {
+		c.recordStmtBoundsCheck(alive)
+	}
+	return checks
+}
+
+// slotChecksWith returns the checks marked on node ANDed with conds, and leaves the
+// marks as they are. Marks say which checks a slot must have passed, so they cross
+// a comparison. needed says which results are wanted, so it stops at a comparison,
+// which reads every operand slot.
+func (c *Compiler) slotChecksWith(node ast.Expression, conds []llvm.Value) []llvm.Value {
+	marked := c.currentStmtCtx().slotChecks[key(c.FuncNameMangled, node)]
+	if len(marked) == 0 {
+		return conds
+	}
+	return c.andOperandConds([][]llvm.Value{marked, conds}, len(marked), "slot_check")
+}
+
+// markSlotChecks replaces the marks on expr and the operators under it whose slots
+// line up with checks, so checks must already include what those slots answer to.
+func (c *Compiler) markSlotChecks(expr ast.Expression, checks []llvm.Value) {
+	op, ok := expr.(ast.Operation)
+	if !ok || len(checks) < 2 || len(c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes) != len(checks) {
+		return
+	}
+
+	ctx := c.currentStmtCtx()
+	if ctx.slotChecks == nil {
+		ctx.slotChecks = make(map[ExprKey][]llvm.Value)
+	}
+	ctx.slotChecks[key(c.FuncNameMangled, expr)] = checks
+	for _, operand := range op.Operands() {
+		c.markSlotChecks(operand, checks)
+	}
+}
+
 // extractFallbackOrSlots resolves a value-position || into the shared
 // extraction form: chosen values stashed in the condLHS frame under the ||
 // node, yield flags returned as the slot conditions. Every result slot ends
@@ -723,7 +793,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
 	slots := c.newLogicalSlots(info.OutTypes)
 
-	lConds := c.resolveLogicalSide(slots, or.Left, needed, nil)
+	lConds := c.resolveLogicalSide(slots, or.Left, needed)
 
 	// The solver rejects a left that cannot fail, so the fold is never nil.
 	if c.foldSlotConds(lConds).IsNil() {
@@ -735,7 +805,8 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 	// slots.
 	missed := c.narrowNeeded(needed, c.missedConds(lConds), len(slots))
 	c.withCondBranch(c.orSlotConds(missed, "or_some_missed"), "or_rhs", func() {
-		c.resolveLogicalSide(slots, or.Right, missed, c.slotMissedGate(slots))
+		c.markSlotChecks(or.Right, c.slotChecksWith(or, missed))
+		c.resolveLogicalSide(slots, or.Right, missed)
 	}, nil)
 
 	return c.finishLogicalSlots(slots, or, temps)
@@ -763,9 +834,8 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 	slots := c.newLogicalSlots(info.OutTypes)
 	taken := c.narrowNeeded(needed, lConds, len(slots))
 	c.withCondBranch(c.orSlotConds(taken, "and_some_yielded"), "and_rhs", func() {
-		c.resolveLogicalSide(slots, and.Right, taken, func(i int) llvm.Value {
-			return slotCondAt(lConds, i)
-		})
+		c.markSlotChecks(and.Right, c.slotChecksWith(and, taken))
+		c.resolveLogicalSide(slots, and.Right, taken)
 	}, nil)
 
 	return c.finishLogicalSlots(slots, and, temps)
@@ -780,16 +850,6 @@ func (c *Compiler) finishLogicalSlots(slots []logicalSlot, node ast.Expression, 
 	frame[key(c.FuncNameMangled, node)] = loaded
 	temps = append(temps, condTemp{expr: node, syms: loaded})
 	return conds, temps
-}
-
-// slotMissedGate restricts a ||'s right-side stores to slots the left did not
-// already fill.
-func (c *Compiler) slotMissedGate(slots []logicalSlot) func(int) llvm.Value {
-	i1 := Int{Width: 1}
-	return func(i int) llvm.Value {
-		yielded := c.createLoad(slots[i].yield, i1, fmt.Sprintf("or_need_%d", i))
-		return c.builder.CreateNot(yielded, fmt.Sprintf("or_miss_%d", i))
-	}
 }
 
 // orSlotConds ORs per-slot conditions into "any slot yields". A nil entry
@@ -859,23 +919,19 @@ func (c *Compiler) newLogicalSlots(outTypes []Type) []logicalSlot {
 	return slots
 }
 
-// resolveLogicalSide resolves one ||/&& operand into the result slots; needed
-// holds the slots its context needs from it. takeGate (nil = unrestricted)
-// further gates each slot's store: a ||'s right side fills only slots the left
-// left empty, a &&'s right side fills only slots whose left side yielded.
-func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, needed []llvm.Value, takeGate func(int) llvm.Value) []llvm.Value {
+// resolveLogicalSide resolves one ||/&& operand into the slots its context needs
+// from it: a ||'s right side needs the slots its left side left empty, a &&'s
+// right side the slots whose left side yielded.
+func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, needed []llvm.Value) []llvm.Value {
 	if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) < len(slots) {
-		return c.resolveRepeatedSide(slots, side, takeGate)
+		return c.resolveRepeatedSide(slots, side, needed)
 	}
 
 	before := c.frameMaskKeys()
 	conds, sideTemps := c.prepareSpine(side, needed, nil)
 
 	for i, sl := range slots {
-		cond := slotCondAt(conds, i)
-		if takeGate != nil {
-			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("logical_take_%d", i))
-		}
+		cond := c.andConds(slotCondAt(needed, i), slotCondAt(conds, i), fmt.Sprintf("logical_take_%d", i))
 		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("logical_store_%d", i), func() {
 			c.storeLogicalValue(side, i, sl)
 		})
@@ -888,23 +944,20 @@ func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, 
 
 // resolveRepeatedSide resolves a single-slot side once, into a slot of its
 // own typed by the storage its value is copied from, and copies its value
-// into every result slot that takes it, so each result slot owns its payload.
-// The side's slot is released after the copies.
-func (c *Compiler) resolveRepeatedSide(slots []logicalSlot, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
+// into every needed result slot, so each result slot owns its payload. The
+// side's slot is released after the copies.
+func (c *Compiler) resolveRepeatedSide(slots []logicalSlot, side ast.Expression, needed []llvm.Value) []llvm.Value {
 	own := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes
 	sideType := yieldedStorage(c.ExprCache, c.FuncNameMangled, c.FuncCache[c.FuncNameMangled].Vars, side, own)[0]
 	if ptr, ok := sideType.(Ptr); ok {
 		sideType = ptr.Elem
 	}
 	single := c.newLogicalSlots([]Type{sideType})
-	conds := c.resolveLogicalSide(single, side, nil, nil)
+	conds := c.resolveLogicalSide(single, side, nil)
 	yields, values := c.loadLogicalResults(single)
 
 	for i, sl := range slots {
-		take := yields[0]
-		if takeGate != nil {
-			take = c.andConds(takeGate(i), take, fmt.Sprintf("repeat_take_%d", i))
-		}
+		take := c.andConds(slotCondAt(needed, i), yields[0], fmt.Sprintf("repeat_take_%d", i))
 		c.withCondBranch(take, fmt.Sprintf("repeat_store_%d", i), func() {
 			c.fillLogicalSlot(sl, c.deepCopyIfNeeded(values[0]), fmt.Sprintf("repeat_val_%d", i))
 		}, nil)
@@ -956,13 +1009,7 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	var cond llvm.Value
-	var temps []condTemp
-	for _, child := range ast.ExprChildren(expr) {
-		var childConds []llvm.Value
-		childConds, temps = c.extractSlotConds(child, temps)
-		cond = c.andConds(cond, c.foldSlotConds(childConds), "child_gate")
-	}
+	cond, temps := c.extractChildConds(expr, nil)
 	c.branchCond(cond, temps, onTrue, func() {})
 }
 
@@ -1403,14 +1450,43 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // prepareSpine extracts per-slot conditions for a spine and pre-evaluates its
 // leaves. Comparisons are evaluated by extraction (retaining LHS values and
 // masks in the condLHS frame); any other leaf (call, literal, identifier, ...)
-// is evaluated once here and its slot values stashed in the frame, gated on
-// its own condition when it has one — a call whose argument comparison fails
-// must not run, and the slots reading it are gated by that same condition.
+// is evaluated once here, after the spine's checks and under a guard of them,
+// and its slot values stashed in the frame, gated on its own condition when it
+// has one — a call whose argument comparison fails must not run, and the slots
+// reading it are gated by that same condition.
 // needed is the slots expr's context still needs: nil means every slot, else
 // slot i is needed while needed[i] holds (a nil entry always). Arithmetic and
-// prefix operators pass it to their operands, and an && or || runs its right
-// side only for needed slots.
+// prefix operators pass it to their operands, less the slots already failed, and
+// an && or || runs its right side only for needed slots.
 func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
+	conds, leaves, temps := c.prepareSpineChecks(expr, needed, temps)
+	if len(leaves) == 0 {
+		return conds, temps
+	}
+
+	c.pushBoundsGuard("spine_leaves_guard")
+	defer c.popBoundsGuard()
+
+	n := len(c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes)
+	for _, leaf := range leaves {
+		c.guardSlots(expr, conds)
+		var leafConds []llvm.Value
+		leafConds, temps = c.prepareSpineLeaf(leaf, temps)
+		conds = c.andOperandConds([][]llvm.Value{conds, leafConds}, n, "spine_and")
+	}
+	return conds, temps
+}
+
+// spineLeaf is a plain spine operand and what its own checks fold to.
+type spineLeaf struct {
+	expr ast.Expression
+	cond llvm.Value
+}
+
+// prepareSpineChecks runs a spine's checks, each under a guard of those before
+// it, the checks inside a plain leaf among them, and returns their conditions and
+// the leaves left to run.
+func (c *Compiler) prepareSpineChecks(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []spineLeaf, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// A one-slot node is needed whenever it runs: under a one-slot parent its
 	// slot is the parent's, and repeated into several slots it fills them
@@ -1419,44 +1495,58 @@ func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps 
 		needed = nil
 	}
 
+	var conds []llvm.Value
 	if or, ok := ast.IsLogicalOr(expr); ok && info.HasFallbackOr() {
-		return c.extractFallbackOrSlots(or, info, needed, temps)
+		conds, temps = c.extractFallbackOrSlots(or, info, needed, temps)
+		return conds, nil, temps
 	}
 	if and, ok := ast.IsLogicalAnd(expr); ok && info.HasCondAnd() {
-		return c.extractGatingAndSlots(and, info, needed, temps)
+		conds, temps = c.extractGatingAndSlots(and, info, needed, temps)
+		return conds, nil, temps
 	}
 
 	infix, isInfix := expr.(*ast.InfixExpression)
 	if isInfix && info.HasAnyComparison() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-		return c.extractComparisonSlots(infix, info, temps)
+		conds, temps = c.extractComparisonSlots(infix, info, temps)
+		return conds, nil, temps
 	}
 
-	if op, ok := expr.(ast.Operation); ok && c.isSlotAlignedSpine(expr) {
-		operands := op.Operands()
-		operandConds := make([][]llvm.Value, len(operands))
-		for j, operand := range operands {
-			operandConds[j], temps = c.prepareSpine(operand, needed, temps)
-		}
-		return c.andOperandConds(operandConds, len(info.OutTypes), "spine_and"), temps
+	n := len(info.OutTypes)
+	op, ok := expr.(ast.Operation)
+	if !ok || !c.isSlotAlignedSpine(expr) {
+		var leafConds []llvm.Value
+		leafConds, temps = c.extractSlotConds(expr, temps)
+		leafCond := c.foldSlotConds(leafConds)
+		return broadcastConds(leafCond, n), []spineLeaf{{expr, leafCond}}, temps
 	}
 
-	return c.prepareSpineLeaf(expr, info, temps)
+	c.pushBoundsGuard("spine_checks_guard")
+	defer c.popBoundsGuard()
+
+	var leaves []spineLeaf
+	for _, operand := range op.Operands() {
+		var operandConds []llvm.Value
+		var operandLeaves []spineLeaf
+		operandConds, operandLeaves, temps = c.prepareSpineChecks(operand, c.narrowNeeded(needed, conds, n), temps)
+		conds = c.andOperandConds([][]llvm.Value{conds, operandConds}, n, "spine_check")
+		c.guardOperands(op, conds)
+		leaves = append(leaves, operandLeaves...)
+	}
+	return conds, leaves, temps
 }
 
-// prepareSpineLeaf evaluates one non-comparison spine operand and stashes its
-// slot values in the condLHS frame. A leaf with nested comparisons (e.g. a
-// call with a conditional argument) is evaluated behind its own gate — the
-// false arm stores zero values instead, so the loaded slots always hold
-// freeable values (an StrH zero is an owned heap copy, an array zero is null)
-// and cleanup stays unconditional. Slots reading a gated leaf carry its
-// condition, so a zero seed is never committed.
-func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	var leafConds []llvm.Value
-	leafConds, temps = c.extractSlotConds(expr, temps)
-
+// prepareSpineLeaf evaluates one non-comparison spine operand, stashes its slot
+// values in the condLHS frame, and returns the conditions its reads add. A leaf
+// with nested comparisons (e.g. a call with a conditional argument) is evaluated
+// behind its own gate — the false arm stores zero values instead, so the loaded
+// slots always hold freeable values (an StrH zero is an owned heap copy, an array
+// zero is null) and cleanup stays unconditional. Slots reading a gated leaf carry
+// its condition, so a zero seed is never committed.
+func (c *Compiler) prepareSpineLeaf(leaf spineLeaf, temps []condTemp) ([]llvm.Value, []condTemp) {
+	expr := leaf.expr
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	frame := c.requireCondLHSFrame()
-	leafCond := c.foldSlotConds(leafConds)
-	if leafCond.IsNil() {
+	if leaf.cond.IsNil() {
 		guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 		syms := c.compileExpression(expr, nil)
 		var boundsOK llvm.Value
@@ -1477,7 +1567,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	// The guard alloca lives in the entry block and is seeded in-bounds, so a
 	// skipped leaf reads back as clean.
 	guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
-	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(leaf.cond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
 
 	before := c.branchBorrowedMarks(temps)
 	c.builder.SetInsertPointAtEnd(ifBlock)
@@ -1501,9 +1591,9 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+	var boundsOK llvm.Value
 	if c.stmtBoundsUsed() {
-		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
-		leafCond = c.andConds(leafCond, boundsOK, "leaf_and_bounds")
+		boundsOK = c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
 	}
 	c.popBoundsGuard()
 
@@ -1513,7 +1603,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	}
 	frame[key(c.FuncNameMangled, expr)] = loaded
 	temps = append(temps, condTemp{expr: expr, syms: loaded})
-	return broadcastConds(leafCond, len(info.OutTypes)), temps
+	return broadcastConds(boundsOK, len(info.OutTypes)), temps
 }
 
 // commitSpineSlot commits output slot i of a per-slot spine into its temp

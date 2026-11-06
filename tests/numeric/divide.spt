@@ -1,0 +1,55 @@
+# MIN ÷ -1 wraps to MIN and MIN % -1 is 0 with a literal divisor
+min = -9223372036854775807 - 1
+i = min ÷ -1
+j = min % -1
+i, j
+
+# the same with a run-time divisor
+v = [7 0 -1 2 3]
+k = min ÷ v[2]
+l = min % v[2]
+k, l
+
+# a divisor of -1 negates any other dividend
+m = v[0] ÷ v[2]
+n = v[0] % v[2]
+m, n
+
+# ordinary divisors keep truncating
+o = -v[0] ÷ v[3]
+p = -v[0] % v[4]
+o, p
+
+# quotient and remainder rebuild the dividend
+q1 = ((v[0] ÷ v[3]) * v[3] + (v[0] % v[3])) == v[0]
+q2 = ((min ÷ v[2]) * v[2] + (min % v[2])) == min
+q3 = ((-v[0] ÷ v[4]) * v[4] + (-v[0] % v[4])) == -v[0]
+q1, q2, q3
+
+# a range above zero divides every time
+r = 1:4
+[7 ÷ r]
+
+# array cells use the same rules
+aa = [7 8] ÷ [1 2]
+ab = [7 8] % [5 3]
+ac = [7 8] ÷ v[3]
+ad = 7 ÷ [3 2]
+aa, ab, ac, ad
+
+# a divisor reached through a call follows the same rules
+al = Quo(7, 2)
+am = Rem(7, 2)
+an = Quo(7, v[3])
+ao = Rem(7, v[3])
+al, am, an, ao
+
+# the same function stays IEEE at F64, where a zero divisor doesn't stop
+ar = Quo(7.5, 0.0)
+at = Rem(7.5, 0.0)
+ar, at
+
+# each operand runs once, dividend first
+au = Loud(10) ÷ Loud(2)
+av = Loud(10) % Loud(3)
+au, av

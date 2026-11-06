@@ -8,6 +8,15 @@
 
 // dup_cstr in util.h provides a portable strdup-like helper.
 
+/* Aborts the process; called from generated code when an I64 ÷ or % has a zero
+ * divisor. Flushes stdout first, because abort doesn't on every libc. */
+void div_zero_fail(void) {
+    fflush(stdout);
+    fprintf(stderr, "pluto: division by zero\n");
+    fflush(stderr);
+    abort();
+}
+
 // Concatenate two strings and return a newly allocated string.
 // Caller is responsible for free()ing the returned buffer.
 char *str_concat(const char *left, const char *right) {

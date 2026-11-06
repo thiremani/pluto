@@ -58,7 +58,9 @@ row = [[]0]     # one empty row: shape [1 0], not an empty matrix
 ```
 
 A zero-row matrix keeps no column count: concatenation takes the other
-operand's inner shape.
+operand's inner shape. A zero-width row uses no memory, so `row ⊕ row` can keep
+doubling its row count, and `⊕` aborts with a message if an outer dimension would
+overflow `I64`.
 
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal has one row, however long; an editor

@@ -417,6 +417,15 @@ void array_shape_fail(size_t expected, size_t got) {
     abort();
 }
 
+/* Aborts the process; called from generated code when concatenating arrays
+ * would overflow an outer dimension. Only zero-width rows can get this far,
+ * since they use no memory. */
+void array_dim_overflow(size_t left, size_t right) {
+    fprintf(stderr, "pluto: array dimension overflow: %zu + %zu\n", left, right);
+    fflush(stderr);
+    abort();
+}
+
 const char* table_str(size_t rows, size_t cols, const char* const* names,
                       const int32_t* kinds, const void* const* columns) {
     StrBuf sb = {malloc(256), 0, 256};

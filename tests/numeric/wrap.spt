@@ -1,0 +1,41 @@
+# literal additions and subtractions wrap at the limits
+a = 9223372036854775807 + 1
+b = -9223372036854775807 - 2
+a, b
+
+# literal multiplication wraps
+c = 9223372036854775807 * 2
+c
+
+# run-time operands wrap, and comparisons can't assume they don't
+v = [9223372036854775807 1]
+hi = v[0]
+lo = hi + v[1]
+x = 5
+x = (hi + 1) > hi
+y = 5
+y = (lo - 1) < lo
+z = 5
+z = ((hi * 2) ÷ 2) == hi
+n = 5
+n = (-lo) == lo
+lo, x, y, z, n
+
+# ÷ truncates toward zero and % takes the dividend's sign
+w = [7 2 3]
+g = -w[0] ÷ w[1]
+h = w[0] ÷ -w[1]
+i = -w[0] % w[2]
+j = w[0] % -w[2]
+g, h, i, j
+
+# / and ^ on two I64s give F64
+k = w[0] / w[1]
+l = w[1] ^ 10
+m = w[1] ^ -1
+k, l, m
+
+# an I64 mixed with an F64 rounds past 2^53
+p = (9007199254740992 + 1.0) == 9007199254740992.0
+q = (9007199254740992 + 2.0) == 9007199254740992.0
+p, q

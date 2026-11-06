@@ -61,3 +61,16 @@ nestedInnerOOB = 99
 iInnerOOB = 3
 nestedInnerOOB = arr1[arr2short[iInnerOOB]]
 "NestedInnerOOBSkips: -nestedInnerOOB"
+
+# a cell past the end zero-fills whatever the read feeds
+cellArr = [1 2]
+cellPlus = [cellArr[9] + 1]
+"CellOOBPlusOne: -cellPlus"
+
+# a comparison fed by a failed read fails in a cell too
+cellCmp = [cellArr[9] < 5 && 7]
+"CellOOBComparison: -cellCmp"
+
+# so the cell takes its fallback
+cellOr = [(cellArr[9] + 1 != 0 && 7) || -1]
+"CellOOBFallback: -cellOr"

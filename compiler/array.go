@@ -769,7 +769,10 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 		)
 
 		useRightShape := c.builder.CreateAnd(c.builder.CreateNot(leftNonEmpty, "concat_left_empty"), rightNonEmpty, "concat_use_right_shape")
-		dimensions = []llvm.Value{c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")}
+		outerLen := c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")
+		outerFits := c.builder.CreateICmp(llvm.IntSGE, outerLen, zero, "concat_outer_fits")
+		c.abortOnFalse(outerFits, ARRAY_DIM_OVERFLOW, leftDims[0], rightDims[0], "concat_outer")
+		dimensions = []llvm.Value{outerLen}
 		for i := 1; i < len(leftDims); i++ {
 			dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
 		}
@@ -1097,10 +1100,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	}
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-	ctx := c.currentStmtCtx()
-	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
-		c.recordStmtBoundsCheck(inBounds)
-	}
+	c.recordStmtBoundsCheck(inBounds)
 	if arrType.Rank > 1 {
 		return []*Symbol{{Type: resultType, Val: c.checkedArraySubarray(arraySym, idxVal, inBounds)}}
 	}

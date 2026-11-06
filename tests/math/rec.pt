@@ -22,3 +22,8 @@ x, y = IsOdd(n)
     x, y = "no", "yes"
     # recursive step: if n≠0, flip the pair returned by IsEven(n-1)
     x, y = n != 0 IsEven(n - 1)
+
+# a check beside the call inside a comparison ends the recursion
+res = SumDown(n)
+    res = 0
+    res = (n + SumDown(n - 1)) >= (n > 0)

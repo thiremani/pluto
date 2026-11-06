@@ -54,3 +54,14 @@ res14 = arr1 - 1 ⊕ arr2 - 2
 res15 = arr1 ⊕ (arr2 + 1)
 res16 = arr1 ⊕ arr2 ⊕ [50] + 5
 "ConcatPrecedence:", res13, res14, res15, res16
+
+# two empty matrices concatenate to an empty matrix
+emptyMatrix = [
+]0
+emptyJoin = emptyMatrix ⊕ emptyMatrix
+"EmptyMatrixConcat:", emptyJoin
+
+# zero-width rows add up without using memory
+zeroRow = [[]0]
+zeroRows = zeroRow ⊕ zeroRow
+"ZeroWidthConcat:", zeroRows

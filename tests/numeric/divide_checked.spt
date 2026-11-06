@@ -1,0 +1,402 @@
+v = [7 0 2 1]
+a = v[0]
+n = v[1]
+m = v[2]
+d = [0 2]
+e = [1 2]
+i = n:3
+j = 0:2
+k = 0:4
+
+# a filtered divisor leaves the target unchanged
+x = 5
+x = a ÷ (n != 0)
+f = 5.5
+f = a / (n != 0)
+x, f
+
+# the parentheses around the filter are optional
+x = 5
+x = a ÷ n != 0
+x
+
+# a fallback covers the whole filtered division
+x = (a ÷ (n != 0)) || -1
+f = (a / (n != 0)) || -1.0
+x, f
+
+# without parentheses around the division the fallback becomes the divisor
+x = a ÷ (n != 0) || -1
+x
+
+# a function's output takes a fallback or a prior value
+x = QuoOr(a, n, -1)
+y = QuoFrom(a, n)
+x, y
+
+# a filtered division inside a comparison leaves the target unchanged
+x = 5
+x = (a ÷ (n != 0)) > 0
+x
+
+# the same for a filtered remainder
+x = 5
+x = (a % (n != 0)) == 0
+x
+
+# arithmetic around the filtered division inside a comparison
+x = 5
+x = ((a ÷ (n != 0)) + 1) > 0
+x
+
+# a fallback around that comparison
+x = ((a ÷ (n != 0)) > 0) || -1
+x
+
+# the comparison as a statement gate
+x = 9
+x = (a ÷ (n != 0)) > 0 5
+x
+
+# a gate on the statement protects the divide
+x = 5
+x = n != 0 (a ÷ n) > 0
+x
+
+# so does && before it
+x = 5
+x = n != 0 && a ÷ n
+x
+
+# a filtered call argument skips the call
+x = 5
+x = Quo(a, n != 0)
+x
+
+# a gate on a call inside a comparison
+x = 5
+x = n != 0 Quo(a, n) > 0
+x
+
+# a filtered call argument inside a comparison skips the call
+x = 5
+x = Quo(a, n != 0) > 0
+x
+
+# a chain over a filtered argument
+x = 5
+x = 0 < Quo(a, n != 0) < 9
+x
+
+# a print of a filtered argument's comparison prints nothing
+Quo(a, n != 0) > 0
+
+# a check beside a divide guards it in a fallback's left side
+x = ((n != 0) + 7 ÷ n) || 6
+x
+
+# the same with the divide first
+x = (7 ÷ n + (n != 0)) || 6
+x
+
+# the same for a call
+x = ((n != 0) + Quo(7, n)) || 6
+x
+
+# the same in an && right side
+x = 5
+x = (a > 0) && ((n != 0) + 7 ÷ n)
+x
+
+# a passing check lets the divide run
+x = ((m != 0) + 7 ÷ m) || 6
+x
+
+# a read that failed outside a cell skips the call inside it
+x = 5
+x = v[9] + [Quo(7, n)][0]
+x
+
+# it also keeps a divide inside the cell from stopping
+x = 5
+x = v[9] + [e[0] + 7 ÷ n][0]
+x
+
+# a failed check keeps a later check's divide from stopping
+x = 5
+x = (n != 0) + ((7 ÷ n) > 0)
+x
+
+# the same across a comparison's operands
+x = 5
+x = (n != 0) > (Quo(7, n) > 0)
+x
+
+# the same across a call's arguments
+p = 8
+q = 9
+p, q = Pair(n != 0, Quo(7, n) > 0)
+p, q
+
+# the same across a print's arguments
+"first failure", n != 0, Quo(7, n) > 0
+
+# the same in a cell
+[(n != 0) + (Quo(7, n) > 0)]
+
+# the same across tuple slots
+p = 8
+q = 9
+p, q = (Pair(n, n) != Pair(0, 0)) + (Pair(Quo(7, n), 1) > Pair(0, 0))
+p, q
+
+# tuple slots fail one by one inside a comparison
+p = 8
+q = 9
+p, q = Pair(a ÷ (n != 0), 5) > Pair(0, 0)
+p, q
+
+# a filtered tuple divide inside a comparison
+p = 8
+q = 9
+p, q = (Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0))) > Pair(0, 0)
+p, q
+
+# a check beside a tuple divide guards its own slot
+p = 8
+q = 9
+p, q = (Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))
+p, q
+
+# a failed slot stays failed through a later comparison
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# the same when the second slot failed
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(n, m)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)
+p, q
+
+# the same inside a comparison
+p = 8
+q = 9
+p, q = ((Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)) > 0
+p, q
+
+# the same after a negation
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((-(Pair(a, a) ÷ Pair(n, 1))) < 0)
+p, q
+
+# the same through a function
+p, q = SlotChecks(a, n)
+p, q
+
+# two slots that failed in turn leave nothing to run
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(n, m)) + ((7 ÷ n) > 0))
+p, q
+
+# an && right side divides only for the slots it takes
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) && (Pair(a, a) ÷ Pair(n, 1))
+p, q
+
+# the same inside a comparison
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# an || right side divides only for the slots it fills
+p, q = (Pair(1, 1) > Pair(n, m)) || (Pair(a, a) ÷ Pair(n, 1))
+p, q
+
+# the same when it isn't a plain value
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(m, m)) || (Pair(a, a) ÷ (Pair(n, 1) > Pair(-1, -1))))
+p, q
+
+# an || left side skips a slot that already failed
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(a, a) ÷ Pair(n, 1)) > 0) || Pair(5, 5))
+p, q
+
+# an || right side nothing needs doesn't run
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(1, 1) > Pair(m, n)) || Quo(7, n))
+p, q
+
+# an || inside a comparison keeps an earlier failure
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(1, 1) > Pair(m, n)) || (Pair(a, a) ÷ Pair(n, 1))) > -99)
+p, q
+
+# and so does an &&
+p = 8
+q = 9
+p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(1, 1) > Pair(n, n)) && (Pair(a, a) ÷ Pair(n, 1))) > -99)
+p, q
+
+# a call's argument check runs with the other checks
+p = 8
+q = 9
+p, q = Pair(1 > m, 1) + ((Pair(a, a) ÷ Pair(n, n)) > 0)
+p, q
+
+# the same as an || left side
+x = (Quo(a, 1 > m) + ((7 ÷ n) > 0)) || -1
+x
+
+# a failed read guards the plain operands after it
+x = ((e[9] + (1 > 0)) + Quo(7, n)) || -1
+x
+
+# a failed read fails a call whose own check passed
+x = (Quo(e[9], 1 > 0) + (1 > 0)) || -1
+x
+
+# each version of a loop checks slot by slot
+p, q = ((Pair(e[j], e[j]) > Pair(5, 0)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)) || Pair(3, 3)
+p, q
+
+# the same with an &&
+p = 8
+q = 9
+p, q = (Pair(e[j], e[j]) > Pair(5, 0)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# a check beside a tuple divide guards its slot in a fallback's left side
+p, q = ((Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))) || Pair(1, 9)
+p, q
+
+# a fallback around a filtered tuple divide's comparison
+p, q = ((Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0))) > Pair(0, 0)) || Pair(1, 9)
+p, q
+
+# a call beside failed slots doesn't run
+p = 8
+q = 9
+p, q = (Pair(n, n) != Pair(0, 0)) + Pair(Quo(7, n), 1)
+p, q
+
+# a call a passing slot needs still runs
+p = 8
+q = 9
+p, q = (Pair(n, m) != Pair(0, 0)) + Pair(Quo(7, m), 1)
+p, q
+
+# a filtered tuple divide on a comparison's right side
+p = 8
+q = 1
+p, q = Pair(9, 9) > (Pair(a, a) ÷ (Pair(n, m) != Pair(0, 0)))
+p, q
+
+# a loop skips the iteration its filter rejects
+s = 0
+s = s + 6 ÷ (i != 0)
+s
+
+# the same as a statement gate
+s = 0
+s = (6 ÷ (i != 0)) > 0 s + 1
+s
+
+# a collector zero-fills the cell its filter rejects
+[6 ÷ (i != 0)]
+
+# a cell can take a fallback
+[(6 ÷ (i != 0)) || -1]
+
+# a long sum skips computed zero divisors
+w = 0:1000000
+u = 0
+u = u + ((w * 3) ÷ ((w % 8) != 0))
+u
+
+# an out-of-bounds divisor leaves the target unchanged
+x = 5
+x = a ÷ v[9]
+x
+
+# a fallback around a comparison of that division
+x = ((a ÷ v[9]) > 0) || -1
+x
+
+# an out-of-bounds argument skips the call
+x = 5
+x = Quo(a, v[9])
+x
+
+# a loop skips reads past the end
+s = 0
+s = s + 7 ÷ e[k]
+s
+
+# the same through a call
+s = 0
+s = s + Quo(7, e[k])
+s
+
+# a collector zero-fills cells past the end
+[7 ÷ e[k]]
+
+# the same with the range in the index
+[7 ÷ e[0:4]]
+
+# a cell past the end can take a fallback
+[((7 ÷ e[k]) > 0) || -1]
+
+# a filtered call argument in a cell skips the call
+[Quo(7, e[k] != 0)]
+
+# a read past the end skips a cell's call
+[Quo(7, e[k])]
+
+# the same inside arithmetic
+[Quo(7, e[9]) + 1]
+
+# an array-valued cell past the end zero-fills
+[[8 8] ÷ e[9]]
+
+# a per-cell filter divides only the cells it passes
+[8 ÷ (d[j] != 0)]
+
+# zeros can be replaced before dividing
+z = [d[j] != 0 || -1]
+z, [8 8] ÷ z
+[8 8] ÷ [d[j] != 0 || 1]
+
+# an array can replace its own zeros
+arr = [0 2 -3 0]
+g = 0:4
+arr = [arr[g] != 0 || -1]
+arr
+
+# a scalar check can fall back to a whole array
+([6 8 10] ÷ (n != 0)) || [3 4 5]
+
+# MIN divided by a replaced -1 doesn't stop
+b = -9223372036854775807 - 1
+[b b] ÷ z, [b b] % z
+
+# a saved flag protects a later call when it gates it
+ok = 1
+ok
+ok = n != 0 && 1 || 0
+x = 5
+x = ok == 1 Quo(a, n)
+ok, x
+
+# F64 division keeps going
+a / n, 7.5 ÷ (n * 1.5), a ÷ (n * 1.5), a % (n * 1.5)
