@@ -383,5 +383,22 @@ called 7
 PosOrder: 3 7 11 15 3
 called 1
 called 2
+PosArgOrder: 3 3
+called 2
+PosArgFails: 9 9
+called 2
+called 3
+called 1
+PosArgWork: 4 5
+called 0
+called 1
+called 2
+called 3
+PosArgNested: 8 5 4
+called 3
+called 4
+PosArgLogical: 7 5 9 9
+called 1
+called 2
 PosNotYet: 9 9
 HelperPattern: [0 0 2 3 4] [2 3 4] [2 3 4]

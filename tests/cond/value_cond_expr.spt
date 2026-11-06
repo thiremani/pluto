@@ -1402,6 +1402,31 @@ pjC = (Loud(5) + (Loud(6) > 0)) || 9
 pjD, pjE = Pair(Loud(7), 1) + (Pair(Loud(8), 2) > Pair(0, 0))
 "PosOrder: -pjA -pjB -pjC -pjD -pjE"
 
+# A check in a call's argument runs with the other checks, before the call.
+pkA, pkB = Pair(Loud(1) > 0, 1) + (Pair(Loud(2), 2) > Pair(0, 0))
+"PosArgOrder: -pkA -pkB"
+
+# A failed argument check skips the later checks and the call.
+plA, plB = 9, 9
+plA, plB = Pair(Loud(1), Loud(2) > 5) + (Pair(Loud(3), 3) > Pair(0, 0))
+"PosArgFails: -plA -plB"
+
+# A passing argument check leaves the argument's other work for later.
+pmA, pmB = Pair(Loud(1), Loud(2) > 0) + (Pair(Loud(3), 3) > Pair(0, 0))
+"PosArgWork: -pmA -pmB"
+
+# So does a check in an index or in a nested call.
+pmArr = [7 8]
+pnA = (pmArr[Loud(0) >= 0] + (Loud(1) > 0)) || -1
+pnB, pnC = Pair(Id(Loud(2) > 0), 1) + (Pair(Loud(3), 3) > Pair(0, 0))
+"PosArgNested: -pnA -pnB -pnC"
+
+# An || in an argument runs among the checks, and a failed && fails the call.
+poA, poB = Pair((1 > 2) || Loud(3), 1) + (Pair(Loud(4), 4) > Pair(0, 0))
+ppA, ppB = 9, 9
+ppA, ppB = Pair((1 > 2) && Loud(5), 1) + (Pair(Loud(6), 6) > Pair(0, 0))
+"PosArgLogical: -poA -poB -ppA -ppB"
+
 # Not checked first yet, pinned so that PIR Step 6, planned to run every check
 # before the work beside it, shows here as a diff: a read is tested where it is
 # read, and an || runs where it stands among the checks.

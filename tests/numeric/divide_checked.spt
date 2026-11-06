@@ -298,8 +298,31 @@ q = 9
 p, q = (Pair(1, 1) > Pair(m, n)) + (((Pair(1, 1) > Pair(n, n)) && (Pair(a, a) ÷ Pair(n, 1))) > -99)
 p, q
 
+# a call's argument check runs with the other checks
+p = 8
+q = 9
+p, q = Pair(1 > m, 1) + ((Pair(a, a) ÷ Pair(n, n)) > 0)
+p, q
+
+# the same as an || left side
+x = (Quo(a, 1 > m) + ((7 ÷ n) > 0)) || -1
+x
+
+# the same as an && right side
+x = 5
+x = (m > 0) && (Quo(a, 1 > m) + ((7 ÷ n) > 0))
+x
+
+# the same under an operator beside a call
+x = ((m + Quo(a, 1 > m)) + ((7 ÷ n) > 0)) || -1
+x
+
 # a failed read guards the plain operands after it
 x = ((e[9] + (1 > 0)) + Quo(7, n)) || -1
+x
+
+# a failed read fails a call whose own check passed
+x = (Quo(e[9], 1 > 0) + (1 > 0)) || -1
 x
 
 # each version of a loop checks slot by slot
@@ -310,6 +333,10 @@ p, q
 p = 8
 q = 9
 p, q = (Pair(e[j], e[j]) > Pair(5, 0)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
+p, q
+
+# the same with a call's argument check
+p, q = (Pair(e[j] > 5, 1) + ((Pair(a, a) ÷ Pair(n, n)) > 0)) || Pair(3, 3)
 p, q
 
 # the same in a fallback's left side

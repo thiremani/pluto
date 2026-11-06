@@ -1468,15 +1468,22 @@ func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps 
 	for _, leaf := range leaves {
 		c.guardSlots(expr, conds)
 		var leafConds []llvm.Value
-		leafConds, temps = c.prepareSpineLeaf(leaf, c.ExprCache[key(c.FuncNameMangled, leaf)], temps)
+		leafConds, temps = c.prepareSpineLeaf(leaf, temps)
 		conds = c.andOperandConds([][]llvm.Value{conds, leafConds}, n, "spine_and")
 	}
 	return conds, temps
 }
 
+// spineLeaf is a plain spine operand and what its own checks fold to.
+type spineLeaf struct {
+	expr ast.Expression
+	cond llvm.Value
+}
+
 // prepareSpineChecks runs a spine's checks, each under a guard of those before
-// it, and returns their conditions and the plain leaves left to run.
-func (c *Compiler) prepareSpineChecks(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []ast.Expression, []condTemp) {
+// it, the checks inside a plain leaf among them, and returns their conditions and
+// the leaves left to run.
+func (c *Compiler) prepareSpineChecks(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []spineLeaf, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// A one-slot node is needed whenever it runs: under a one-slot parent its
 	// slot is the parent's, and repeated into several slots it fills them
@@ -1504,16 +1511,19 @@ func (c *Compiler) prepareSpineChecks(expr ast.Expression, needed []llvm.Value, 
 	n := len(info.OutTypes)
 	op, ok := expr.(ast.Operation)
 	if !ok || !c.isSlotAlignedSpine(expr) {
-		return nil, []ast.Expression{expr}, temps
+		var leafConds []llvm.Value
+		leafConds, temps = c.extractSlotConds(expr, temps)
+		leafCond := c.foldSlotConds(leafConds)
+		return broadcastConds(leafCond, n), []spineLeaf{{expr, leafCond}}, temps
 	}
 
 	c.pushBoundsGuard("spine_checks_guard")
 	defer c.popBoundsGuard()
 
-	var leaves []ast.Expression
+	var leaves []spineLeaf
 	for _, operand := range op.Operands() {
 		var operandConds []llvm.Value
-		var operandLeaves []ast.Expression
+		var operandLeaves []spineLeaf
 		operandConds, operandLeaves, temps = c.prepareSpineChecks(operand, c.narrowNeeded(needed, conds, n), temps)
 		conds = c.andOperandConds([][]llvm.Value{conds, operandConds}, n, "spine_check")
 		c.guardOperands(op, conds)
@@ -1522,20 +1532,18 @@ func (c *Compiler) prepareSpineChecks(expr ast.Expression, needed []llvm.Value, 
 	return conds, leaves, temps
 }
 
-// prepareSpineLeaf evaluates one non-comparison spine operand and stashes its
-// slot values in the condLHS frame. A leaf with nested comparisons (e.g. a
-// call with a conditional argument) is evaluated behind its own gate — the
-// false arm stores zero values instead, so the loaded slots always hold
-// freeable values (an StrH zero is an owned heap copy, an array zero is null)
-// and cleanup stays unconditional. Slots reading a gated leaf carry its
-// condition, so a zero seed is never committed.
-func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	var leafConds []llvm.Value
-	leafConds, temps = c.extractSlotConds(expr, temps)
-
+// prepareSpineLeaf evaluates one non-comparison spine operand, stashes its slot
+// values in the condLHS frame, and returns the conditions its reads add. A leaf
+// with nested comparisons (e.g. a call with a conditional argument) is evaluated
+// behind its own gate — the false arm stores zero values instead, so the loaded
+// slots always hold freeable values (an StrH zero is an owned heap copy, an array
+// zero is null) and cleanup stays unconditional. Slots reading a gated leaf carry
+// its condition, so a zero seed is never committed.
+func (c *Compiler) prepareSpineLeaf(leaf spineLeaf, temps []condTemp) ([]llvm.Value, []condTemp) {
+	expr := leaf.expr
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	frame := c.requireCondLHSFrame()
-	leafCond := c.foldSlotConds(leafConds)
-	if leafCond.IsNil() {
+	if leaf.cond.IsNil() {
 		guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 		syms := c.compileExpression(expr, nil)
 		var boundsOK llvm.Value
@@ -1556,7 +1564,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	// The guard alloca lives in the entry block and is seeded in-bounds, so a
 	// skipped leaf reads back as clean.
 	guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
-	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(leaf.cond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
 
 	before := c.branchBorrowedMarks(temps)
 	c.builder.SetInsertPointAtEnd(ifBlock)
@@ -1580,9 +1588,9 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+	var boundsOK llvm.Value
 	if c.stmtBoundsUsed() {
-		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
-		leafCond = c.andConds(leafCond, boundsOK, "leaf_and_bounds")
+		boundsOK = c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
 	}
 	c.popBoundsGuard()
 
@@ -1592,7 +1600,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	}
 	frame[key(c.FuncNameMangled, expr)] = loaded
 	temps = append(temps, condTemp{expr: expr, syms: loaded})
-	return broadcastConds(leafCond, len(info.OutTypes)), temps
+	return broadcastConds(boundsOK, len(info.OutTypes)), temps
 }
 
 // commitSpineSlot commits output slot i of a per-slot spine into its temp

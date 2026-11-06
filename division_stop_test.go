@@ -89,6 +89,7 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 		{"later_check_call_feeds_passing_slot", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + (Pair(Quo(7, n), 1) > 0)\np, q"},
 		{"later_check_after_resolved_slot", "v = [7 0]\na = v[0]\nn = v[1]\np, q = 8, 9\np, q = ((Pair(1, 1) > Pair(2, n)) || Pair(5, 5)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)\np, q"},
 		{"fallback_needed_by_passing_slot", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(n, n)) + ((Pair(1, 1) > Pair(2, n)) || Quo(7, n))\np, q"},
+		{"argument_check_passes_before_zero", "v = [7 0]\na = v[0]\nn = v[1]\np, q = 8, 9\np, q = Pair(1 > n, 1) + ((Pair(a, a) ÷ Pair(n, n)) > 0)\np, q"},
 		{"failed_slot_under_a_gate", "v = [7 0]\na = v[0]\nn = v[1]\nx = 5\nx = ((Pair(1, 1) > Pair(2, n)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)) > 0 6\nx"},
 		// PIR's checks-first work is planned to make these keep going.
 		{"read_after_the_divide", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (7 ÷ n + d[9]) > 0\nx"},
