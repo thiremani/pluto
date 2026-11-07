@@ -934,7 +934,7 @@ func (c *Compiler) i64Divide(left, right, overflowResult llvm.Value, divide func
 // around this divide means its result won't be used, so it first branches to cont
 // in that case, and reports whether it can.
 func (c *Compiler) stopOnZeroDivisor(cont llvm.BasicBlock) bool {
-	passed, canFail := c.activeBoundsGuardValue("div_guard", true)
+	passed, canFail := c.activeBoundsGuardValue("div_guard")
 	if canFail {
 		stopBlock := c.Context.AddBasicBlock(c.builder.GetInsertBlock().Parent(), "div_stop")
 		c.builder.CreateCondBr(passed, stopBlock, cont)

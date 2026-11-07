@@ -80,6 +80,10 @@ selectedRowsOOB = [nestedMatrix[rowRangeOOB]]
 stackedRowOOB = [nestedMatrix[0] nestedMatrix[3]]
 "stacked row OOB: -stackedRowOOB"
 
+# a lone row past the end keeps its shape, so it stacks with other rows
+nestedRowOOB = [[nestedMatrix[3]] [nestedMatrix[0]]]
+"nested row OOB: -nestedRowOOB"
+
 nestedMatrix = [
 ]0
 nestedMatrix = nestedMatrix ⊕ [[5 6]]

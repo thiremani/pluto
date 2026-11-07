@@ -12,27 +12,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const zeroDivisorLib = `res = Quo(x, n)
+const stopLib = `res = Quo(x, n)
     res = x ÷ n
 
 p, q = Pair(x, y)
     p = x
     q = y
 
-res = Row(x, n)
-    res = [(x ÷ n) x]
+res = Upto(n)
+    res = [0:n]
 `
 
-// buildZeroDivisorPrograms compiles one script per case into a fresh module and
+// buildStopPrograms compiles one script per case into a fresh module and
 // returns its directory. Each script prints "before", runs body, then prints
 // "after", which a stop must keep from printing.
-func buildZeroDivisorPrograms(t *testing.T, cases []zeroDivisorCase) string {
+func buildStopPrograms(t *testing.T, cases []stopCase) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("PTCACHE", filepath.Join(t.TempDir(), "cache"))
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, MOD_FILE), []byte("module zerodivisor\n"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib"+PT_SUFFIX), []byte(zeroDivisorLib), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, MOD_FILE), []byte("module stops\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lib"+PT_SUFFIX), []byte(stopLib), 0644))
 	for _, tc := range cases {
 		script := "\"before\"\n" + tc.body + "\n\"after\"\n"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, tc.name+SPT_SUFFIX), []byte(script), 0644))
@@ -42,12 +42,31 @@ func buildZeroDivisorPrograms(t *testing.T, cases []zeroDivisorCase) string {
 	return dir
 }
 
-type zeroDivisorCase struct {
+// runStoppedProgram runs the named program, requires that it stopped without
+// losing what it printed before the stop, and returns its stderr.
+func runStoppedProgram(t *testing.T, dir, name string) string {
+	t.Helper()
+	binary := filepath.Join(dir, name)
+	if runtime.GOOS == OS_WINDOWS {
+		binary += EXE_SUFFIX
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(binary)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	var exit *exec.ExitError
+	require.True(t, errors.As(cmd.Run(), &exit), "the program must not exit normally")
+	require.Equal(t, "before\n", unixNewlines(stdout.String()), "output printed before the stop must survive it")
+	return unixNewlines(stderr.String())
+}
+
+type stopCase struct {
 	name, body string
 }
 
 func TestZeroDivisorStopsTheProgram(t *testing.T) {
-	cases := []zeroDivisorCase{
+	cases := []stopCase{
 		{"literal_quotient", "x = 7 ÷ 0\nx"},
 		{"literal_remainder", "x = 7 % 0\nx"},
 		{"read_quotient", "v = [7 0]\nx = v[0] ÷ v[1]\nx"},
@@ -95,27 +114,30 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 		{"read_after_the_divide", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (7 ÷ n + d[9]) > 0\nx"},
 		{"read_beside_a_later_check", "d = [1 2]\nv = [0]\nn = v[0]\nx = 5\nx = (d[9] + 1) + ((7 ÷ n) > 0)\nx"},
 		{"fallback_before_a_failed_check", "v = [7 0]\na = v[0]\nn = v[1]\nx = 5\nx = ((a > 9) || Quo(7, n)) + (n != 0)\nx"},
-		{"read_past_the_end_in_array_cell", "d = [1 2]\nx = [Row(7, d[9])]\nx"},
 		{"ranged_check_before_a_divide", "v = [0]\nn = v[0]\ni = 0:2\nx = 5\nx = (i > 5) + ((7 ÷ n) > 0)\nx"},
 		{"need_stops_at_a_comparison", "v = [0]\nn = v[0]\np, q = 8, 9\np, q = (Pair(1, 1) > Pair(2, n)) + (((Pair(1, 1) > Pair(2, n)) || (7 ÷ n)) > -99)\np, q"},
 	}
-	dir := buildZeroDivisorPrograms(t, cases)
+	dir := buildStopPrograms(t, cases)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			binary := filepath.Join(dir, tc.name)
-			if runtime.GOOS == OS_WINDOWS {
-				binary += EXE_SUFFIX
-			}
-			var stdout, stderr bytes.Buffer
-			cmd := exec.Command(binary)
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
+			require.Equal(t, "pluto: division by zero\n", runStoppedProgram(t, dir, tc.name))
+		})
+	}
+}
 
-			var exit *exec.ExitError
-			require.True(t, errors.As(cmd.Run(), &exit), "the program must not exit normally")
-			require.Equal(t, "pluto: division by zero\n", unixNewlines(stderr.String()))
-			require.Equal(t, "before\n", unixNewlines(stdout.String()), "output printed before the stop must survive it")
+func TestShapeMismatchStopsTheProgram(t *testing.T) {
+	cases := []stopCase{
+		{"rows_differ", "a = [1 2]\nb = [1 2 3]\nx = [a b]\nx"},
+		{"ranged_rows_differ", "i = 2:4\nx = [Upto(i)]\nx"},
+		{"empty_row_is_a_row", "d = [1 2]\nw = [8 8] ÷ d[9]\na = [1 2]\nx = [w a]\nx"},
+		{"failed_row_keeps_its_shape", "a = [1 2]\nb = [1 2 3]\nd = [1 2]\nx = [a ÷ d[9] b]\nx"},
+	}
+	dir := buildStopPrograms(t, cases)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Regexp(t, `^pluto: array shape mismatch: expected dimension \d+, got \d+\n$`, runStoppedProgram(t, dir, tc.name))
 		})
 	}
 }

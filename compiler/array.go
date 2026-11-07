@@ -464,7 +464,7 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 				}
 				panic("internal: array cell lowering produced no value and recorded no error")
 			}
-			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell)
+			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell, llvm.Value{})
 		})
 	})
 
@@ -517,10 +517,13 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 	})
 }
 
+// storeArrayCellSlotWhenInBounds stores the cell's value unless a bounds check
+// failed. An array-valued cell passes yieldedSlot to learn whether it stored.
 func (c *Compiler) storeArrayCellSlotWhenInBounds(
 	cellSlot *Symbol,
 	vals []*Symbol,
 	cell ast.Expression,
+	yieldedSlot llvm.Value,
 ) {
 	slotElemType := cellSlot.Type.(Ptr).Elem
 	store := func() {
@@ -535,6 +538,9 @@ func (c *Compiler) storeArrayCellSlotWhenInBounds(
 		c.freeSymbolValue(cellSlot, "array_cell_old")
 		c.storeSymbolToSlot(cellSlot, valueToStore, slotElemType, "array_cell_store")
 		c.freeTemporary(cell, vals)
+		if !yieldedSlot.IsNil() {
+			c.setArrayCellYielded(yieldedSlot, 1)
+		}
 	}
 
 	if !c.withActiveBoundsGuard(
@@ -616,21 +622,24 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isT
 // arrayPairShape returns the flat iteration length and dimensions for a zipped
 // pair. Every dimension is limited to the shorter corresponding dimension.
 func (c *Compiler) arrayPairShape(left *Symbol, right *Symbol) (llvm.Value, []llvm.Value) {
-	leftDims := c.arrayDimensions(left)
-	rightDims := c.arrayDimensions(right)
-	dimensions := make([]llvm.Value, len(leftDims))
-	for i := range leftDims {
-		dimensions[i] = c.builder.CreateSelect(
-			c.builder.CreateICmp(llvm.IntULT, leftDims[i], rightDims[i], "cmp_array_dimension"),
-			leftDims[i], rightDims[i], "min_array_dimension",
-		)
-	}
+	dimensions := c.zipDimensions(c.arrayDimensions(left), c.arrayDimensions(right))
 
 	length := dimensions[0]
 	for _, dimension := range dimensions[1:] {
 		length = c.builder.CreateMul(length, dimension, "array_zip_len")
 	}
 	return length, dimensions
+}
+
+func (c *Compiler) zipDimensions(left, right []llvm.Value) []llvm.Value {
+	dimensions := make([]llvm.Value, len(left))
+	for i := range left {
+		dimensions[i] = c.builder.CreateSelect(
+			c.builder.CreateICmp(llvm.IntULT, left[i], right[i], "cmp_array_dimension"),
+			left[i], right[i], "min_array_dimension",
+		)
+	}
+	return dimensions
 }
 
 func (c *Compiler) arrayStrides(dimensions []llvm.Value) []llvm.Value {
