@@ -411,6 +411,7 @@ fail:
  * fails while stacking or concatenating arrays. Static shape mismatches are
  * compile errors instead. */
 void array_shape_fail(size_t expected, size_t got) {
+    fflush(stdout);
     fprintf(stderr, "pluto: array shape mismatch: expected dimension %zu, got %zu\n",
             expected, got);
     fflush(stderr);
@@ -421,6 +422,7 @@ void array_shape_fail(size_t expected, size_t got) {
  * would overflow an outer dimension. Only zero-width rows can get this far,
  * since they use no memory. */
 void array_dim_overflow(size_t left, size_t right) {
+    fflush(stdout);
     fprintf(stderr, "pluto: array dimension overflow: %zu + %zu\n", left, right);
     fflush(stderr);
     abort();
