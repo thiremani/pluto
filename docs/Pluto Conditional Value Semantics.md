@@ -318,10 +318,18 @@ is `[0]` (not `[]`), and `[a > 2  a > 99]` is `[5 0]` (not empty or kept-old).
 An `&&` cell propagates into the same resolution: `[b > 2 && 5]` zero-fills when
 the condition fails, and `[b > 2 && 5 || -1]` takes the fallback instead.
 
-For planned nested range construction after PIR migration, the same rule
-extends recursively to array-valued cells. A failed child contributes a
-zero-filled array of its expected shape; an explicit array fallback overrides
-it:
+An array-valued cell resolves the same way: a failed one is a row of zeros and
+runs nothing past its checks, so a call on a failed read doesn't run. With
+`a = [1 2]`, `d = [1 2]` and `i = 0:3`, `[a ÷ d[i]]` is `[[1 2] [0 1] [0 0]]`,
+while `i < 2 [a ÷ d[i]]` gates the third row out. The row takes the shape its
+operands show (an array it divides, a row it reads, a literal), or else the
+shape of the rows that yield. A cell whose shape isn't shown that way, such as
+a call, a `⊕` or a ranged literal, stays empty when no row yields; PIR plans to
+require a fallback there (below).
+
+Planned nested range construction after PIR migration follows the same rule. A
+failed child contributes a zero-filled array of its expected shape; an explicit
+array fallback overrides it:
 
 ```pluto
 [i > 0 && [F(i, j)]]                  # failed i positions get a zero row
@@ -331,9 +339,9 @@ it:
 The expected child shape must be known or derivable from bound range domains.
 When it is not, the source must supply a shape-bearing fallback such as
 `|| [j && 0]` for a zero row or `|| [j && -1]` for a different fill value.
-Pluto never invents an empty, padded, or flattened child. This is value-position
-resolution and preserves the outer domain; a statement gate instead rejects
-the complete iteration point.
+With that in place, Pluto never invents an empty, padded, or flattened child.
+This is value-position resolution and preserves the outer domain; a statement
+gate instead rejects the complete iteration point.
 
 Spacing separates cells, and operators glue their operands into one cell:
 

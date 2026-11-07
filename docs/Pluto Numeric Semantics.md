@@ -92,8 +92,6 @@ the check does, or for a slot that has already failed:
   `x = (v[9] + 1) + ((7 ÷ n) > 0)`.
 - A fallback's right side runs before a later check:
   `x = ((a > 9) || Div(7, n)) + (n != 0)`.
-- A function that divides is called with a read past the end in an array-valued
-  cell: `x = [Row(7, d[9])]`.
 - A comparison with no range runs before the loop of a ranged check beside it:
   `x = (i > 5) + ((7 ÷ n) > 0)`.
 - An `||` inside a comparison runs its right side for every slot its left side
