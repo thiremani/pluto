@@ -88,6 +88,12 @@ func (c *Compiler) withLoopNestOver(ranges []*RangeInfo, values []*Symbol, body 
 		body()
 		return
 	}
+
+	// The checks a loop's body marks are values of its blocks, so they end with it:
+	// neither what follows the loop nor another lowering of the same body can use them.
+	outerChecks := c.currentStmtCtx().slotChecks
+	c.currentStmtCtx().slotChecks = maps.Clone(outerChecks)
+
 	var rec func(i int)
 	rec = func(i int) {
 		if i == len(ranges) {
@@ -103,6 +109,8 @@ func (c *Compiler) withLoopNestOver(ranges []*RangeInfo, values []*Symbol, body 
 		})
 	}
 	rec(0)
+
+	c.currentStmtCtx().slotChecks = outerChecks
 }
 
 func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
@@ -129,19 +137,14 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRangeExpression]struct{}) {
 	ctx := c.currentStmtCtx()
 	ctx.loopBoundsStack = append(ctx.loopBoundsStack, loopBoundsFrame{
-		mode:            mode,
-		fastAccess:      fast,
-		savedSlotChecks: maps.Clone(ctx.slotChecks),
+		mode:       mode,
+		fastAccess: fast,
 	})
 }
 
-// popLoopBoundsMode restores the slot checks: each version of a loop lowers the
-// same expressions, and the checks one marks are values of its own blocks.
 func (c *Compiler) popLoopBoundsMode() {
 	ctx := c.currentStmtCtx()
-	last := len(ctx.loopBoundsStack) - 1
-	ctx.slotChecks = ctx.loopBoundsStack[last].savedSlotChecks
-	ctx.loopBoundsStack = ctx.loopBoundsStack[:last]
+	ctx.loopBoundsStack = ctx.loopBoundsStack[:len(ctx.loopBoundsStack)-1]
 }
 
 func (c *Compiler) currentLoopBoundsMode() loopBoundsMode {

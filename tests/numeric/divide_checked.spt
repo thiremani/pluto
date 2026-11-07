@@ -276,6 +276,14 @@ q = 9
 p, q = (Pair(e[j], e[j]) > Pair(5, 0)) && ((Pair(a, a) ÷ Pair(n, 1)) > 0)
 p, q
 
+# a loop's slot checks end with it
+cells = (((Pair(j, j) > 0) + (Pair(1, 1) > 0)) > 0) [j] + 0
+cells
+
+# the same beside checks marked before the loop
+p, q = (Pair(1, 1) > Pair(0, 0)) + (((Pair(d[k], d[k]) > Pair(0, 0)) + Pair(1, 1)) > Pair(0, 0))
+p, q
+
 # a check beside a tuple divide guards its slot in a fallback's left side
 p, q = ((Pair(n, m) != Pair(0, 0)) + (Pair(a, a) ÷ Pair(n, m))) || Pair(1, 9)
 p, q
