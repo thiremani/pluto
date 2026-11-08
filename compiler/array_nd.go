@@ -174,17 +174,24 @@ func (c *Compiler) infixDimensionsWithoutRunning(e *ast.InfixExpression) []llvm.
 	return c.zipDimensions(left, right)
 }
 
+// literalDimensionsWithoutRunning uses the solved shape when there is one, as for
+// an empty literal, whose sample's dimensions don't count.
 func (c *Compiler) literalDimensionsWithoutRunning(e *ast.ArrayLiteral) []llvm.Value {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	if len(info.CollectRanges) > 0 {
 		return nil
 	}
 
-	dimensions := make([]llvm.Value, 0, info.OutTypes[0].(Array).Rank)
-	for _, dimension := range arrayLiteralLayoutShape(lit) {
+	arrayType := info.OutTypes[0].(Array)
+	shape := info.ArrayShape
+	if shape == nil {
+		shape = arrayLiteralLayoutShape(lit)
+	}
+	dimensions := make([]llvm.Value, 0, arrayType.Rank)
+	for _, dimension := range shape {
 		dimensions = append(dimensions, c.ConstI64(dimension))
 	}
-	if !arrayLiteralHasArrayCells(lit, info.OutTypes[0].(Array)) {
+	if len(dimensions) == arrayType.Rank {
 		return dimensions
 	}
 

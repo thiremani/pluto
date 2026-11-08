@@ -86,6 +86,12 @@ rowsFill = [rowsArr ÷ rowsDiv[rowsRange] != 0]
 loneFill = [-(rowsArr + rowsArr) ÷ rowsDiv[9]]
 "LoneZeroFill: -loneFill"
 
+# an empty literal's shape is its solved one, all zeros, whatever its sample's
+emptySample = [1]
+emptyFill = [rowsDiv[9] > 0 && []emptySample  []emptySample]
+emptyRow = emptyFill[0]
+"EmptyZeroFill: -emptyRow"
+
 # a call doesn't run on a failed row, which takes the shape of the rows that yield
 rowsLoud = [Loud(rowsArr ÷ rowsDiv[rowsRange] != 0)]
 "RowsSkipCall: -rowsLoud"

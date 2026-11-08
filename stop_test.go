@@ -132,6 +132,7 @@ func TestShapeMismatchStopsTheProgram(t *testing.T) {
 		{"ranged_rows_differ", "i = 2:4\nx = [Upto(i)]\nx"},
 		{"empty_row_is_a_row", "d = [1 2]\nw = [8 8] ÷ d[9]\na = [1 2]\nx = [w a]\nx"},
 		{"failed_row_keeps_its_shape", "a = [1 2]\nb = [1 2 3]\nd = [1 2]\nx = [a ÷ d[9] b]\nx"},
+		{"failed_empty_row_keeps_its_shape", "a = [1]\nd = [1 2]\nx = [d[9] > 0 && []a  [[1]]]\nx"},
 	}
 	dir := buildStopPrograms(t, cases)
 

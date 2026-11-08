@@ -26,6 +26,8 @@ RowsZeroFill: [
 LoneZeroFill: [
     0 0
 ]
+EmptyZeroFill: [
+]
 called [1 2]
 RowsSkipCall: [
     0 0
