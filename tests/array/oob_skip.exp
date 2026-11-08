@@ -26,6 +26,11 @@ RowsZeroFill: [
 LoneZeroFill: [
     0 0
 ]
+LiteralZeroFill: [
+    [0 0] [0 0]
+] [
+    [0 0] [0 0]
+]
 EmptyZeroFill: [
 ]
 called [1 2]

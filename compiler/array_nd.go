@@ -175,7 +175,8 @@ func (c *Compiler) infixDimensionsWithoutRunning(e *ast.InfixExpression) []llvm.
 }
 
 // literalDimensionsWithoutRunning uses the solved shape when there is one, as for
-// an empty literal, whose sample's dimensions don't count.
+// an empty literal, whose sample's dimensions don't count. Stacked cells share a
+// shape, so the first cell that shows one gives the rest.
 func (c *Compiler) literalDimensionsWithoutRunning(e *ast.ArrayLiteral) []llvm.Value {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	if len(info.CollectRanges) > 0 {
@@ -195,11 +196,12 @@ func (c *Compiler) literalDimensionsWithoutRunning(e *ast.ArrayLiteral) []llvm.V
 		return dimensions
 	}
 
-	child := c.dimensionsWithoutRunning(ast.ExprChildren(lit)[0])
-	if child == nil {
-		return nil
+	for _, child := range ast.ExprChildren(lit) {
+		if childDimensions := c.dimensionsWithoutRunning(child); childDimensions != nil {
+			return append(dimensions, childDimensions...)
+		}
 	}
-	return append(dimensions, child...)
+	return nil
 }
 
 func (c *Compiler) isArrayExpression(expr ast.Expression) bool {

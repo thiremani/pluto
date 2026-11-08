@@ -86,6 +86,11 @@ rowsFill = [rowsArr ÷ rowsDiv[rowsRange] != 0]
 loneFill = [-(rowsArr + rowsArr) ÷ rowsDiv[9]]
 "LoneZeroFill: -loneFill"
 
+# and through a literal, from whichever of its cells shows it
+literalFill = [rowsDiv[9] > 0 && [Identity(rowsArr) rowsArr]]
+literalFillFirst = [rowsDiv[9] > 0 && [rowsArr Identity(rowsArr)]]
+"LiteralZeroFill: -literalFill -literalFillFirst"
+
 # an empty literal's shape is its solved one, all zeros, whatever its sample's
 emptySample = [1]
 emptyFill = [rowsDiv[9] > 0 && []emptySample  []emptySample]
