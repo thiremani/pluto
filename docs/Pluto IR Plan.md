@@ -1383,6 +1383,20 @@ append.
   `a = [1]` and `row = [1 2]`, `x = a[5] + [row (1 > 0 && row)]` keeps `x`,
   whereas reading `row` past the failed `a[5]` would leave the rows' shapes
   unequal and abort the shape check.
+- A failed array-valued cell zero-fills in the shape its operands show: an
+  array it divides, a row it reads, a literal without ranges. Where they show
+  none, as for a call, a `⊕` or a ranged literal, the solver rejects a cell
+  that may still fail after its own fallbacks, so no closing policy takes the
+  shape of the rows that yield, and legacy lowering's pending-row count
+  (`failedRowsSlot`) and choice of the first yielded row's shape
+  (`fixedRowShape`) are never ported. The rule lands with matrix row 7f,
+  before which a cell can't take `||` after a failed read, and no later than
+  collectors. It breaks programs that rely on the rows' shape. Every index
+  read is `MayYield`, so `[Row(d[i])]` needs `|| [0 0 0]` or `Row(d[i] || 0)`
+  even when `i` stays in bounds; `oob_skip`'s `RowsSkipCall`, `FixedZeroFill`
+  and `StringRowsFill` gain a fallback, and `CallRowsNoShape` becomes the
+  test of the error. §18's shapes derived from bound range domains later
+  accept more programs.
 - The remaining ranged and collector print paths migrate. After this step no
   statement form needs the legacy conditional or collector machinery.
 - Collectors join the name allocator and invariant 24: collector nodes
@@ -1686,9 +1700,11 @@ The statement plan can grow without becoming a machine IR:
   seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
   express the semantics today
 - a skipped array-valued collector cell closes to a zero-filled child of its
-  expected shape, while `||` may supply a shape-compatible child; the validator
-  rejects a plan whose skipped child shape is neither known nor derivable
-  unless an explicit fallback such as `[j && 0]` supplies it
+  expected shape, while `||` may supply a shape-compatible child. Step 8
+  requires a fallback wherever the operands show no shape; this extension also
+  derives shapes from bound range domains, so only a child whose shape is
+  neither known nor derivable needs an explicit fallback such as `[j && 0]`.
+  The solver reports a missing one, since validator failures are ICEs (§14)
 - test contexts can become explicit statement inputs and effects
 
 PIR stays statement-focused until a concrete feature requires cross-statement
