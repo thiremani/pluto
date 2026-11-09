@@ -138,8 +138,9 @@ func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
 }
 
 // requireDivisionGuarded checks that the divide's operands are the ones tested,
-// behind rare branches: programs can't see a branch hint, and since arm64's
-// divide doesn't fault on MIN ÷ -1, a wrong MIN test can pass the programs there.
+// in order, with the zero and MIN branches marked rare. Programs can't see a hint
+// or the order, and on arm64, whose divide returns MIN for MIN ÷ -1, they see a
+// wrong MIN test only where LLVM exploits the undefined divide.
 func requireDivisionGuarded(t *testing.T, ir, divide string) {
 	t.Helper()
 	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %div_zero\d*, label %div_check_min\d*, !prof`).FindStringSubmatch(ir)
