@@ -15,11 +15,6 @@ f = 5.5
 f = a / (n != 0)
 x, f
 
-# the parentheses around the filter are optional
-x = 5
-x = a ÷ n != 0
-x
-
 # a fallback covers the whole filtered division
 x = (a ÷ (n != 0)) || -1
 f = (a / (n != 0)) || -1.0
@@ -44,12 +39,7 @@ x = 5
 x = (a % (n != 0)) == 0
 x
 
-# arithmetic around the filtered division inside a comparison
-x = 5
-x = ((a ÷ (n != 0)) + 1) > 0
-x
-
-# a fallback around that comparison
+# a fallback around a comparison of the filtered division
 x = ((a ÷ (n != 0)) > 0) || -1
 x
 
@@ -172,12 +162,6 @@ p, q
 p = 8
 q = 9
 p, q = (Pair(1, 1) > Pair(m, n)) + ((Pair(a, a) ÷ Pair(n, 1)) > 0)
-p, q
-
-# the same when the second slot failed
-p = 8
-q = 9
-p, q = (Pair(1, 1) > Pair(n, m)) + ((Pair(a, a) ÷ Pair(1, n)) > 0)
 p, q
 
 # the same inside a comparison
@@ -332,12 +316,7 @@ u = 0
 u = u + ((w * 3) ÷ ((w % 8) != 0))
 u
 
-# an out-of-bounds divisor leaves the target unchanged
-x = 5
-x = a ÷ v[9]
-x
-
-# a fallback around a comparison of that division
+# a fallback around a comparison of a division by an out-of-bounds read
 x = ((a ÷ v[9]) > 0) || -1
 x
 

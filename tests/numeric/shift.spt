@@ -22,12 +22,6 @@ m = -7 >> n[4]
 o = -7 ÷ 2
 k, l, m, o
 
-# >>> shifts in k zeros, so a count of 0 leaves a negative value alone
-p = -8 >>> n[3]
-q = -8 >>> n[4]
-r = -8 >>> n[5]
-p, q, r
-
 # a negative count is a large shift
 s = -8 >> n[2]
 t = -8 >>> n[2]

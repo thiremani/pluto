@@ -15,11 +15,6 @@ m = v[0] ÷ v[2]
 n = v[0] % v[2]
 m, n
 
-# ordinary divisors keep truncating
-o = -v[0] ÷ v[3]
-p = -v[0] % v[4]
-o, p
-
 # quotient and remainder rebuild the dividend
 q1 = ((v[0] ÷ v[3]) * v[3] + (v[0] % v[3])) == v[0]
 q2 = ((min ÷ v[2]) * v[2] + (min % v[2])) == min

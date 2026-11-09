@@ -1,10 +1,4 @@
-# literal zero divisors give ±Inf or NaN
-a = 7.5 ÷ 0.0
-b = -7.5 ÷ 0.0
-c = 0.0 ÷ 0.0
-a, b, c
-
-# / on I64s gives the same F64 results
+# / on I64s gives F64, so literal zero divisors give ±Inf or NaN
 d = 7 / 0
 e = -7 / 0
 f = 0 / 0

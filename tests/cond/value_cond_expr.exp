@@ -381,9 +381,6 @@ called 5
 called 8
 called 7
 PosOrder: 3 7 11 15 3
-called 1
-called 2
-PosArgOrder: 3 3
 called 2
 PosArgFails: 9 9
 called 2

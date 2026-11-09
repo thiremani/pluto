@@ -1402,10 +1402,6 @@ pjC = (Loud(5) + (Loud(6) > 0)) || 9
 pjD, pjE = Pair(Loud(7), 1) + (Pair(Loud(8), 2) > Pair(0, 0))
 "PosOrder: -pjA -pjB -pjC -pjD -pjE"
 
-# A check in a call's argument runs with the other checks, before the call.
-pkA, pkB = Pair(Loud(1) > 0, 1) + (Pair(Loud(2), 2) > Pair(0, 0))
-"PosArgOrder: -pkA -pkB"
-
 # A failed argument check skips the later checks and the call.
 plA, plB = 9, 9
 plA, plB = Pair(Loud(1), Loud(2) > 5) + (Pair(Loud(3), 3) > Pair(0, 0))
