@@ -312,22 +312,20 @@ func TestConcatDimensionOverflowAborts(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			source := "row = [[]0]\n" + strings.Repeat("row = row ⊕ row\n", tc.doublings) + "row[0]\n\"done\"\n"
+			source := "\"before\"\nrow = [[]0]\n" + strings.Repeat("row = row ⊕ row\n", tc.doublings) + "row[0]\n\"done\"\n"
 			p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
 				MOD_FILE:                "module github.com/thiremani/pluto/concat_overflow_test\n",
 				"overflow" + SPT_SUFFIX: source,
 			})
 			require.NoError(t, buildScript(t, p, cc, codeLL, "overflow", rtObjs))
 
-			out, err := exec.Command(filepath.Join(p.Cwd, "overflow")).CombinedOutput()
 			if tc.wantAbort == "" {
+				out, err := exec.Command(filepath.Join(p.Cwd, "overflow")).CombinedOutput()
 				require.NoError(t, err)
-				require.Equal(t, "[]\ndone", strings.TrimSpace(unixNewlines(string(out))))
+				require.Equal(t, "before\n[]\ndone", strings.TrimSpace(unixNewlines(string(out))))
 				return
 			}
-			require.Error(t, err)
-			require.Contains(t, string(out), tc.wantAbort)
-			require.NotContains(t, string(out), "done")
+			require.Contains(t, runStoppedProgram(t, p.Cwd, "overflow"), tc.wantAbort)
 		})
 	}
 }
