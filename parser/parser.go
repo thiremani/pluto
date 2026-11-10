@@ -1359,7 +1359,7 @@ func (p *StmtParser) parseArraySample(arr *ast.ArrayLiteral) {
 	if !p.sampleFollows() {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
-			Msg:   `an empty array needs its element type: write []0, []0.0 or []""`,
+			Msg:   `an empty array needs its element type: write []0, []0.0, []"" or []x for the type of a variable x`,
 		})
 		return
 	}
