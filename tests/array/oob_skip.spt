@@ -98,9 +98,9 @@ literalFill = [rowsDiv[9] > 0 && [Identity(rowsArr) rowsArr]]
 literalFillFirst = [rowsDiv[9] > 0 && [rowsArr Identity(rowsArr)]]
 "LiteralZeroFill: -literalFill -literalFillFirst"
 
-# an empty literal's shape is its solved one, all zeros, whatever its sample's
-emptySample = [1]
-emptyFill = [rowsDiv[9] > 0 && []emptySample  []emptySample]
+# a failed cell takes its empty literal's shape: no rows, however long its sample is
+sample = [1]
+emptyFill = [rowsDiv[9] > 0 && []sample  []sample]
 emptyRow = emptyFill[0]
 "EmptyZeroFill: -emptyRow"
 
