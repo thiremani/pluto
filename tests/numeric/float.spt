@@ -7,8 +7,8 @@ d, e, f
 # run-time zero divisors give the same results
 v = [7.5 0.0]
 g = v[0] ÷ v[1]
-h = -v[0] / v[1]
-i = v[1] / v[1]
+h = -v[0] ÷ v[1]
+i = v[1] ÷ v[1]
 g, h, i
 
 # an F64 dividend with an I64 zero divisor stays F64
