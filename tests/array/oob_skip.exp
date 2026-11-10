@@ -15,6 +15,7 @@ NestedSeedOuterOOB: 99
 NestedOuterOOBSkips: 99
 NestedSeedInnerOOB: 99
 NestedInnerOOBSkips: 99
+RangedNestedOOBKeepsLast: 30
 CellOOBPlusOne: [0]
 CellOOBComparison: [0]
 CellOOBFallback: [-1]

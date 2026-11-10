@@ -77,6 +77,7 @@ func TestZeroDivisorStopsTheProgram(t *testing.T) {
 		{"array_mask_keeps_zeros", "d = [0 2]\nx = [8 8] ÷ (d != 0)\nx"},
 		{"loop_after_good_read", "d = [1 0]\nk = 0:2\ns = 0\ns = s + 7 ÷ d[k]\ns"},
 		{"cell_after_good_read", "d = [1 0]\nk = 0:2\n[7 ÷ d[k]]"},
+		{"ranged_read_after_failed_iteration", "v = [7 0 2 1]\nd = [1 0]\ni = 0:3\nx = 5\nx = v[7 ÷ d[2 - i]]\nx"},
 		{"tuple_in_comparison", "v = [7 0]\na = v[0]\nn = v[1]\np, q = (Pair(a, a) ÷ Pair(1, n)) > Pair(0, 0)\np, q"},
 		{"check_on_its_own_line", "v = [7 0]\nn = v[1]\ny = n != 0 1\nx = v[0] ÷ n\ny, x"},
 		{"stale_flag", "v = [7 0]\nn = v[1]\nok = 1\nok = n != 0 1\nx = 5\nx = ok == 1 Quo(v[0], n)\nok, x"},

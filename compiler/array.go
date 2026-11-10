@@ -1127,6 +1127,11 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
+		// A read in an operand records here. The statement's frame is seeded once
+		// before the loop, so it would carry a failure into later iterations.
+		guardPtr := c.pushBoundsGuard("array_range_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
 		c.compileCondOperands(rew, func() {
 			arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 			// Source operands are temporary for each loop iteration in this path.
@@ -1153,6 +1158,10 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			}
 
 			inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+			if c.stmtBoundsUsed() {
+				operandsOK := c.createLoad(guardPtr, Int{Width: 1}, "array_range_operands_ok")
+				inBounds = c.builder.CreateAnd(operandsOK, inBounds, "array_range_iter_ok")
+			}
 			if c.inArrayLiteralCellMode() {
 				storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
 

@@ -62,6 +62,13 @@ iInnerOOB = 3
 nestedInnerOOB = arr1[arr2short[iInnerOOB]]
 "NestedInnerOOBSkips: -nestedInnerOOB"
 
+# a ranged read keeps each iteration whose index was read in bounds
+rangedIdx = [1 2]
+rangedIter = 0:3
+rangedNested = 99
+rangedNested = arr1[rangedIdx[rangedIter]]
+"RangedNestedOOBKeepsLast: -rangedNested"
+
 # a cell past the end zero-fills whatever the read feeds
 cellArr = [1 2]
 cellPlus = [cellArr[9] + 1]
