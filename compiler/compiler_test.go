@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -140,12 +141,12 @@ func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
 // requireDivisionGuarded checks that the divide's operands are the ones tested,
 // in order, with the zero and MIN branches marked rare. Programs can't see a hint
 // or the order, and on arm64, whose divide returns MIN for MIN ÷ -1, they see a
-// wrong MIN test only where LLVM exploits the undefined divide.
+// MIN test that reads the divisor only where LLVM exploits the undefined divide.
 func requireDivisionGuarded(t *testing.T, ir, divide string) {
 	t.Helper()
-	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %div_zero\d*, label %div_check_min\d*, !prof`).FindStringSubmatch(ir)
+	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %div_zero\d*, label %div_check_min\d*, !prof (!\d+)`).FindStringSubmatch(ir)
 	require.NotNil(t, zero, "expected a rare branch on a zero divisor")
-	minimum := regexp.MustCompile(`%div_is_min\d* = icmp eq i64 (\S+), -9223372036854775808\n\s+br i1 %div_is_min\d*, label %div_check_minus_one\d*, label %div_divide\d*, !prof`).FindStringSubmatch(ir)
+	minimum := regexp.MustCompile(`%div_is_min\d* = icmp eq i64 (\S+), -9223372036854775808\n\s+br i1 %div_is_min\d*, label %div_check_minus_one\d*, label %div_divide\d*, !prof (!\d+)`).FindStringSubmatch(ir)
 	require.NotNil(t, minimum, "expected a rare branch on a MIN dividend")
 	minusOne := regexp.MustCompile(`%div_is_minus_one\d* = icmp eq i64 (\S+), -1\n\s+br i1 %div_is_minus_one\d*, label %div_cont\d*, label %div_divide\d*`).FindStringSubmatch(ir)
 	require.NotNil(t, minusOne, "expected the MIN path to test for a -1 divisor")
@@ -154,6 +155,14 @@ func requireDivisionGuarded(t *testing.T, ir, divide string) {
 	require.Equal(t, minimum[1], divided[1], "the MIN test must read the dividend")
 	require.Equal(t, zero[1], divided[2], "the zero test must read the divisor")
 	require.Equal(t, minusOne[1], divided[2], "the -1 test must read the divisor")
+
+	for _, node := range []string{zero[2], minimum[2]} {
+		weights := regexp.MustCompile(`(?m)^` + node + ` = !\{!"branch_weights", i32 (\d+), i32 (\d+)\}$`).FindStringSubmatch(ir)
+		require.NotNil(t, weights, "expected branch weights at %s", node)
+		rare, _ := strconv.Atoi(weights[1])
+		common, _ := strconv.Atoi(weights[2])
+		require.Less(t, rare, common, "the branch weights at %s must make the error path rare", node)
+	}
 }
 
 // requireInstructionInBlock checks that every occurrence of instruction sits
