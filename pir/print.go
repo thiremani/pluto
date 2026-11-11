@@ -79,7 +79,8 @@ func escapeControls(s string) string {
 func checkRenderable(expr ast.Expression) {
 	switch e := expr.(type) {
 	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression:
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression,
+		*ast.CallExpression:
 	case *ast.ArrayLiteral:
 		if e.Block || len(e.Headers) > 0 {
 			panic("pir: no one-line renderer for a block-layout array literal")

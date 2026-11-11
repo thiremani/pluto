@@ -7,3 +7,7 @@ tag = mkTag(v)
 res = maybeStr(k)
     res = ""
     res = k > 0 "big" ⊕ "value"
+
+res = announce(v)
+    "announce -v"
+    res = v + 1

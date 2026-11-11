@@ -10,3 +10,5 @@ RangedBlank: done
 RangedMultiBlank: done
 CheckedBlank: done
 DefaultBlank: done
+announce 3
+DirectBlank: done

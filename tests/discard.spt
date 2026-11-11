@@ -65,3 +65,7 @@ _ = sarr[1]
 _ = maybeStr(1)
 _ = maybeStr(-1)
 "DefaultBlank: done"
+
+# A discarded call still runs: its direct return is dropped, not its work.
+_ = announce(a)
+"DirectBlank: done"

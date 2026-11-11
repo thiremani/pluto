@@ -12,14 +12,12 @@ import (
 // script statement loop invokes it, so every named target is a script-root
 // binding; an accepted statement has no legacy fallback.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
-	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
+	if len(stmt.Condition) > 0 {
 		return nil, false
 	}
-	// The arity check above already forces every RHS to a single output slot:
-	// each expression yields at least one, and the solver validated the total.
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if !planValueTypeSupported(info.OutTypes[0]) {
+		if !planValueTypesSupported(info.OutTypes) {
 			return nil, false
 		}
 		if !c.planExprEligible(expr) {
@@ -27,6 +25,15 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 		}
 	}
 	return c.buildLetPlan(stmt), true
+}
+
+func planValueTypesSupported(types []Type) bool {
+	for _, t := range types {
+		if !planValueTypeSupported(t) {
+			return false
+		}
+	}
+	return true
 }
 
 func planValueTypeSupported(t Type) bool {
@@ -48,11 +55,12 @@ func planValueTypeSupported(t Type) bool {
 // is not widened; any other receiver fails closed. Deferred, not final: the
 // widened case needs ownership resolved against the receiver's effective
 // schema, as planSlot does for identifiers, once compileDotExpression types
-// the column by that schema too.
+// the column by that schema too. A call is admitted with ordinary arguments
+// only: none can fail and none is a range, so the callee writes every output.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral:
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.CallExpression:
 	case *ast.ArrayLiteral:
 		if e.Block || len(e.Headers) > 0 {
 			return false
@@ -121,15 +129,19 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	return pir.Slot{Type: t, Ownership: pir.Owned}
 }
 
-// planLocalTarget describes one LHS binding. Only an existing script-local
-// binding has an old value to replace, so Fresh and HoldsHeap read c.Scopes,
-// as the legacy old-value capture does.
-func (c *Compiler) planLocalTarget(name string) pir.Target {
-	targetType := c.bindingSlotType(name, nil)
-	sym, exists := Get(c.Scopes, name)
+// planTarget describes one LHS slot. Only an existing script-local binding
+// has an old value to replace, so Fresh and HoldsHeap read c.Scopes, as the
+// legacy old-value capture does.
+func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
+	if isDiscard(ident) {
+		return pir.Target{Kind: pir.DiscardTarget}
+	}
+
+	targetType := c.bindingSlotType(ident.Value, nil)
+	sym, exists := Get(c.Scopes, ident.Value)
 	return pir.Target{
 		Kind: pir.LocalTarget,
-		Name: name,
+		Name: ident.Value,
 		Type: targetType,
 
 		TypeOwnsHeap: typeNeedsCleanup(targetType),
@@ -138,26 +150,27 @@ func (c *Compiler) planLocalTarget(name string) pir.Target {
 	}
 }
 
+// buildLetPlan maps each expression's output slots onto the next targets in
+// order; the solver validated that the totals match.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	evals := make([]*pir.Eval, len(stmt.Value))
+	commit := make([]pir.Mapping, 0, len(stmt.Name))
 	for i, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		evals[i] = &pir.Eval{
-			Result: pir.OutcomeID(i),
-			Expr:   expr,
-			Slots:  []pir.Slot{c.planSlot(expr, info.OutTypes[0])},
+		evals[i] = &pir.Eval{Result: pir.OutcomeID(i), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes))}
+
+		for slot, t := range info.OutTypes {
+			evals[i].Slots[slot] = c.planSlot(expr, t)
+			commit = append(commit, pir.Mapping{
+				Target:  c.planTarget(stmt.Name[len(commit)]),
+				Outcome: pir.OutcomeRef{Outcome: pir.OutcomeID(i), Slot: slot},
+			})
 		}
 	}
 
-	commit := make([]pir.Mapping, len(stmt.Name))
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
 		nameParts[i] = ident.Value
-		target := pir.Target{Kind: pir.DiscardTarget}
-		if !isDiscard(ident) {
-			target = c.planLocalTarget(ident.Value)
-		}
-		commit[i] = pir.Mapping{Target: target, Outcome: pir.OutcomeRef{Outcome: pir.OutcomeID(i)}}
 	}
 
 	return &pir.AssignPlan{
