@@ -335,6 +335,7 @@ static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_
     case PT_ELEM_F64: {
         double value = arr_f64_get((const PtArrayF64*)values, index);
         const char* special = f64_special_str(value);
+        /* %g's 6 significant digits keep arrays short; f64_str prints up to 15. */
         return special ? strbuf_printf(sb, "%s", special) : strbuf_printf(sb, "%g", value);
     }
     case PT_ELEM_STR: {

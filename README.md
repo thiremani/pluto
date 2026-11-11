@@ -341,8 +341,17 @@ words = ["hello" "hello world" ""]
 words  # ["hello" "hello world" ""]
 ```
 
-Compatible scalar format specifiers lift element-wise over arrays. For example,
-`"-ints%4d"` pads every integer, `"-values%7.2f"` formats every float, and
+Float elements print with 6 significant digits to keep arrays, matrices and
+tables short, where a single F64 prints up to 15:
+
+```python
+x = 3.14159265358979
+x, [x]  # 3.14159265358979 [3.14159]
+```
+
+Compatible scalar format specifiers lift element-wise over 1-D arrays. For example,
+`"-ints%4d"` pads every integer, `"-values%7.2f"` formats every float,
+`"-values%.15g"` prints every float with up to 15 digits, and
 `"-ints%#x"` prints every integer in hexadecimal. String arrays stay quoted by
 default; an explicit `"-words%s"` prints their elements without quotes.
 
