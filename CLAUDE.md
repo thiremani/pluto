@@ -43,7 +43,7 @@ python3 test.py tests/math
 ### Running unit tests only
 ```bash
 eval "$(python3 scripts/llvm_env.py --shell)"
-go test -race ./lexer ./parser ./compiler
+go test -race ./lexer ./parser ./pir ./compiler
 ```
 
 ### Running the compiler

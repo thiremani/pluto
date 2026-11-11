@@ -12,7 +12,7 @@
 
 - Build compiler: `python3 build.py`
 - Production build with version: `python3 build.py --release`
-- Unit tests (race): `eval "$(python3 scripts/llvm_env.py --shell)" && go test -race ./lexer ./parser ./compiler`
+- Unit tests (race): `eval "$(python3 scripts/llvm_env.py --shell)" && go test -race ./lexer ./parser ./pir ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)

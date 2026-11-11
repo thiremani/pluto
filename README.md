@@ -449,7 +449,7 @@ go build -o pluto
 python3 test.py                              # Full E2E suite
 python3 test.py --leak-check                 # Full suite + memory leak detection
 eval "$(python3 scripts/llvm_env.py --shell)"
-go test -race ./lexer ./parser ./compiler    # Unit tests only
+go test -race ./lexer ./parser ./pir ./compiler    # Unit tests only
 ```
 
 **New project setup:**

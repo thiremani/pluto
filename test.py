@@ -119,6 +119,9 @@ class TestRunner:
             print(f"\n{Fore.CYAN}Testing parser...{Style.RESET_ALL}")
             self.run_command(["go", "test", "-race"], self.project_root/"parser")
 
+            print(f"\n{Fore.CYAN}Testing pir...{Style.RESET_ALL}")
+            self.run_command(["go", "test", "-race"], self.project_root/"pir")
+
             print(f"\n{Fore.CYAN}Testing compiler...{Style.RESET_ALL}")
             self.run_command(["go", "test", "-race"], self.project_root/"compiler")
 
