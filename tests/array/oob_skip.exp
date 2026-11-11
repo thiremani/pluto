@@ -15,3 +15,46 @@ NestedSeedOuterOOB: 99
 NestedOuterOOBSkips: 99
 NestedSeedInnerOOB: 99
 NestedInnerOOBSkips: 99
+RangedNestedOOBKeepsLast: 30
+CellOOBPlusOne: [0]
+CellOOBComparison: [0]
+CellOOBFallback: [-1]
+RowsZeroFill: [
+    0 0
+    1 2
+    0 0
+]
+LoneZeroFill: [
+    0 0
+]
+LiteralZeroFill: [
+    [0 0] [0 0]
+] [
+    [0 0] [0 0]
+]
+EmptyZeroFill: [
+]
+called [1 2]
+RowsSkipCall: [
+    0 0
+    1 2
+    0 0
+]
+FixedZeroFill: [
+    0 0
+    1 2
+]
+CallRowsNoShape: [[] [] []]
+called ["a" "b"]
+StringRowsFill: [
+    "" ""
+    "a" "b"
+    "" ""
+]
+StringFixedFill: [
+    "a" "b"
+    "" ""
+]
+OuterCheckKeepsRows: [
+    1 1
+]

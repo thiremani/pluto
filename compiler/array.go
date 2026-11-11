@@ -464,7 +464,7 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 				}
 				panic("internal: array cell lowering produced no value and recorded no error")
 			}
-			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell)
+			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell, llvm.Value{})
 		})
 	})
 
@@ -517,10 +517,13 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 	})
 }
 
+// storeArrayCellSlotWhenInBounds stores the cell's value unless a bounds check
+// failed. An array-valued cell passes yieldedSlot to learn whether it stored.
 func (c *Compiler) storeArrayCellSlotWhenInBounds(
 	cellSlot *Symbol,
 	vals []*Symbol,
 	cell ast.Expression,
+	yieldedSlot llvm.Value,
 ) {
 	slotElemType := cellSlot.Type.(Ptr).Elem
 	store := func() {
@@ -535,6 +538,9 @@ func (c *Compiler) storeArrayCellSlotWhenInBounds(
 		c.freeSymbolValue(cellSlot, "array_cell_old")
 		c.storeSymbolToSlot(cellSlot, valueToStore, slotElemType, "array_cell_store")
 		c.freeTemporary(cell, vals)
+		if !yieldedSlot.IsNil() {
+			c.setArrayCellYielded(yieldedSlot, 1)
+		}
 	}
 
 	if !c.withActiveBoundsGuard(
@@ -616,21 +622,24 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isT
 // arrayPairShape returns the flat iteration length and dimensions for a zipped
 // pair. Every dimension is limited to the shorter corresponding dimension.
 func (c *Compiler) arrayPairShape(left *Symbol, right *Symbol) (llvm.Value, []llvm.Value) {
-	leftDims := c.arrayDimensions(left)
-	rightDims := c.arrayDimensions(right)
-	dimensions := make([]llvm.Value, len(leftDims))
-	for i := range leftDims {
-		dimensions[i] = c.builder.CreateSelect(
-			c.builder.CreateICmp(llvm.IntULT, leftDims[i], rightDims[i], "cmp_array_dimension"),
-			leftDims[i], rightDims[i], "min_array_dimension",
-		)
-	}
+	dimensions := c.zipDimensions(c.arrayDimensions(left), c.arrayDimensions(right))
 
 	length := dimensions[0]
 	for _, dimension := range dimensions[1:] {
 		length = c.builder.CreateMul(length, dimension, "array_zip_len")
 	}
 	return length, dimensions
+}
+
+func (c *Compiler) zipDimensions(left, right []llvm.Value) []llvm.Value {
+	dimensions := make([]llvm.Value, len(left))
+	for i := range left {
+		dimensions[i] = c.builder.CreateSelect(
+			c.builder.CreateICmp(llvm.IntULT, left[i], right[i], "cmp_array_dimension"),
+			left[i], right[i], "min_array_dimension",
+		)
+	}
+	return dimensions
 }
 
 func (c *Compiler) arrayStrides(dimensions []llvm.Value) []llvm.Value {
@@ -769,7 +778,10 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 		)
 
 		useRightShape := c.builder.CreateAnd(c.builder.CreateNot(leftNonEmpty, "concat_left_empty"), rightNonEmpty, "concat_use_right_shape")
-		dimensions = []llvm.Value{c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")}
+		outerLen := c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")
+		outerFits := c.builder.CreateICmp(llvm.IntSGE, outerLen, zero, "concat_outer_fits")
+		c.abortOnFalse(outerFits, ARRAY_DIM_OVERFLOW, leftDims[0], rightDims[0], "concat_outer")
+		dimensions = []llvm.Value{outerLen}
 		for i := 1; i < len(leftDims); i++ {
 			dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
 		}
@@ -1097,10 +1109,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	}
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-	ctx := c.currentStmtCtx()
-	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
-		c.recordStmtBoundsCheck(inBounds)
-	}
+	c.recordStmtBoundsCheck(inBounds)
 	if arrType.Rank > 1 {
 		return []*Symbol{{Type: resultType, Val: c.checkedArraySubarray(arraySym, idxVal, inBounds)}}
 	}
@@ -1118,6 +1127,11 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
+		// A read in an operand records here. The statement's frame is seeded once
+		// before the loop, so it would carry a failure into later iterations.
+		guardPtr := c.pushBoundsGuard("array_range_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
 		c.compileCondOperands(rew, func() {
 			arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 			// Source operands are temporary for each loop iteration in this path.
@@ -1144,6 +1158,10 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			}
 
 			inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+			if c.stmtBoundsUsed() {
+				operandsOK := c.createLoad(guardPtr, Int{Width: 1}, "array_range_operands_ok")
+				inBounds = c.builder.CreateAnd(operandsOK, inBounds, "array_range_iter_ok")
+			}
 			if c.inArrayLiteralCellMode() {
 				storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
 

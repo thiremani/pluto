@@ -8,6 +8,15 @@
 
 // dup_cstr in util.h provides a portable strdup-like helper.
 
+/* Aborts the process; called from generated code when an I64 ÷ or % has a zero
+ * divisor. Flushes stdout first, because abort doesn't on every libc. */
+void div_zero_fail(void) {
+    fflush(stdout);
+    fprintf(stderr, "pluto: division by zero\n");
+    fflush(stderr);
+    abort();
+}
+
 // Concatenate two strings and return a newly allocated string.
 // Caller is responsible for free()ing the returned buffer.
 char *str_concat(const char *left, const char *right) {
@@ -194,7 +203,9 @@ char *range_i64_str(int64_t s, int64_t t, int64_t p) {
    - NaN  => "NaN"  (no sign)
    - +Inf => "+Inf"
    - -Inf => "-Inf"
-   For normal numbers we use round-trip precisions: %.15g for f64, %.9g for f32.
+   For normal numbers f64 uses %.15g, so a decimal of up to 15 digits prints as
+   written (0.1 + 0.2 prints 0.3), though an f64 can need 17 to read back
+   exactly. f32 uses %.9g, which reads back exactly.
    Caller must free() the returned string. */
 
 /* Returns a constant string for NaN/Inf values, or NULL for normal numbers.
@@ -215,7 +226,6 @@ char *f64_str(double x) {
         return dup_cstr(special);
     }
 
-    /* Print with round-trip precision */
     char tmp[64];
     int n = snprintf(tmp, sizeof tmp, "%.15g", x);
     if (n < 0 || n >= (int)sizeof(tmp)) return NULL;

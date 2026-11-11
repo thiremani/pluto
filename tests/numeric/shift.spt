@@ -1,0 +1,59 @@
+# a literal count uses its low 6 bits
+a = 1 << 64
+b = 1 << 65
+c = 1 << -1
+d = -8 >> 64
+e = -8 >>> 64
+a, b, c, d, e
+
+# a count read at run time gives the same results
+n = [64 65 -1 0 1 63]
+f = 1 << n[0]
+g = 1 << n[1]
+h = 1 << n[2]
+i = -8 >> n[0]
+j = -8 >>> n[0]
+f, g, h, i, j
+
+# >> is floor(x / 2^k) with k = n & 63
+k = 8 >> n[0]
+l = 8 >> n[1]
+m = -7 >> n[4]
+o = -7 ÷ 2
+k, l, m, o
+
+# a negative count is a large shift
+s = -8 >> n[2]
+t = -8 >>> n[2]
+s, t
+
+# a count reached through a call follows the same rule
+u = Scale(5, 64)
+v = Scale(5, n[0])
+u, v
+
+# array cells use the same rule
+aa = [1 1] << [64 3]
+ab = [1 1] << [-1 3]
+ac = [-8 -8] >> [64 1]
+ad = [-8 -8] >> [-1 1]
+ae = [-8 -8] >>> [64 1]
+aa, ab, ac, ad, ae
+
+# a loop whose counts pass 64 agrees with the scalar rule
+w = 0:1000
+x = 0
+x = x + (3 << w)
+x
+
+# a range past 64 agrees in a right shift too
+y = 0:200
+z = 0
+z = z + (1099511627776 >> y)
+z
+
+# a program can ask for zero at 64 by filtering the count
+af = (5 << (n[0] < 64)) || 0
+ag = (5 << (n[3] < 64)) || 0
+ah = (5 << (0 <= n[2] < 64)) || 0
+af, ag, ah

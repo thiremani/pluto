@@ -61,3 +61,71 @@ nestedInnerOOB = 99
 iInnerOOB = 3
 nestedInnerOOB = arr1[arr2short[iInnerOOB]]
 "NestedInnerOOBSkips: -nestedInnerOOB"
+
+# a ranged read keeps each iteration whose index was read in bounds
+rangedIdx = [1 2]
+rangedIter = 0:3
+rangedNested = 99
+rangedNested = arr1[rangedIdx[rangedIter]]
+"RangedNestedOOBKeepsLast: -rangedNested"
+
+# a cell past the end zero-fills whatever the read feeds
+cellArr = [1 2]
+cellPlus = [cellArr[9] + 1]
+"CellOOBPlusOne: -cellPlus"
+
+# a comparison fed by a failed read fails in a cell too
+cellCmp = [cellArr[9] < 5 && 7]
+"CellOOBComparison: -cellCmp"
+
+# so the cell takes its fallback
+cellOr = [(cellArr[9] + 1 != 0 && 7) || -1]
+"CellOOBFallback: -cellOr"
+
+# a failed row is zeros in the shape its operands show
+rowsArr = [1 2]
+rowsDiv = [0 1]
+rowsRange = 0:3
+rowsFill = [rowsArr ÷ rowsDiv[rowsRange] != 0]
+"RowsZeroFill: -rowsFill"
+
+# the shape carries through negation and elementwise operators
+loneFill = [-(rowsArr + rowsArr) ÷ rowsDiv[9]]
+"LoneZeroFill: -loneFill"
+
+# and through a literal, from whichever of its cells shows it
+literalFill = [rowsDiv[9] > 0 && [Identity(rowsArr) rowsArr]]
+literalFillFirst = [rowsDiv[9] > 0 && [rowsArr Identity(rowsArr)]]
+"LiteralZeroFill: -literalFill -literalFillFirst"
+
+# a failed cell takes its empty literal's shape: no rows, however long its sample is
+sample = [1]
+emptyFill = [rowsDiv[9] > 0 && []sample  []sample]
+emptyRow = emptyFill[0]
+"EmptyZeroFill: -emptyRow"
+
+# a call doesn't run on a failed row, which takes the shape of the rows that yield
+rowsLoud = [Loud(rowsArr ÷ rowsDiv[rowsRange] != 0)]
+"RowsSkipCall: -rowsLoud"
+
+# the same in a fixed literal
+fixedFill = [Loud(rowsArr + rowsDiv[9]) rowsArr]
+"FixedZeroFill: -fixedFill"
+
+# with no row that yields, a call's row shows no shape and stays empty
+callRows = [Loud(rowsArr ÷ rowsDiv[rowsRange + 5])]
+"CallRowsNoShape: -callRows"
+
+# string rows fill with empty strings
+strRows = ["a" "b"]
+strFill = [(rowsDiv[rowsRange] != 0) && Loud(strRows)]
+"StringRowsFill: -strFill"
+
+# the same in a fixed literal
+strFixed = [strRows (rowsDiv[0] != 0) && strRows]
+"StringFixedFill: -strFixed"
+
+# a failed check before the rows builds none, so their shapes never meet
+outerRows = [[1 1]]
+outerRows = (rowsDiv[9] + 1) + [rowsArr [1 2 3]]
+"OuterCheckKeepsRows: -outerRows"

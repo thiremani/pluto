@@ -170,7 +170,7 @@ two together rather than treating any single row as a deletion trigger.
 - **5g** — as 5f under a ranged gate: a rejected point produces no value to discard. *Missing:* **uncovered**: blank under a ranged gate. *Helpers:* `compileCondRangedStatement`
 - **6** — `compileCallExpression` → `compileCallInner`. *Tests:* `math/rec.spt`, `math/div`
 - **6b** — output slots that start at zero, since the callee has no range parameter (#69), via `callIntoStagedOutputs`. *Tests:* `const_args/*`, `output_refinement`, `mem/mem.spt`
-- **6c** — an argument whose conditional or checked failure remains unresolved makes the invocation `MayYield` (call-merge, plan §9) regardless of callee effect, so the whole call defers to Step 6 even when every output is `MustWrite`; this overrides every call row above — 5c, 6, 6b, 8b, 35d, 36d, and the function-output and ranged call rows — whatever the target or value kind. An inner fallback that resolves every failure leaves the argument `MustYield` and outside this row. Today `compileCondOperands` evaluates the extracted conditions first and the sibling arguments only on the success branch, so `r = Pair(Loud(a), c > 5)` never runs `Loud`; plan §3 keeps that order, stops at the first failed check (today `a, b = Pair(1 > 2, Loud(7) > 0)` still calls `Loud`), and makes a checked argument a check too. *Missing:* **uncovered** — regressions `F(sideEffect(), failingArg)` and `F(failingArg, sideEffect())`, neither of which runs the side effect, land with Step 6. *Helpers:* `compileCondOperands`
+- **6c** — an argument whose conditional or checked failure remains unresolved makes the invocation `MayYield` (call-merge, plan §9) regardless of callee effect, so the whole call defers to Step 6 even when every output is `MustWrite`; this overrides every call row above — 5c, 6, 6b, 8b, 35d, 36d, and the function-output and ranged call rows — whatever the target or value kind. An inner fallback that resolves every failure leaves the argument `MustYield` and outside this row. Today `compileCondOperands` evaluates the extracted conditions first and the sibling arguments only on the success branch, so `r = Pair(Loud(a), c > 5)` never runs `Loud`; plan §3 keeps that order, which already stops at the first failed check (`a, b = Pair(1 > 2, Loud(7) > 0)` calls no `Loud`), and makes a checked argument a check too. *Missing:* **uncovered** — regressions `F(sideEffect(), failingArg)` and `F(failingArg, sideEffect())`, neither of which runs the side effect, land with Step 6. *Helpers:* `compileCondOperands`
 - **7** — `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr`. Migrates in today's order: the bounds bit is tested where the read happens, so `y = Loud(1) + arr[oob]` still calls `Loud`; Step 6 revisits the plan to test it first (plan §3). *Tests:* `array/oob_skip`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
 - **7b** — **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates`. *Missing:* regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"`. *Helpers:* condLHS spine
 - **7c** — comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver. *Missing:* regressions when implemented. *Helpers:* condLHS spine
@@ -360,13 +360,9 @@ one emission group — not necessarily one physical line.
 The suppression outcome for a failed conditional matches today, and so does
 most of its order: `compileCondOperands` evaluates the conditions first and
 compiles sibling arguments only on the success branch, and `PrintPlan` runs
-every argument's checks first too (plan §3). Step 6 changes three things:
-checks stop at the first failure, where today every condition runs before any
-is tested (`"print", 1 > 2, Loud(8) > 0` stops calling `Loud`); an OOB read
-becomes a check, so its materialized zero becomes invocation suppression and
-its siblings no longer run; and work beside a failed check inside a
-comparison, an `&&` right side or an `||` left side stops running
-(`value_cond_expr`'s `PosPrint` lines). Row 30's outcome is retained while
+every argument's checks first too (plan §3). Step 6 changes one thing: an OOB
+read becomes a check, so its materialized zero becomes invocation suppression
+and its siblings no longer run. Row 30's outcome is retained while
 its lowering reroutes off `compileCondOperands`; the baseline for both
 failure kinds is pinned in `tests/array/oob_print.spt`.
 

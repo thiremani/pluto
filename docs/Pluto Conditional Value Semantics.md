@@ -256,6 +256,9 @@ Tightest to loosest:
 | bitwise xor | `⊻` |
 | bitwise or | `\|` |
 
+[Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md) states what these
+operators do at their numeric limits.
+
 Ranges sit between comparisons and `&&`, so `0:n > 2` is a range with a
 conditional bound, and `c && 0:n` puts the whole range on the `&&`'s right
 side. `⊕` groups left to right with `+` and `-`, so arithmetic after a join
@@ -315,10 +318,18 @@ is `[0]` (not `[]`), and `[a > 2  a > 99]` is `[5 0]` (not empty or kept-old).
 An `&&` cell propagates into the same resolution: `[b > 2 && 5]` zero-fills when
 the condition fails, and `[b > 2 && 5 || -1]` takes the fallback instead.
 
-For planned nested range construction after PIR migration, the same rule
-extends recursively to array-valued cells. A failed child contributes a
-zero-filled array of its expected shape; an explicit array fallback overrides
-it:
+An array-valued cell resolves the same way: a failed one is a row of zeros and
+runs nothing past its checks, so a call on a failed read doesn't run. With
+`a = [1 2]`, `d = [1 2]` and `i = 0:3`, `[a ÷ d[i]]` is `[[1 2] [0 1] [0 0]]`,
+while `i < 2 [a ÷ d[i]]` gates the third row out. The row takes the shape its
+operands show (an array it divides, a row it reads, a literal), or else the
+shape of the rows that yield. A cell whose shape isn't shown that way, such as
+a call, a `⊕` or a ranged literal, stays empty when no row yields; PIR plans to
+require a fallback there (below).
+
+Planned nested range construction after PIR migration follows the same rule. A
+failed child contributes a zero-filled array of its expected shape; an explicit
+array fallback overrides it:
 
 ```pluto
 [i > 0 && [F(i, j)]]                  # failed i positions get a zero row
@@ -328,9 +339,9 @@ it:
 The expected child shape must be known or derivable from bound range domains.
 When it is not, the source must supply a shape-bearing fallback such as
 `|| [j && 0]` for a zero row or `|| [j && -1]` for a different fill value.
-Pluto never invents an empty, padded, or flattened child. This is value-position
-resolution and preserves the outer domain; a statement gate instead rejects
-the complete iteration point.
+With that in place, Pluto never invents an empty, padded, or flattened child.
+This is value-position resolution and preserves the outer domain; a statement
+gate instead rejects the complete iteration point.
 
 Spacing separates cells, and operators glue their operands into one cell:
 
@@ -436,9 +447,9 @@ evaluated only when a slot its context still needs depends on it — a needed
 slot whose left side yielded, for an `&&`, or that its left side left empty,
 for an `||`. A statement needs every slot of its value
 and a gate every slot of its condition; an `&&` or `||` passes its need to its
-left side, arithmetic and negation pass each slot's need to their operands, and
-a call, an index or a comparison needs every slot of its operands whenever it
-runs. So `c > 0 && (a > 2 || 7)` composes (the inner `||` resolves inside the
+left side, arithmetic and negation pass each slot's need to their operands, less
+the slots a check before that operand has failed, and a call, an index or a
+comparison needs every slot of its operands whenever it runs. So `c > 0 && (a > 2 || 7)` composes (the inner `||` resolves inside the
 gated arm), and regrouping a chain keeps the calls it makes: with `p` standing
 for `Pair(1, 2) > Pair(0, 5)`, which fails its second slot, and `q` for
 `Pair(1, 2) > Pair(5, 0)`, which fails its first, neither `p && (q && F())` nor
@@ -488,16 +499,16 @@ follow the same order: a check's own calls run before the work it gates, so
 `x = io() + (io() > 0)` runs the second `io()` first, and a statement boundary
 keeps text order (`v = io()`, then `x = v + (v > 0)`).
 
-**Status (decided; PIR Steps 6–8):** today's lowering evaluates comparisons
-before the other operands in single-slot values, call arguments, cells and
-prints, but runs every one of them before testing any, so
-`a, b = Pair(1 > 2, Loud(7) > 0)` calls `Loud`. Elsewhere it doesn't check
-first yet: an out-of-bounds read is checked where it is read
-(`Loud(1) + arr[oob]` calls `Loud`), and work inside a comparison's operands,
-an `&&` right side, an `||` left side or multi-slot arithmetic runs before the
-checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). PIR Step 6
-makes non-ranged statements and prints check first, and ranged statements and
-collector cells follow when they migrate in Steps 7 and 8.
+**Status (decided; PIR Steps 6–8):** today's lowering follows this order for
+comparisons: after a failed comparison, the calls and divides in that slot's
+later checks and other work don't run. An out-of-bounds read isn't a check yet.
+It is tested where it is read, so `Loud(1) + arr[oob]` calls `Loud`. An `||` runs
+where it stands among the checks, so `((1 > 9) || Loud(2)) + (1 > 2)` calls
+`Loud`. A comparison with no range runs before the loop of a ranged check beside
+it. A zero divisor stops the program unless a check of its own scope and slot has
+failed by then, so `(7 ÷ n + arr[oob]) > 0` stops. PIR Step 6 makes non-ranged
+statements and prints check first, and ranged statements and collector cells
+follow when they migrate in Steps 7 and 8.
 
 ## Why this model
 
@@ -513,7 +524,8 @@ collector cells follow when they migrate in Steps 7 and 8.
 - **No fabricated zeros:** a failed slot skips its commit instead of
   materializing a sentinel `0` that flows onward; zeros appear only where a
   resolver deliberately introduces them (a fresh seed, a cell's zero-fill, an
-  explicit `|| 0`).
+  explicit `|| 0`). `x ÷ 0` makes no zero either: it stops the program; see
+  [Pluto Numeric Semantics](Pluto%20Numeric%20Semantics.md).
 - **Checks guard work:** a slot that fails runs nothing beyond its checks, so
   a comparison guards the calls beside it wherever it is written — a base
   case stops a recursion — the same way a statement gate or an `&&` does.
@@ -565,10 +577,10 @@ collector cells follow when they migrate in Steps 7 and 8.
   the atomic unit, not one physical line: a slot's formatted representation
   may itself span lines, as whole-`Struct` printing does, and suppression
   removes all of it. Failed-conditional suppression is today's behavior,
-  retained with its order — the arguments' checks run first, so a suppressed
-  invocation evaluates none of its other arguments ("Evaluation order: checks
-  first" above) — except that checks now stop at the first failure: today
-  `"print", 1 > 2, Loud(8) > 0` still calls `Loud`. This is the general
+  retained with its order — the arguments' checks run first and stop at the
+  first failure, so `"print", 1 > 2, Loud(8) > 0` calls no `Loud` and a
+  suppressed invocation evaluates none of its other arguments ("Evaluation
+  order: checks first" above). This is the general
   invocation rule, not a print special case: neither
   `F(sideEffect(), failingArg)` nor `F(failingArg, sideEffect())` runs the
   side effect. The out-of-bounds case changes: today an OOB argument

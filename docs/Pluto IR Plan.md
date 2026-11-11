@@ -146,21 +146,14 @@ comparison guards the work beside it wherever it is written, as a gate or an
 checks first and placing the rest of its work in a `require` region on them
 (§4).
 
-Today's lowering already evaluates comparisons before the other operands in
-a single-slot value, a call's arguments, a cell and a print:
-`compileCondExprValue` and `compileCondOperands` evaluate every extracted
-condition first and compile the other operands only on the success branch.
-The rest of the order is a **behavior change**:
-
-- Checks stop at the first failure. Today every extracted condition runs
-  before any is tested, so `a, b = Pair(1 > 2, Loud(7) > 0)` and
-  `"print", 1 > 2, Loud(8) > 0` call `Loud`; afterward neither does.
-- A checked access becomes a check, so `Loud(1) + arr[oob]` stops calling
-  `Loud`, and an OOB print argument suppresses the invocation instead of
-  printing its materialized zero (§9).
-- Work beside a failed check inside a comparison's operands, an `&&` right
-  side, a `fallback`'s left side or multi-slot arithmetic stops running, so
-  `(1 > 0) && ((1 > 2) + Loud(1))` stops calling `Loud`.
+Today's lowering already follows this order for comparisons: extraction
+evaluates each one under a guard of those before it, and the other operands
+run under a guard of the checks, so `a, b = Pair(1 > 2, Loud(7) > 0)` and
+`(1 > 0) && ((1 > 2) + Loud(1))` call no `Loud`. The rest of the order is a
+**behavior change**: a checked access becomes a check, so `Loud(1) + arr[oob]`
+stops calling `Loud`, and an OOB print argument suppresses the invocation
+instead of printing its materialized zero (§9); and an `||` that can't fail
+becomes work, so `((1 > 9) || Loud(2)) + (1 > 2)` stops calling `Loud`.
 
 Step 6 makes these changes for non-ranged statements and prints, including
 the checked-only assignments Step 5 migrates in today's order; ranged
@@ -1325,23 +1318,23 @@ append.
   `x, y = A && ((A || G(7)) > 0)` calls no `G`, and
   `x, y = A && ((Pair(10, 10) ÷ (A || Pair(G(7), G(8)))) > 0)` calls no `G`
   and doesn't divide by the slot the `||` leaves empty. `logical_ops`'s
-  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here.
+  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here. So
+  does the stop test's `need_stops_at_a_comparison`: a zero divisor in that right
+  side stops the program today, even for a slot an earlier check failed.
 - Calls with an argument whose conditional or checked failure remains
   unresolved (matrix row 6c), which gain checks-first evaluation (§3) with
   regressions: neither `F(sideEffect(), failingArg)` nor
   `F(failingArg, sideEffect())` runs the side effect, and
   `F(sideEffect(), passingArg)` runs it once. After #123 no non-ranged call
   defers here for its callee's write effects. `value_cond_expr`'s `Pos` blocks
-  pin today's evaluation beside a failed comparison, in values, calls, cells
-  and prints, so their `.exp` changes here: no call beside a failed check
-  runs, so every `called` line in the `Pos` blocks goes, as does
-  `NegationCalls`' `called 1`.
+  pin that no call beside a failed check runs, in values, calls, cells and
+  prints, and its `PosNotYet` block pins the evaluation still to change, so that
+  block's `called` lines go here.
 - All non-ranged prints lower as `PrintPlan`s (§3), including call
   arguments: a call that runs writes every output, so a call argument fails
   only through its own arguments or invocation.
-  The conditional suppression outcome is retained, checks now stop at the
-  first failure, and an OOB read becomes a check, so its materialized zero
-  becomes invocation suppression (§3, §9). Update
+  The conditional suppression outcome is retained, and an OOB read becomes a
+  check, so its materialized zero becomes invocation suppression (§3, §9). Update
   `tests/array/oob_print.exp` in the same PR, with regressions for a
   side-effecting or owned-heap sibling of a failed conditional or OOB read,
   which never runs or allocates, and for a failed sibling suppressing a
@@ -1354,7 +1347,9 @@ append.
 - Then ranged gates and ranged conditional combinations, including the ranged
   logical trees `compileCondExprStatement` routes to staging today; `continue`
   versus `skip` scopes become explicit. Each iteration's failure scopes take
-  §3's checks-first order here.
+  §3's checks-first order here, so a comparison with no range stops running
+  before the loop of a ranged check beside it. The stop test's
+  `ranged_check_before_a_divide` pins today's stop.
 - Step 6's need through comparison operands, for ranged conditionals. Over
   `i = 0:3`, `x, y = Pair(i, 1) > Pair(0, 5) && ((Pair(i, 1) > Pair(0, 5) ||
   G(i)) > 0)` calls `G` on no iteration (legacy lowering calls it on 1 and 2).
@@ -1388,6 +1383,20 @@ append.
   `a = [1]` and `row = [1 2]`, `x = a[5] + [row (1 > 0 && row)]` keeps `x`,
   whereas reading `row` past the failed `a[5]` would leave the rows' shapes
   unequal and abort the shape check.
+- A failed array-valued cell zero-fills in the shape its operands show: an
+  array it divides, a row it reads, a literal without ranges. Where they show
+  none, as for a call, a `⊕` or a ranged literal, the solver rejects a cell
+  that may still fail after its own fallbacks, so no closing policy takes the
+  shape of the rows that yield, and legacy lowering's pending-row count
+  (`failedRowsSlot`) and choice of the first yielded row's shape
+  (`fixedRowShape`) are never ported. The rule lands with matrix row 7f,
+  before which a cell can't take `||` after a failed read, and no later than
+  collectors. It breaks programs that rely on the rows' shape. Every index
+  read is `MayYield`, so `[Row(d[i])]` needs `|| [0 0 0]` or `Row(d[i] || 0)`
+  even when `i` stays in bounds; `oob_skip`'s `RowsSkipCall`, `FixedZeroFill`
+  and `StringRowsFill` gain a fallback, and `CallRowsNoShape` becomes the
+  test of the error. §18's shapes derived from bound range domains later
+  accept more programs.
 - The remaining ranged and collector print paths migrate. After this step no
   statement form needs the legacy conditional or collector machinery.
 - Collectors join the name allocator and invariant 24: collector nodes
@@ -1691,9 +1700,11 @@ The statement plan can grow without becoming a machine IR:
   seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
   express the semantics today
 - a skipped array-valued collector cell closes to a zero-filled child of its
-  expected shape, while `||` may supply a shape-compatible child; the validator
-  rejects a plan whose skipped child shape is neither known nor derivable
-  unless an explicit fallback such as `[j && 0]` supplies it
+  expected shape, while `||` may supply a shape-compatible child. Step 8
+  requires a fallback wherever the operands show no shape; this extension also
+  derives shapes from bound range domains, so only a child whose shape is
+  neither known nor derivable needs an explicit fallback such as `[j && 0]`.
+  The solver reports a missing one, since validator failures are ICEs (§14)
 - test contexts can become explicit statement inputs and effects
 
 PIR stays statement-focused until a concrete feature requires cross-statement

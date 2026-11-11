@@ -48,6 +48,10 @@ stacked row OOB: [
     1 2
     0 0
 ]
+nested row OOB: [
+    [0 0]
+    [1 2]
+]
 reset matrix: [
     5 6
 ]

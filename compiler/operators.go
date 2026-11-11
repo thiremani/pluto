@@ -231,7 +231,6 @@ var defaultOps = map[opKey]opFunc{
 	{Operator: token.SYM_IMPL_MUL, LeftType: F64, RightType: I64}: mulF64I64,
 
 	// Division:
-	// For integers, this example uses integer division (CreateSDiv).
 	// For ÷ operator
 	{Operator: token.SYM_QUO, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
@@ -240,7 +239,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateSDiv(left.Val, right.Val, "div_tmp")
+		s.Val = c.i64Divide(left.Val, right.Val, left.Val, c.builder.CreateSDiv)
 		return
 	},
 	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -429,7 +428,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, left.Val, right.Val, "neq_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, right.Val, "neq_F64")
 		return
 	},
 	{Operator: token.SYM_NEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -440,7 +439,7 @@ var defaultOps = map[opKey]opFunc{
 		}
 
 		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, leftFP, right.Val, "neq_I64_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, leftFP, right.Val, "neq_I64_F64")
 		return
 	},
 	{Operator: token.SYM_NEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -451,7 +450,7 @@ var defaultOps = map[opKey]opFunc{
 		}
 
 		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
-		s.Val = c.builder.CreateFCmp(llvm.FloatONE, left.Val, rightFP, "neq_F64_I64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, rightFP, "neq_F64_I64")
 		return
 	},
 
@@ -663,7 +662,6 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Integer Modulo (Signed)
-	// Note: Modulo by zero has undefined behavior (uses LLVM SRem)
 	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
@@ -671,7 +669,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateSRem(left.Val, right.Val, "srem_tmp")
+		s.Val = c.i64Divide(left.Val, right.Val, c.ConstI64(0), c.builder.CreateSRem)
 		return
 	},
 
@@ -717,7 +715,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateShl(left.Val, right.Val, "shl_tmp")
+		s.Val = c.builder.CreateShl(left.Val, c.shiftCount(right.Val), "shl_tmp")
 		return
 	},
 
@@ -729,7 +727,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp")
+		s.Val = c.builder.CreateAShr(left.Val, c.shiftCount(right.Val), "ashr_tmp")
 		return
 	},
 
@@ -741,7 +739,7 @@ var defaultOps = map[opKey]opFunc{
 			return
 		}
 
-		s.Val = c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp")
+		s.Val = c.builder.CreateLShr(left.Val, c.shiftCount(right.Val), "lshr_tmp")
 		return
 	},
 
@@ -881,6 +879,78 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = floatSqrt(c, sqrt)
 		return
 	},
+}
+
+// markRareExit tells LLVM a branch's first successor is rare.
+func (c *Compiler) markRareExit(branch llvm.Value) {
+	branch.SetMetadata(c.Context.MDKindID("prof"), c.Context.MDNode([]llvm.Metadata{
+		c.Context.MDString("branch_weights"),
+		llvm.ConstInt(c.Context.Int32Type(), 1, false).ConstantAsMetadata(),
+		llvm.ConstInt(c.Context.Int32Type(), 2000, false).ConstantAsMetadata(),
+	}))
+}
+
+// i64Divide lowers I64 ÷ and %. LLVM leaves sdiv and srem undefined for a zero
+// divisor and for MIN ÷ -1, and x86-64 faults on them. Each test is its own rare
+// branch so a normal divide runs straight through: LLVM would split a combined
+// y == -1 && x == MIN and assume its first half is 50/50. Testing x first keeps a
+// -1 divisor off the rare path unless x is MIN.
+func (c *Compiler) i64Divide(left, right, overflowResult llvm.Value, divide func(x, y llvm.Value, name string) llvm.Value) llvm.Value {
+	fn := c.builder.GetInsertBlock().Parent()
+	zeroBlock := c.Context.AddBasicBlock(fn, "div_zero")
+	minBlock := c.Context.AddBasicBlock(fn, "div_check_min")
+	minusOneBlock := c.Context.AddBasicBlock(fn, "div_check_minus_one")
+	divideBlock := c.Context.AddBasicBlock(fn, "div_divide")
+	contBlock := c.Context.AddBasicBlock(fn, "div_cont")
+
+	isZero := c.builder.CreateICmp(llvm.IntEQ, right, c.ConstI64(0), "div_is_zero")
+	c.markRareExit(c.builder.CreateCondBr(isZero, zeroBlock, minBlock))
+
+	c.builder.SetInsertPointAtEnd(zeroBlock)
+	skipsStop := c.stopOnZeroDivisor(contBlock)
+
+	c.builder.SetInsertPointAtEnd(minBlock)
+	isMin := c.builder.CreateICmp(llvm.IntEQ, left, c.ConstI64(1<<63), "div_is_min")
+	c.markRareExit(c.builder.CreateCondBr(isMin, minusOneBlock, divideBlock))
+
+	c.builder.SetInsertPointAtEnd(minusOneBlock)
+	isMinusOne := c.builder.CreateICmp(llvm.IntEQ, right, c.ConstI64(^uint64(0)), "div_is_minus_one")
+	c.builder.CreateCondBr(isMinusOne, contBlock, divideBlock)
+
+	c.builder.SetInsertPointAtEnd(divideBlock)
+	divided := divide(left, right, "div_tmp")
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int64Type(), "div_result")
+	result.AddIncoming([]llvm.Value{overflowResult, divided}, []llvm.BasicBlock{minusOneBlock, divideBlock})
+	if skipsStop {
+		result.AddIncoming([]llvm.Value{c.ConstI64(0)}, []llvm.BasicBlock{zeroBlock})
+	}
+	return result
+}
+
+// stopOnZeroDivisor ends the current block by stopping the program. A failed guard
+// around this divide means its result won't be used, so it first branches to cont
+// in that case, and reports whether it can.
+func (c *Compiler) stopOnZeroDivisor(cont llvm.BasicBlock) bool {
+	passed, canFail := c.activeBoundsGuardValue("div_guard")
+	if canFail {
+		stopBlock := c.Context.AddBasicBlock(c.builder.GetInsertBlock().Parent(), "div_stop")
+		c.builder.CreateCondBr(passed, stopBlock, cont)
+		c.builder.SetInsertPointAtEnd(stopBlock)
+	}
+
+	failTy, failFn := c.GetCFunc(DIV_ZERO_FAIL)
+	c.builder.CreateCall(failTy, failFn, nil, "")
+	c.builder.CreateUnreachable()
+	return canFail
+}
+
+// shiftCount keeps a count's low 6 bits. LLVM's shifts are poison for a count of
+// 64 or more, negative counts included.
+func (c *Compiler) shiftCount(count llvm.Value) llvm.Value {
+	return c.builder.CreateAnd(count, c.ConstI64(63), "shift_count")
 }
 
 // float = float ÷ float via truncation

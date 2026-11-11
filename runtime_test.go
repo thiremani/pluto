@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -290,6 +292,40 @@ func TestParseCLIArgsRejectsInvalidCombinations(t *testing.T) {
 			_, err := parseCLIArgs(tt.args)
 			require.Error(t, err)
 			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+// unixNewlines undoes Windows's text-mode stdout and stderr, which write \n as \r\n.
+func unixNewlines(output string) string {
+	return strings.ReplaceAll(output, "\r\n", "\n")
+}
+
+func TestConcatDimensionOverflowAborts(t *testing.T) {
+	cases := []struct {
+		name      string
+		doublings int
+		wantAbort string
+	}{
+		{"LargestDimensionFits", 62, ""},
+		{"NextDoublingAborts", 63, "pluto: array dimension overflow: 4611686018427387904 + 4611686018427387904"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "\"before\"\nrow = [[]0]\n" + strings.Repeat("row = row ⊕ row\n", tc.doublings) + "row[0]\n\"done\"\n"
+			p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
+				MOD_FILE:                "module github.com/thiremani/pluto/concat_overflow_test\n",
+				"overflow" + SPT_SUFFIX: source,
+			})
+			require.NoError(t, buildScript(t, p, cc, codeLL, "overflow", rtObjs))
+
+			if tc.wantAbort == "" {
+				out, err := exec.Command(filepath.Join(p.Cwd, "overflow")).CombinedOutput()
+				require.NoError(t, err)
+				require.Equal(t, "before\n[]\ndone", strings.TrimSpace(unixNewlines(string(out))))
+				return
+			}
+			require.Contains(t, runStoppedProgram(t, p.Cwd, "overflow"), tc.wantAbort)
 		})
 	}
 }

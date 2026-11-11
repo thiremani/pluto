@@ -335,6 +335,7 @@ static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_
     case PT_ELEM_F64: {
         double value = arr_f64_get((const PtArrayF64*)values, index);
         const char* special = f64_special_str(value);
+        /* %g's 6 significant digits keep arrays short; f64_str prints up to 15. */
         return special ? strbuf_printf(sb, "%s", special) : strbuf_printf(sb, "%g", value);
     }
     case PT_ELEM_STR: {
@@ -411,8 +412,19 @@ fail:
  * fails while stacking or concatenating arrays. Static shape mismatches are
  * compile errors instead. */
 void array_shape_fail(size_t expected, size_t got) {
+    fflush(stdout);
     fprintf(stderr, "pluto: array shape mismatch: expected dimension %zu, got %zu\n",
             expected, got);
+    fflush(stderr);
+    abort();
+}
+
+/* Aborts the process; called from generated code when concatenating arrays
+ * would overflow an outer dimension. Only zero-width rows can get this far,
+ * since they use no memory. */
+void array_dim_overflow(size_t left, size_t right) {
+    fflush(stdout);
+    fprintf(stderr, "pluto: array dimension overflow: %zu + %zu\n", left, right);
     fflush(stderr);
     abort();
 }

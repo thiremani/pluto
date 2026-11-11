@@ -1,0 +1,15 @@
++Inf -Inf NaN
++Inf -Inf NaN
++Inf +Inf
+-3 0
+-1.5 1.5 1.5
+NaN 7.5 NaN
+-0 -Inf
+NaN -2 NaN
+1 +Inf +Inf NaN
+5 5 5 5
+NaN NaN 1 NaN
+NaN
+NaN
+5 1
+[NaN 0]

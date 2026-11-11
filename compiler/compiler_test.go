@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -91,11 +93,10 @@ r`
 	}
 	falseArm := strings.Index(body, "\ncond_else:")
 	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
-	aMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
-	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new5)")
-	require.NotEqual(t, -1, aMask)
-	require.NotEqual(t, -1, bMask)
-	require.Less(t, bMask, aMask, "the failed condition frees its masks last first, as scopes free bindings")
+	frees := regexp.MustCompile(`call void @arr_i64_free\(ptr (%arr_new\d*)\)`).FindAllStringSubmatch(body[falseArm:], 2)
+	require.Len(t, frees, 2)
+	require.NotEqual(t, "%arr_new", frees[0][1], "the failed condition frees its masks last first, as scopes free bindings")
+	require.Equal(t, "%arr_new", frees[1][1])
 	for range 10 {
 		got, _ := compileScriptAndCodeIR(t, "mask_cleanup_order", code, script)
 		require.Equal(t, want, got)
@@ -110,12 +111,78 @@ out`
 	ir, _ := compileScriptAndCodeIR(t, "stmt_and_short_circuit", "", script)
 	rhsLabel := strings.Index(ir, "stmt_and_rhs:")
 	falseLabel := strings.Index(ir, "stmt_and_false:")
-	division := strings.Index(ir, "sdiv i64")
+	guard := strings.Index(ir, "%div_is_zero")
 	require.NotEqual(t, -1, rhsLabel, "expected a short-circuit RHS block")
 	require.NotEqual(t, -1, falseLabel, "expected a short-circuit false block")
-	require.NotEqual(t, -1, division, "expected the second condition's division")
-	require.Less(t, rhsLabel, division, "the second condition must be emitted inside the lazy RHS block")
-	require.Less(t, division, falseLabel, "the second condition must not escape the lazy RHS block")
+	require.NotEqual(t, -1, guard, "expected the second condition's division guard")
+	require.Less(t, rhsLabel, guard, "the second condition must be emitted inside the lazy RHS block")
+	require.Less(t, guard, falseLabel, "the second condition must not escape the lazy RHS block")
+}
+
+func TestI64DivisionRunsBehindItsGuard(t *testing.T) {
+	cases := []struct {
+		name, script, divide string
+	}{
+		{"Quotient", "v = [7 0]\nx = v[0] ÷ v[1]\nx\n", "sdiv"},
+		{"Remainder", "v = [7 0]\nx = v[0] % v[1]\nx\n", "srem"},
+		{"InsideComparison", "v = [7 0]\nx = 9\nx = (v[0] ÷ (v[1] != 0)) > 0\nx\n", "sdiv"},
+		{"ArrayCell", "x = [7 8] ÷ [0 2]\nx\n", "sdiv"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ir, _ := compileScriptAndCodeIR(t, "division_guard", "", tc.script)
+			requireInstructionInBlock(t, ir, tc.divide+" i64", "div_divide")
+			requireDivisionGuarded(t, ir, tc.divide)
+			require.Contains(t, ir, "call void @div_zero_fail()\n  unreachable")
+		})
+	}
+}
+
+// requireDivisionGuarded checks that the divide's operands are the ones tested,
+// in order, with the zero and MIN branches marked rare. Programs can't see a hint
+// or the order, and on arm64, whose divide returns MIN for MIN ÷ -1, they see a
+// MIN test that reads the divisor only where LLVM exploits the undefined divide.
+func requireDivisionGuarded(t *testing.T, ir, divide string) {
+	t.Helper()
+	zero := regexp.MustCompile(`%div_is_zero\d* = icmp eq i64 (\S+), 0\n\s+br i1 %div_is_zero\d*, label %div_zero\d*, label %div_check_min\d*, !prof (!\d+)`).FindStringSubmatch(ir)
+	require.NotNil(t, zero, "expected a rare branch on a zero divisor")
+	minimum := regexp.MustCompile(`%div_is_min\d* = icmp eq i64 (\S+), -9223372036854775808\n\s+br i1 %div_is_min\d*, label %div_check_minus_one\d*, label %div_divide\d*, !prof (!\d+)`).FindStringSubmatch(ir)
+	require.NotNil(t, minimum, "expected a rare branch on a MIN dividend")
+	minusOne := regexp.MustCompile(`%div_is_minus_one\d* = icmp eq i64 (\S+), -1\n\s+br i1 %div_is_minus_one\d*, label %div_cont\d*, label %div_divide\d*`).FindStringSubmatch(ir)
+	require.NotNil(t, minusOne, "expected the MIN path to test for a -1 divisor")
+	divided := regexp.MustCompile(divide + ` i64 (\S+), (\S+)\n`).FindStringSubmatch(ir)
+	require.NotNil(t, divided, "expected %s in the IR", divide)
+	require.Equal(t, minimum[1], divided[1], "the MIN test must read the dividend")
+	require.Equal(t, zero[1], divided[2], "the zero test must read the divisor")
+	require.Equal(t, minusOne[1], divided[2], "the -1 test must read the divisor")
+
+	for _, node := range []string{zero[2], minimum[2]} {
+		weights := regexp.MustCompile(`(?m)^` + node + ` = !\{!"branch_weights", i32 (\d+), i32 (\d+)\}$`).FindStringSubmatch(ir)
+		require.NotNil(t, weights, "expected branch weights at %s", node)
+		rare, _ := strconv.Atoi(weights[1])
+		common, _ := strconv.Atoi(weights[2])
+		require.Less(t, rare, common, "the branch weights at %s must make the error path rare", node)
+	}
+}
+
+// requireInstructionInBlock checks that every occurrence of instruction sits
+// in a block whose label starts with blockPrefix.
+func requireInstructionInBlock(t *testing.T, ir, instruction, blockPrefix string) {
+	t.Helper()
+	block := ""
+	found := false
+	for _, line := range strings.Split(ir, "\n") {
+		head := strings.TrimSpace(strings.SplitN(line, ";", 2)[0])
+		if label, ok := strings.CutSuffix(head, ":"); ok {
+			block = label
+		}
+		if !strings.Contains(line, instruction) {
+			continue
+		}
+		found = true
+		require.True(t, strings.HasPrefix(block, blockPrefix), "%q runs in block %q", instruction, block)
+	}
+	require.True(t, found, "expected %q in the IR", instruction)
 }
 
 func TestDirectReturnSeedIndex(t *testing.T) {

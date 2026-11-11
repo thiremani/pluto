@@ -1,0 +1,30 @@
+y = Loud(x)
+    x
+    y = x
+
+res = Quo(x, n)
+    res = x ÷ n
+
+res = Rem(x, n)
+    res = x % n
+
+res = QuoOr(x, n, fallback)
+    res = (x ÷ (n != 0)) || fallback
+
+res = QuoFrom(x, n)
+    res = -1
+    res = x ÷ (n != 0)
+
+res = Scale(x, n)
+    res = x << n
+
+res = Id(x)
+    res = x
+
+p, q = Pair(x, y)
+    p = x
+    q = y
+
+p, q = SlotChecks(x, n)
+    p, q = 8, 9
+    p, q = (Pair(1, 1) > Pair(2, n)) + ((Pair(x, x) ÷ Pair(n, 1)) > 0)
