@@ -1260,8 +1260,9 @@ range parameter reads no seed (#69), its outputs land in slots of their own,
 and the plan's `commit` is the only write to a target, so `a = F(a)` passes
 the value from before the statement (§6, `tests/alias_input`). The bindings
 a statement passes by reference move to memory before its code, as before a
-legacy statement. Pinned by `TestPlanGoldenCalls` (matrix rows 3, 5c, 6, 6b,
-35d); a table output (36d) plans in `tests/array/array_func`.
+legacy statement (`TestPlanPromotesReferenceArgsFirst`). Pinned by
+`TestPlanGoldenCalls` (matrix rows 3, 5c, 6, 6b, 35d); a table output (36d)
+plans in `tests/array/array_func`.
 
 **Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
 rows 2c and 36) once an eval-operand spelling exists; field and column

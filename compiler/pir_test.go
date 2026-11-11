@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -791,4 +792,26 @@ d, l, r, n, copied.age, tag`)
         Person{name:Str age:I64} copied <- %t0#0
         Str tag <- %t0#1
 `, plans[4].Render(true))
+}
+
+// A planned statement moves the bindings it passes by reference to memory
+// before any of its evals run, as a legacy statement does
+// (promoteStatementBindings). arr is stored ahead of the call to Bump, not
+// where First reads it.
+func TestPlanPromotesReferenceArgsFirst(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "planPromotion", `r = Bump(x)
+    r = x + 1
+
+n = First(v)
+    n = 0
+    n = v[0]
+`, `arr = [5 6]
+a, b = Bump(1), First(arr)
+a, b`)
+
+	promoted := strings.Index(ir, "store ptr %arr_new, ptr %arr.mem")
+	firstEval := strings.Index(ir, "%Bump_ret = call")
+	require.NotEqual(t, -1, promoted, "expected arr to be stored to memory")
+	require.NotEqual(t, -1, firstEval, "expected the call to Bump")
+	require.Less(t, promoted, firstEval, "arr must reach memory before the statement's first eval")
 }
