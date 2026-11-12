@@ -39,15 +39,17 @@ func planLabels(plans []*pir.AssignPlan) []string {
 	return labels
 }
 
-// planOwners labels each plan with the function it belongs to; a script-root
-// plan keeps its bare label.
-func planOwners(plans []*pir.AssignPlan) []string {
-	owners := make([]string, len(plans))
+// planOwner names a plan by the function it belongs to, empty at the script
+// root, and by its label.
+type planOwner struct {
+	Func  string
+	Label string
+}
+
+func planOwners(plans []*pir.AssignPlan) []planOwner {
+	owners := make([]planOwner, len(plans))
 	for i, p := range plans {
-		owners[i] = p.Label
-		if p.Func != "" {
-			owners[i] = p.Func + ": " + p.Label
-		}
+		owners[i] = planOwner{Func: p.Func, Label: p.Label}
 	}
 	return owners
 }
@@ -198,9 +200,10 @@ after = seed + 1
 res, after`)
 
 	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(sc.Compiler.Plans[0]))
-	require.Equal(t, []string{
-		"assign seed", "assign res", "assign after",
-		"I64 = addOne(I64): assign t", "I64 = addOne(I64): assign c",
+	require.Equal(t, []planOwner{
+		{Label: "assign seed"}, {Label: "assign res"}, {Label: "assign after"},
+		{Func: "I64 = addOne(I64)", Label: "assign t"},
+		{Func: "I64 = addOne(I64)", Label: "assign c"},
 	}, planOwners(sc.EmittedPlans()))
 }
 
@@ -857,14 +860,17 @@ acc = Sum(acc, 1:4)
 n, o, k, p, q, one, acc`)
 
 	plans := sc.EmittedPlans()
-	require.Equal(t, []string{
-		"assign n", "assign h", "assign o, k", "assign p", "assign q", "assign one", "assign acc",
-		"I64 = AddOne(I64): assign t", "I64 = AddOne(I64): assign res",
-		"Str, Str = Echo(Str): assign out", "Str, Str = Echo(Str): assign kept",
-		"Str = Pick(Str, I64): assign out",
-		"I64 = Outer(I64): assign res",
-		"I64 = Inner(I64): assign res",
-		"I64 = Sum(I64, I64): assign res",
+	require.Equal(t, []planOwner{
+		{Label: "assign n"}, {Label: "assign h"}, {Label: "assign o, k"}, {Label: "assign p"},
+		{Label: "assign q"}, {Label: "assign one"}, {Label: "assign acc"},
+		{Func: "I64 = AddOne(I64)", Label: "assign t"},
+		{Func: "I64 = AddOne(I64)", Label: "assign res"},
+		{Func: "Str, Str = Echo(Str)", Label: "assign out"},
+		{Func: "Str, Str = Echo(Str)", Label: "assign kept"},
+		{Func: "Str = Pick(Str, I64)", Label: "assign out"},
+		{Func: "I64 = Outer(I64)", Label: "assign res"},
+		{Func: "I64 = Inner(I64)", Label: "assign res"},
+		{Func: "I64 = Sum(I64, I64)", Label: "assign res"},
 	}, planOwners(plans))
 
 	// A function local is a local target; the plan names its function.
