@@ -437,8 +437,8 @@ func renderPanic(p *AssignPlan) (v any) {
 	return nil
 }
 
-// Plan §12: expanded view adds ownership and target types; an
-// unmanaged store carries no transfer annotation.
+// Plan §12: expanded view adds target types; an unmanaged slot carries no
+// ownership tag and an unmanaged store no transfer annotation.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
