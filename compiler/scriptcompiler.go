@@ -86,6 +86,7 @@ func (sc *ScriptCompiler) compileStatements() {
 					panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
 				}
 				sc.Plans = append(sc.Plans, plan)
+				c.promoteStatementBindings(let)
 				c.lowerAssignPlan(plan)
 				continue
 			}

@@ -17,11 +17,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 	fmt.Fprintf(&b, "    source %s\n", strconv.Quote(p.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range p.Evals {
-		fmt.Fprintf(&b, "        %%t%d = eval %s %s", ev.Result, typesString(ev.Slots), renderPayload(ev.Expr))
-		if expanded {
-			b.WriteString(ownershipString(ev.Slots))
-		}
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "        %%t%d = eval %s %s\n", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
 	}
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
@@ -79,7 +75,8 @@ func escapeControls(s string) string {
 func checkRenderable(expr ast.Expression) {
 	switch e := expr.(type) {
 	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression:
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression,
+		*ast.CallExpression:
 	case *ast.ArrayLiteral:
 		if e.Block || len(e.Headers) > 0 {
 			panic("pir: no one-line renderer for a block-layout array literal")
@@ -92,29 +89,28 @@ func checkRenderable(expr ast.Expression) {
 	}
 }
 
-func typesString(slots []Slot) string {
-	names := make([]string, len(slots))
+// slotsString lists each slot's type. The expanded view follows a type with
+// its slot's ownership, so a tag sits beside the slot it describes; an
+// unmanaged slot carries no obligation and prints its type alone.
+func slotsString(slots []Slot, expanded bool) string {
+	parts := make([]string, len(slots))
 	for i, slot := range slots {
-		names[i] = slot.Type.String()
-	}
-	return strings.Join(names, ", ")
-}
-
-// ownershipString annotates every slot in order, the default included, so
-// the rule is the same for one slot and for many and positions never shift.
-func ownershipString(slots []Slot) string {
-	var b strings.Builder
-	for _, slot := range slots {
-		switch slot.Ownership {
-		case Owned:
-			b.WriteString(" [owned]")
-		case Borrowed:
-			b.WriteString(" [borrowed=" + slot.Owner + "]")
-		default:
-			b.WriteString(" [unmanaged]")
+		parts[i] = slot.Type.String()
+		if expanded {
+			parts[i] += ownershipTag(slot)
 		}
 	}
-	return b.String()
+	return strings.Join(parts, ", ")
+}
+
+func ownershipTag(slot Slot) string {
+	switch slot.Ownership {
+	case Owned:
+		return " [owned]"
+	case Borrowed:
+		return " [borrowed=" + slot.Owner + "]"
+	}
+	return ""
 }
 
 func (t Transfer) String() string {

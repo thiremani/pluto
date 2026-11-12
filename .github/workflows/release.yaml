@@ -52,7 +52,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          go test -race ./lexer ./parser ./compiler
+          go test -race ./lexer ./parser ./pir ./compiler
 
   create-release:
     name: Ensure draft release exists

@@ -1,7 +1,8 @@
 # Pluto Statement IR (PIR) Plan
 
 **Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
-in progress (first slice landed: heap values and ownership elaboration)
+in progress (two slices landed: heap values and ownership elaboration, then
+calls and multi-output outcomes)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -603,9 +604,9 @@ no result type, even where, as with `yield`, they produce their region's
 value (§4); a commit mapping reads `target <- value` in the concise view
 and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
 arr <- %t0`; square brackets otherwise carry declarative policies, not
-executable code. The expanded view annotates each eval slot's
-ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]`, one per slot in
-order, so a multi-slot eval reads `[unmanaged] [owned]` — appends a
+executable code. The expanded view follows each eval slot's type with its
+ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
+which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
 mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
@@ -1240,6 +1241,29 @@ replacing it copies the static literal and releases the old value. Heap swaps sh
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
+
+**Second slice landed — calls and multi-output outcomes.** The router admits
+a call anywhere in an ordinary expression tree, as the whole right-hand side
+or under operators, when its arguments are ordinary trees themselves. No
+ordinary node can fail, so every argument is `MustYield` without the router
+reading the effect; a call given a range, a comparison, or a checked read
+stays legacy with that argument's node (matrix rows 12, 13 and 6c;
+`TestPlanRouterRejections` pins one of each). The step that admits checked
+reads must make the router read a call's yield effect then, since a checked
+argument defers the call to Step 6. The call stays inside its `eval` (§5):
+one eval per right-hand expression, with a slot per output, each owned when
+its type holds heap state and unmanaged otherwise — a static string or a
+struct output is unmanaged — and each commit mapping names its outcome and
+slot, so the targets after a multi-output expression follow the recorded
+mapping. The lowerer hands the call no destination. A callee without a
+range parameter reads no seed (#69), its outputs land in slots of their own,
+and the plan's `commit` is the only write to a target, so `a = F(a)` passes
+the value from before the statement (§6, `tests/alias_input`). The bindings
+a statement passes by reference move to memory before its code, as before a
+legacy statement (`TestPlanPromotesReferenceArgsFirst`). Pinned by
+`TestPlanGoldenCalls` (matrix rows 3, 5c, 6, 6b, 35d); a table output (36d)
+plans in `tests/array/array_func`.
+
 **Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
 rows 2c and 36) once an eval-operand spelling exists; field and column
 reads of a widened binding (a struct whose string fields widened to heap
@@ -1247,8 +1271,7 @@ storage), whose lowered value follows the effective storage rather than the
 solved type and so stay legacy — the follow-up resolves the field's
 ownership against the receiver's effective storage, as identifier reads
 already do, once `compileDotExpression` types the field by that storage as
-well; calls and multi-output outcomes
-with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
+well; function
 `output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
 needs an outcome-referencing operand; and the `unique` annotation and
 consuming promotion, which have no in-place consumer before Step 7's carried

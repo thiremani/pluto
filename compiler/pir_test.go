@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -64,7 +65,7 @@ s`)
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval I64 a + (2 * 3) [unmanaged]
+        %t0 = eval I64 a + (2 * 3)
 
     commit
         I64 b <- %t0
@@ -102,10 +103,12 @@ s`)
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// gates, conditional values, checked accesses, ranged RHS, calls, and
-// block-layout literals keep their legacy lowering, while ordinary heap
+// gates, conditional values, checked accesses, ranged RHS, and block-layout
+// literals keep their legacy lowering, and so does a call given a range or
+// an argument that can fail (matrix rows 13, 6c), while ordinary heap
 // values — both string flavours, concatenations, inline array literals —
-// plan alongside scalars and Range descriptors.
+// and calls with ordinary arguments plan alongside scalars and Range
+// descriptors.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -126,6 +129,9 @@ q = 0:3
 w = q + 1
 _ = 0:3
 d = Twice(x)
+dq = Twice(q)
+dz = Twice(arr[0])
+dc = Twice(x > 2)
 m = [
     1 2
     3 4
@@ -136,9 +142,9 @@ tbl = [
 ]
 rc = [q]
 cc = [x > 2]
-g, y, sg, shc, z, w, d, m, tbl, rc, cc`)
+g, y, sg, shc, z, w, d, dq, dz, dc, m, tbl, rc, cc`)
 
-	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _", "assign d"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -152,11 +158,14 @@ func TestPlanValueTypeSupported(t *testing.T) {
 	require.False(t, planValueTypeSupported(Array{ElemType: Unresolved{}, Rank: 1}))
 	require.False(t, planValueTypeSupported(ArrayRange{Array: Array{ElemType: I64, Rank: 1}, Range: Range{Iter: I64}}))
 	require.False(t, planValueTypeSupported(Func{}))
+	require.True(t, planValueTypesSupported([]Type{I64, StrH{}}))
+	require.False(t, planValueTypesSupported([]Type{I64, Func{}}))
 }
 
-// TestPlanRouterScriptRootOnly: function-body statements produce no plans,
-// and the assignment after the call pins that lazy specialization compilation
-// restores FuncNameMangled to the root key (bindingSlotType relies on it).
+// TestPlanRouterScriptRootOnly: the call plans, the statements of the body it
+// compiles produce no plans, and the assignment after the call pins that lazy
+// specialization compilation restores FuncNameMangled to the root key
+// (bindingSlotType relies on it).
 func TestPlanRouterScriptRootOnly(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -169,7 +178,7 @@ res = addOne(seed)
 after = seed + 1
 res, after`)
 
-	require.Equal(t, []string{"assign seed", "assign after"}, planLabels(plans))
+	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(plans))
 }
 
 func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
@@ -361,7 +370,7 @@ h1, h2`)
     source "h1 = (\"foo\" ⊕ \"bar\")"
 
     execute
-        %t0 = eval Str "foo" ⊕ "bar" [owned]
+        %t0 = eval Str [owned] "foo" ⊕ "bar"
 
     commit
         Str h1 <- %t0 [move]
@@ -370,8 +379,8 @@ h1, h2`)
     source "h1, h2 = h2, h1"
 
     execute
-        %t0 = eval Str h2 [borrowed=h2]
-        %t1 = eval Str h1 [borrowed=h1]
+        %t0 = eval Str [borrowed=h2] h2
+        %t1 = eval Str [borrowed=h1] h1
 
     commit
         Str h1 <- %t0 [move]
@@ -394,8 +403,8 @@ d1, d2`)
     source "d1, d2 = d1, d1"
 
     execute
-        %t0 = eval Str d1 [borrowed=d1]
-        %t1 = eval Str d1 [borrowed=d1]
+        %t0 = eval Str [borrowed=d1] d1
+        %t1 = eval Str [borrowed=d1] d1
 
     commit
         Str d1 <- %t0 [move]
@@ -424,7 +433,7 @@ x, y`)
     source "x = (x ⊕ \"!\")"
 
     execute
-        %t0 = eval Str x ⊕ "!" [owned]
+        %t0 = eval Str [owned] x ⊕ "!"
 
     commit
         Str x <- %t0 [move]
@@ -434,7 +443,7 @@ x, y`)
     source "_ = (x ⊕ \"?\")"
 
     execute
-        %t0 = eval Str x ⊕ "?" [owned]
+        %t0 = eval Str [owned] x ⊕ "?"
 
     commit
         _ <- %t0
@@ -444,7 +453,7 @@ x, y`)
     source "_ = x"
 
     execute
-        %t0 = eval Str x [borrowed=x]
+        %t0 = eval Str [borrowed=x] x
 
     commit
         _ <- %t0
@@ -453,8 +462,8 @@ x, y`)
     source "x, y = (y ⊕ \"!\"), x"
 
     execute
-        %t0 = eval Str y ⊕ "!" [owned]
-        %t1 = eval Str x [borrowed=x]
+        %t0 = eval Str [owned] y ⊕ "!"
+        %t1 = eval Str [borrowed=x] x
 
     commit
         Str x <- %t0 [move]
@@ -481,7 +490,7 @@ s, t`)
     source "s = \"hi\""
 
     execute
-        %t0 = eval Str "hi" [unmanaged]
+        %t0 = eval Str "hi"
 
     commit
         Str s <- %t0 [copy]
@@ -490,7 +499,7 @@ s, t`)
     source "t = g"
 
     execute
-        %t0 = eval Str g [unmanaged]
+        %t0 = eval Str g
 
     commit
         Str t <- %t0
@@ -516,7 +525,7 @@ arr1, arr2`)
     source "arr1 = [1 2 3]"
 
     execute
-        %t0 = eval [I64] [1 2 3] [owned]
+        %t0 = eval [I64] [owned] [1 2 3]
 
     commit
         [I64] arr1 <- %t0 [move]
@@ -525,7 +534,7 @@ arr1, arr2`)
     source "arr2 = arr1"
 
     execute
-        %t0 = eval [I64] arr1 [borrowed=arr1]
+        %t0 = eval [I64] [borrowed=arr1] arr1
 
     commit
         [I64] arr2 <- %t0 [copy]
@@ -534,7 +543,7 @@ arr1, arr2`)
     source "arr2 = [4 5 6]"
 
     execute
-        %t0 = eval [I64] [4 5 6] [owned]
+        %t0 = eval [I64] [owned] [4 5 6]
 
     commit
         [I64] arr2 <- %t0 [move]
@@ -544,7 +553,7 @@ arr1, arr2`)
     source "arr1 = []0"
 
     execute
-        %t0 = eval [I64] []0 [owned]
+        %t0 = eval [I64] [owned] []0
 
     commit
         [I64] arr1 <- %t0 [move]
@@ -578,7 +587,7 @@ n, a, s2.age, col, t2`)
     source "n = p.name"
 
     execute
-        %t0 = eval Str p.name [unmanaged]
+        %t0 = eval Str p.name
 
     commit
         Str n <- %t0
@@ -587,7 +596,7 @@ n, a, s2.age, col, t2`)
     source "s2 = p"
 
     execute
-        %t0 = eval Person{name:Str age:I64} p [unmanaged]
+        %t0 = eval Person{name:Str age:I64} p
 
     commit
         Person{name:Str age:I64} s2 <- %t0
@@ -596,7 +605,7 @@ n, a, s2.age, col, t2`)
     source "col = scores.Score"
 
     execute
-        %t0 = eval [I64] scores.Score [owned]
+        %t0 = eval [I64] [owned] scores.Score
 
     commit
         [I64] col <- %t0 [move]
@@ -605,7 +614,7 @@ n, a, s2.age, col, t2`)
     source "t2 = scores"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] scores [borrowed=scores]
+        %t0 = eval Table[Name:Str Score:I64] [borrowed=scores] scores
 
     commit
         Table[Name:Str Score:I64] t2 <- %t0 [copy]
@@ -632,8 +641,8 @@ copy, other, text`)
     source "text, other = (text ⊕ \"!\"), text"
 
     execute
-        %t0 = eval Str text ⊕ "!" [owned]
-        %t1 = eval Str text [borrowed=text]
+        %t0 = eval Str [owned] text ⊕ "!"
+        %t1 = eval Str [borrowed=text] text
 
     commit
         Str text <- %t0 [move]
@@ -643,7 +652,7 @@ copy, other, text`)
     source "copy = other"
 
     execute
-        %t0 = eval Str other [borrowed=other]
+        %t0 = eval Str [borrowed=other] other
 
     commit
         Str copy <- %t0 [copy]
@@ -652,7 +661,7 @@ copy, other, text`)
     source "other = \"new\""
 
     execute
-        %t0 = eval Str "new" [unmanaged]
+        %t0 = eval Str "new"
 
     commit
         Str other <- %t0 [copy]
@@ -703,9 +712,106 @@ col, direct, taken, headerOnly`)
     source "col = taken.Value"
 
     execute
-        %t0 = eval [I64] taken.Value [owned]
+        %t0 = eval [I64] [owned] taken.Value
 
     commit
         [I64] col <- %t0 [move]
 `, plans[2].Render(true))
+}
+
+// Plan §5, §6, §16 Step 4: a call stays inside its eval, alone or under an
+// operator, and may read the target it commits to (matrix row 6). A
+// multi-output call is one eval with a slot per output, owned when its type
+// holds heap state (6b); each mapping names its outcome and slot, and a
+// discarded owned slot is released (3, 5c). A struct or static string
+// output is unmanaged (35d).
+func TestPlanGoldenCalls(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planCalls", `p = Person
+  : name age
+    "Tejas" 35
+
+c = Twice(a)
+    c = a * 2
+
+s1, s2 = twoStr(left, right)
+    s1, s2 = left ⊕ "L", right ⊕ "R"
+
+out, tag = Copy(current)
+    out = current
+    tag = out.name
+`, `d = 5
+d = Twice(d) + 1
+l, r = twoStr("a", "b")
+l, _, n = twoStr(l, r), 9
+copied, tag = Copy(p)
+d, l, r, n, copied.age, tag`)
+	require.Equal(t, []string{"assign d", "assign d", "assign l, r", "assign l, _, n", "assign copied, tag"}, planLabels(plans))
+	require.Equal(t, `statement assign d
+    source "d = (Twice(d) + 1)"
+
+    execute
+        %t0 = eval I64 Twice(d) + 1
+
+    commit
+        I64 d <- %t0
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign l, r
+    source "l, r = twoStr(\"a\", \"b\")"
+
+    execute
+        %t0 = eval Str [owned], Str [owned] twoStr("a", "b")
+
+    commit
+        Str l <- %t0#0 [move]
+        Str r <- %t0#1 [move]
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign l, _, n
+    source "l, _, n = twoStr(l, r), 9"
+
+    execute
+        %t0 = eval Str [owned], Str [owned] twoStr(l, r)
+        %t1 = eval I64 9
+
+    commit
+        Str l <- %t0#0 [move]
+        _ <- %t0#1
+        I64 n <- %t1
+        drop %t0#1
+        drop l [old]
+`, plans[3].Render(true))
+	require.Equal(t, `statement assign copied, tag
+    source "copied, tag = Copy(p)"
+
+    execute
+        %t0 = eval Person{name:Str age:I64}, Str Copy(p)
+
+    commit
+        Person{name:Str age:I64} copied <- %t0#0
+        Str tag <- %t0#1
+`, plans[4].Render(true))
+}
+
+// A planned statement moves the bindings it passes by reference to memory
+// before any of its evals run, as a legacy statement does
+// (promoteStatementBindings). arr is stored ahead of the call to Bump, not
+// where First reads it.
+func TestPlanPromotesReferenceArgsFirst(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "planPromotion", `r = Bump(x)
+    r = x + 1
+
+n = First(v)
+    n = 0
+    n = v[0]
+`, `arr = [5 6]
+a, b = Bump(1), First(arr)
+a, b`)
+
+	promoted := strings.Index(ir, "store ptr %arr_new, ptr %arr.mem")
+	firstEval := strings.Index(ir, "%Bump_ret = call")
+	require.NotEqual(t, -1, promoted, "expected arr to be stored to memory")
+	require.NotEqual(t, -1, firstEval, "expected the call to Bump")
+	require.Less(t, promoted, firstEval, "arr must reach memory before the statement's first eval")
 }

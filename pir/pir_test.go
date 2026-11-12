@@ -30,6 +30,10 @@ func strLit(text string) ast.Expression {
 	return &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: text}}
 }
 
+func call(name string, args ...ast.Expression) ast.Expression {
+	return &ast.CallExpression{Token: token.Token{Type: token.LPAREN, Literal: "("}, Function: ident(name).(*ast.Identifier), Arguments: args}
+}
+
 func concat(left, right ast.Expression) ast.Expression {
 	return &ast.InfixExpression{Token: token.Token{Type: token.OPERATOR, Literal: "⊕"}, Left: left, Operator: "⊕", Right: right}
 }
@@ -356,9 +360,9 @@ func TestRenderConcise(t *testing.T) {
 func TestRenderMultiOutput(t *testing.T) {
 	p := &AssignPlan{
 		Label:  "assign a, b",
-		Source: "a, b = pair",
+		Source: "a, b = Pair(x)",
 		Evals: []*Eval{
-			{Result: 0, Expr: ident("pair"), Slots: []Slot{unmanagedSlot(testType("I64")), ownedSlot(testType("Str"))}},
+			{Result: 0, Expr: call("Pair", ident("x")), Slots: []Slot{unmanagedSlot(testType("I64")), ownedSlot(testType("Str"))}},
 		},
 		Commit: []Mapping{
 			{Target: local("a", testType("I64")), Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
@@ -370,10 +374,10 @@ func TestRenderMultiOutput(t *testing.T) {
 		t.Fatalf("multi-output plan rejected: %v", err)
 	}
 	want := `statement assign a, b
-    source "a, b = pair"
+    source "a, b = Pair(x)"
 
     execute
-        %t0 = eval I64, Str pair
+        %t0 = eval I64, Str Pair(x)
 
     commit
         a <- %t0#0
@@ -383,10 +387,10 @@ func TestRenderMultiOutput(t *testing.T) {
 		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	wantExpanded := `statement assign a, b
-    source "a, b = pair"
+    source "a, b = Pair(x)"
 
     execute
-        %t0 = eval I64, Str pair [unmanaged] [owned]
+        %t0 = eval I64, Str [owned] Pair(x)
 
     commit
         I64 a <- %t0#0
@@ -402,18 +406,19 @@ func TestRenderMultiOutput(t *testing.T) {
 // not only at the root, and a block-layout literal that has no one-line
 // spelling.
 func TestRenderRejectsUnsupportedNode(t *testing.T) {
-	call := &ast.CallExpression{Token: token.Token{Type: token.LPAREN, Literal: "("}, Function: ident("f").(*ast.Identifier)}
+	read := &ast.ArrayRangeExpression{Token: token.Token{Type: token.LBRACK, Literal: "["}, Array: ident("arr"), Range: intLit(0)}
 	tests := []struct {
 		name string
 		expr ast.Expression
 		want string
 	}{
-		{"root", call, "pir: no renderer for *ast.CallExpression"},
-		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: call}, "pir: no renderer for *ast.CallExpression"},
-		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: call}}, "pir: no renderer for *ast.CallExpression"},
+		{"root", read, "pir: no renderer for *ast.ArrayRangeExpression"},
+		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: read}, "pir: no renderer for *ast.ArrayRangeExpression"},
+		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: read}}, "pir: no renderer for *ast.ArrayRangeExpression"},
 		{"block literal", &ast.ArrayLiteral{Block: true, Rows: [][]ast.Expression{{intLit(1)}, {intLit(2)}}}, "pir: no one-line renderer for a block-layout array literal"},
 		{"table literal", &ast.ArrayLiteral{Headers: []string{"Name"}, Rows: [][]ast.Expression{{strLit("Ann")}}}, "pir: no one-line renderer for a block-layout array literal"},
-		{"call in array cell", &ast.ArrayLiteral{Rows: [][]ast.Expression{{intLit(1), call}}}, "pir: no renderer for *ast.CallExpression"},
+		{"read in array cell", &ast.ArrayLiteral{Rows: [][]ast.Expression{{intLit(1), read}}}, "pir: no renderer for *ast.ArrayRangeExpression"},
+		{"read as call argument", call("f", read), "pir: no renderer for *ast.ArrayRangeExpression"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -432,8 +437,8 @@ func renderPanic(p *AssignPlan) (v any) {
 	return nil
 }
 
-// Plan §12: expanded view adds ownership and target types; an
-// unmanaged store carries no transfer annotation.
+// Plan §12: expanded view adds target types; an unmanaged slot carries no
+// ownership tag and an unmanaged store no transfer annotation.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
@@ -441,8 +446,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 b [unmanaged]
-        %t1 = eval I64 a [unmanaged]
+        %t0 = eval I64 b
+        %t1 = eval I64 a
 
     commit
         I64 a <- %t0
@@ -461,8 +466,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval Str b [borrowed=b]
-        %t1 = eval Str a [borrowed=a]
+        %t0 = eval Str [borrowed=b] b
+        %t1 = eval Str [borrowed=a] a
 
     commit
         Str a <- %t0 [move]
@@ -477,8 +482,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
-        %t0 = eval Str x ⊕ "!" [owned]
-        %t1 = eval Str "a" ⊕ "b" [owned]
+        %t0 = eval Str [owned] x ⊕ "!"
+        %t1 = eval Str [owned] "a" ⊕ "b"
 
     commit
         Str x <- %t0 [move]
@@ -534,16 +539,16 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 }
 
-// Plan §12: every slot's ownership prints in position, so two layouts over
-// identical displayed types render differently.
+// Plan §12: a slot's ownership prints beside its own type, so two layouts
+// over identical displayed types render differently.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
 	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
 	second := renderDiscardedPair(t, []Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
-	if !strings.Contains(first, "eval Str, Str pair [unmanaged] [borrowed=x]\n") {
+	if !strings.Contains(first, "eval Str, Str [borrowed=x] pair\n") {
 		t.Fatalf("first layout lost its positions:\n%s", first)
 	}
-	if !strings.Contains(second, "eval Str, Str pair [borrowed=x] [unmanaged]\n") {
+	if !strings.Contains(second, "eval Str [borrowed=x], Str pair\n") {
 		t.Fatalf("second layout lost its positions:\n%s", second)
 	}
 	if first == second {

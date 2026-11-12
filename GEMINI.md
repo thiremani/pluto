@@ -63,7 +63,7 @@ This project is a compiler for the Pluto programming language, written in Go. It
 *   **Run unit tests:**
     ```bash
     eval "$(python3 scripts/llvm_env.py --shell)"
-    go test -race ./lexer ./parser ./compiler
+    go test -race ./lexer ./parser ./pir ./compiler
     ```
 
 *   **Run the compiler:**
