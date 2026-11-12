@@ -374,26 +374,50 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 			return llvm.Module{}, err
 		}
 	}
-	if err := emitPIR(os.Stdout, sc.EmittedPlans(), p.EmitPIR); err != nil {
+	if err := emitPIR(os.Stdout, sc.Compiler.Plans, p.EmitPIR); err != nil {
 		return llvm.Module{}, err
 	}
 	moduleReturned = true
 	return scriptModule, nil
 }
 
-// emitPIR prints one script's statement plans in the order given. mode is the
-// parsed -emit-pir value ("" prints nothing, "expanded" adds annotations).
-// A failed write is an error: requested output must not be silently partial.
-func emitPIR(w io.Writer, plans []*pir.AssignPlan, mode string) error {
+// emitPIR prints one script's statement plans, body by body in the order
+// given. mode is the parsed -emit-pir value ("" prints nothing, "expanded"
+// adds annotations). A failed write is an error: requested output must not be
+// silently partial.
+func emitPIR(w io.Writer, bodies [][]*pir.AssignPlan, mode string) error {
 	if mode == "" {
 		return nil
 	}
-	for i, plan := range plans {
-		if _, err := fmt.Fprintf(w, "%s\n", plan.Render(mode == "expanded")); err != nil {
-			return fmt.Errorf("write PIR plan %d %s %q: %w", i+1, plan.Label, plan.Source, err)
+
+	emitted := 0
+	for _, body := range bodies {
+		if err := emitPIRBody(w, body, mode == "expanded", emitted); err != nil {
+			return err
+		}
+		emitted += len(body)
+	}
+	return nil
+}
+
+// emitPIRBody prints one body's plans, a function's under one header that
+// names it; a body without a plan prints nothing. emitted counts the plans
+// printed before this body.
+func emitPIRBody(w io.Writer, body []*pir.AssignPlan, expanded bool, emitted int) error {
+	if len(body) == 0 {
+		return nil
+	}
+	if fn := body[0].Func; fn != "" {
+		if _, err := fmt.Fprint(w, pir.FuncHeader(fn)); err != nil {
+			return fmt.Errorf("write PIR header of function %s: %w", fn, err)
 		}
 	}
 
+	for i, plan := range body {
+		if _, err := fmt.Fprintf(w, "%s\n", plan.Render(expanded)); err != nil {
+			return fmt.Errorf("write PIR plan %d %s %q: %w", emitted+i+1, plan.Label, plan.Source, err)
+		}
+	}
 	return nil
 }
 

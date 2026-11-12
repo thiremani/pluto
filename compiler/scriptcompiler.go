@@ -1,10 +1,7 @@
 package compiler
 
 import (
-	"slices"
-
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/pir"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
@@ -71,11 +68,4 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 // assignments through PIR plans.
 func (sc *ScriptCompiler) compileStatements() {
 	sc.Compiler.lowerRoutedBody(sc.Program.Statements, "")
-}
-
-// EmittedPlans is the -emit-pir order: the script root's plans, then each
-// function specialization's, in the order the specializations were first
-// lowered.
-func (sc *ScriptCompiler) EmittedPlans() []*pir.AssignPlan {
-	return slices.Concat(sc.Compiler.Plans...)
 }

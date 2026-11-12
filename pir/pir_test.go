@@ -439,35 +439,37 @@ func TestRenderMultiOutput(t *testing.T) {
 	}
 }
 
-// Plan §6, §12: a function-body plan names its function under the header,
-// and an output mapping is spelled `output`, before the type in the expanded
-// view.
+// Plan §6, §12: a function body's plan sits one level in, under the header
+// its body opens with, and an output mapping is spelled `output`, before the
+// type in the expanded view.
 func TestRenderFunctionOutput(t *testing.T) {
 	p := joinPlan()
 	Elaborate(p)
-	want := `statement assign res
-    function Str = Join(Str, Str)
-    source "res = a ⊕ b"
+	if got, want := FuncHeader(p.Func), "function Str = Join(Str, Str)\n"; got != want {
+		t.Fatalf("function header mismatch: got %q, want %q", got, want)
+	}
 
-    execute
-        %t0 = eval Str a ⊕ b
+	want := `    statement assign res
+        source "res = a ⊕ b"
 
-    commit
-        output res <- %t0
+        execute
+            %t0 = eval Str a ⊕ b
+
+        commit
+            output res <- %t0
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("function output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	wantExpanded := `statement assign res
-    function Str = Join(Str, Str)
-    source "res = a ⊕ b"
+	wantExpanded := `    statement assign res
+        source "res = a ⊕ b"
 
-    execute
-        %t0 = eval Str [owned] a ⊕ b
+        execute
+            %t0 = eval Str [owned] a ⊕ b
 
-    commit
-        output Str res <- %t0 [move]
-        drop res [old]
+        commit
+            output Str res <- %t0 [move]
+            drop res [old]
 `
 	if got := p.Render(true); got != wantExpanded {
 		t.Fatalf("function output expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, wantExpanded)

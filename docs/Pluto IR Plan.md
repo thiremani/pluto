@@ -692,10 +692,11 @@ The `statement` header carries a display label derived from the targets
 character and a joined `assign_a_b` could not be read back); it is not
 unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
-identity. A statement of a function body adds a line under its header with
-the specialization's display signature, `function I64 = AddOne(I64)`; the
-script's plans print first, then each specialization's, in the order the
-specializations were first lowered. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
+identity. A function body's plans print one level in, under one header with
+the specialization's display signature, `function I64 = AddOne(I64)`; a body
+without a plan prints nothing. The script's plans print first, then each
+specialization's block, in the order the specializations were first lowered.
+Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
 ownership annotations, target types, derived transfers, and derived release
 points, and — as the node kinds that vary them arrive — result domains and
 yield shapes (§5), target mappings, access IDs, affine forms, and collector

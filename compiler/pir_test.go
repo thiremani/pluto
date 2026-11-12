@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -204,7 +205,7 @@ res, after`)
 		{Label: "assign seed"}, {Label: "assign res"}, {Label: "assign after"},
 		{Func: "I64 = addOne(I64)", Label: "assign t"},
 		{Func: "I64 = addOne(I64)", Label: "assign c"},
-	}, planOwners(sc.EmittedPlans()))
+	}, planOwners(slices.Concat(sc.Compiler.Plans...)))
 }
 
 func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
@@ -244,7 +245,7 @@ func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
 		r := recover()
 		require.NotNil(t, r, "invalid plan must panic")
 		require.Contains(t, fmt.Sprint(r), `internal: invalid plan for "v = 1"`)
-		require.Empty(t, sc.EmittedPlans())
+		require.Empty(t, slices.Concat(sc.Compiler.Plans...))
 		_, vBound := Get(sc.Compiler.Scopes, "v")
 		require.False(t, vBound)
 		_, uBound := Get(sc.Compiler.Scopes, "u")
@@ -859,7 +860,7 @@ acc = 0
 acc = Sum(acc, 1:4)
 n, o, k, p, q, one, acc`)
 
-	plans := sc.EmittedPlans()
+	plans := slices.Concat(sc.Compiler.Plans...)
 	require.Equal(t, []planOwner{
 		{Label: "assign n"}, {Label: "assign h"}, {Label: "assign o, k"}, {Label: "assign p"},
 		{Label: "assign q"}, {Label: "assign one"}, {Label: "assign acc"},
@@ -873,63 +874,59 @@ n, o, k, p, q, one, acc`)
 		{Func: "I64 = Sum(I64, I64)", Label: "assign res"},
 	}, planOwners(plans))
 
-	// A function local is a local target; the plan names its function.
-	require.Equal(t, `statement assign t
-    function I64 = AddOne(I64)
-    source "t = (a + 1)"
+	// A function local is a local target; a function body's plan sits one
+	// level in.
+	require.Equal(t, `    statement assign t
+        source "t = (a + 1)"
 
-    execute
-        %t0 = eval I64 a + 1
+        execute
+            %t0 = eval I64 a + 1
 
-    commit
-        t <- %t0
+        commit
+            t <- %t0
 `, plans[7].Render(false))
 	// Row 14: a direct scalar output is a plain store.
-	require.Equal(t, `statement assign res
-    function I64 = AddOne(I64)
-    source "res = (t * 2)"
+	require.Equal(t, `    statement assign res
+        source "res = (t * 2)"
 
-    execute
-        %t0 = eval I64 t * 2
+        execute
+            %t0 = eval I64 t * 2
 
-    commit
-        output I64 res <- %t0
+        commit
+            output I64 res <- %t0
 `, plans[8].Render(true))
 	// Row 14i: a heap output takes an owned outcome and releases what it held.
-	require.Equal(t, `statement assign out
-    function Str, Str = Echo(Str)
-    source "out = (s ⊕ \"!\")"
+	require.Equal(t, `    statement assign out
+        source "out = (s ⊕ \"!\")"
 
-    execute
-        %t0 = eval Str [owned] s ⊕ "!"
+        execute
+            %t0 = eval Str [owned] s ⊕ "!"
 
-    commit
-        output Str out <- %t0 [move]
-        drop out [old]
+        commit
+            output Str out <- %t0 [move]
+            drop out [old]
 `, plans[9].Render(true))
 	// A borrowed input survives the call, so the output gets its own copy.
-	require.Equal(t, `statement assign kept
-    function Str, Str = Echo(Str)
-    source "kept = s"
+	require.Equal(t, `    statement assign kept
+        source "kept = s"
 
-    execute
-        %t0 = eval Str [borrowed=s] s
+        execute
+            %t0 = eval Str [borrowed=s] s
 
-    commit
-        output Str kept <- %t0 [copy]
-        drop kept [old]
+        commit
+            output Str kept <- %t0 [copy]
+            drop kept [old]
 `, plans[10].Render(true))
 	// A static string entering an output whose type owns heap is copied.
-	require.Equal(t, `statement assign out
-    function Str = Pick(Str, I64)
-    source "out = \"none\""
+	require.Equal(t, `    statement assign out
+        source "out = \"none\""
 
-    execute
-        %t0 = eval Str "none"
+        execute
+            %t0 = eval Str "none"
 
-    commit
-        output Str out <- %t0 [copy]
-        drop out [old]
+        commit
+            output Str out <- %t0 [copy]
+            drop out [old]
 `, plans[11].Render(true))
 }
 
