@@ -221,9 +221,9 @@ two together rather than treating any single row as a deletion trigger.
 | # | Gate | RHS flags | Value kind | Target | Domain role | Callee effect | Disp | Step |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 7d | — | checked, conditional (fallback) | scalar, heap | none | — | — | **S (decided; semantics doc)** | 6 |
-| 29 | — | ordinary | scalar, heap | none | — | — | S | 6 |
-| 29b | — | call | scalar (direct return) | none | — | all-`MustWrite` after #123; no validity variant | R | 6 |
-| 29c | — | call | heap, multi-output (indirect return) | none | — | both; a range-bearing callee's indirect outputs carry write markers, and every other callee writes them all (#69) — no variant needed | R | 6 |
+| 29 | — | ordinary | scalar, heap | none | — | — | S | 4 |
+| 29b | — | call | scalar (direct return) | none | — | all-`MustWrite` after #123; no validity variant | R | 4 (ordinary arguments) / 6 (an argument that can fail) |
+| 29c | — | call | heap, multi-output (indirect return) | none | — | both; a range-bearing callee's indirect outputs carry write markers, and every other callee writes them all (#69) — no variant needed | R | 4 (ordinary arguments) / 6 (an argument that can fail) |
 | 30 | — | conditional | scalar, heap | none | — | — | **S (suppression outcome retained; checks now stop at the first failure, §5)** | 6 |
 | 31 | — | checked | scalar | none | — | — | **S (behavior changes, §5)** | 5, 6 |
 | 31b | — | checked, ranged | scalar, heap | none | call-site loop | — | **S (behavior changes, §5)** | 5, 6, 8 |
@@ -231,17 +231,17 @@ two together rather than treating any single row as a deletion trigger.
 | 33 | — | call, ranged | scalar (direct), heap, multi-output (indirect) | none | call-site loop | both; cutover stays 8 | R | 8 |
 | 33b | — | ordinary | scalar | none | function-owned | — | R | 6 (inner print), 7 (function domain) |
 | 34 | — | collector, ranged | scalar | none | collector-local | — | S | 8 |
-| 35c | — | ordinary | struct field read | none | — | — | R | 6 |
-| 35e | — | ordinary | whole struct value | none | — | — | R | 6 |
-| 36c | — | ordinary | whole table | none | — | — | R | 6 |
-| 36e | — | ordinary | table column read | none | — | — | R | 6 |
+| 35c | — | ordinary | struct field read | none | — | — | R | 4 |
+| 35e | — | ordinary | whole struct value | none | — | — | R | 4 |
+| 36c | — | ordinary | whole table | none | — | — | R | 4 |
+| 36e | — | ordinary | table column read | none | — | — | R | 4 |
 
 <details><summary>Routes, coverage, and helpers</summary>
 
 - **7d** — print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print. *Missing:* regressions when implemented, incl. a heap-valued print fallback. *Helpers:* condLHS spine
-- **29** — `compilePrintStatement` direct arm. *Tests:* `helloworld`, `str`, `1.2-report`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
-- **29b** — non-ranged direct call argument in print. A call that runs writes every output (#123), so no `{value, didWrite}` variant is needed. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
-- **29c** — non-ranged indirect call argument in print. *Missing:* **uncovered**: multi-output and heap call results printed directly
+- **29** — `compilePrintStatement` direct arm. **Now planned** as a `PrintPlan` at the script root and in a body without a range parameter: one `print` invocation closes `execute`, a string literal is its own operand (formatted in place, markers included), and it takes each owned slot. *Tests:* `helloworld`, `str`, `1.2-report`; golden `TestPlanGoldenPrints`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
+- **29b** — non-ranged direct call argument in print. A call that runs writes every output (#123), so no `{value, didWrite}` variant is needed. **Now planned** when every argument of the call is an ordinary expression; a call whose own argument can fail stays for Step 6. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
+- **29c** — non-ranged indirect call argument in print. **Now planned** under the same condition as 29b: every slot of the outcome prints, and the invocation takes each owned one. *Tests:* `str.spt` (`twoStr` printed directly); golden `TestPlanGoldenPrints`
 - **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* a side-effecting or owned-heap sibling of a failed conditional, which must not run or allocate (add with Step 6). *Helpers:* `compileCondOperands`
 - **31** — no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline. *Tests:* `array/oob_print`. *Missing:* a suppressed invocation whose arguments own heap temporaries (add with Step 6). *Helpers:* §5
 - **31b** — `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration once this path migrates in Step 8. *Tests:* `array/oob_print`. *Missing:* heap-valued checked+ranged print. *Helpers:* `withCollectorPreparedLoopNest`
@@ -249,10 +249,10 @@ two together rather than treating any single row as a deletion trigger.
 - **33** — a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false. *Tests:* `math/print_func` (scalar direct only). *Missing:* heap and multi-output ranged calls in print — uncovered; same Step 6 (invocation gating) prerequisite as rows 29b/29c. *Helpers:* `withCollectorPreparedLoopNest`
 - **33b** — a print statement **inside a function body** whose `Range` parameter drives the body; the print runs once per admitted point of the function-level domain. *Tests:* `math/range.pt` (`Triple`; both call sites are Range-driven), `math/acc_fmt.pt`
 - **34** — `withCollectorPreparedLoopNest` + collector rewrite. *Tests:* `print_range`, `range`. *Helpers:* collector rewrite
-- **35c** — print lowering + `compileDotExpression`. *Tests:* `struct/struct.spt`
-- **35e** — print lowering. *Tests:* `struct/struct.spt:5-7`
-- **36c** — print lowering. *Tests:* `array/array.spt`
-- **36e** — print lowering + column access. *Missing:* **uncovered**: printing one column
+- **35c** — print lowering + `compileDotExpression`. **Now planned** off an identifier that is not widened, as in an assignment. *Tests:* `struct/struct.spt`
+- **35e** — print lowering. **Now planned**: the struct's formatter keeps its multi-line layout inside the one invocation. *Tests:* `struct/struct.spt:5-7`
+- **36c** — print lowering. **Now planned** for a table read from a binding; a block-layout literal printed directly stays legacy with row 36. *Tests:* `array/array.spt`
+- **36e** — print lowering + column access. **Now planned** off an identifier that is not widened. *Missing:* **uncovered**: printing one column
 
 </details>
 

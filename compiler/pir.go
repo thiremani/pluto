@@ -6,60 +6,76 @@ import (
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
+	"tinygo.org/x/go-llvm"
 )
 
 // lowerRoutedBody lowers a body's statements in order, routing each eligible
-// assignment through a PIR plan recorded under the body's entry in c.Plans.
-// The body is the script root (fn empty) or that of a function specialization
-// without a range parameter, named by fn: a body a range parameter drives sits
-// under a function-owned domain and keeps legacy lowering (matrix row 14b).
+// assignment or print through a PIR plan recorded under the body's entry in
+// c.Plans. The body is the script root (fn empty) or that of a function
+// specialization without a range parameter, named by fn: a body a range
+// parameter drives sits under a function-owned domain and keeps legacy
+// lowering (matrix row 14b).
 func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) {
 	// A statement may lower another body, so this body's entry comes first.
 	body := len(c.Plans)
 	c.Plans = append(c.Plans, nil)
 
 	for _, stmt := range stmts {
-		let, isLet := stmt.(*ast.LetStatement)
-		if !isLet {
+		if !c.lowerPlanned(stmt, fn, body) {
 			c.compileStatement(stmt)
-			continue
 		}
-		plan, planned := c.planLetStatement(let, fn)
-		if !planned {
-			c.compileStatement(stmt)
-			continue
-		}
-
-		pir.Elaborate(plan)
-		// An invalid plan is a compiler bug. Panic to recoverICE: skipping the
-		// statement would leave scope state inconsistent with the solved
-		// program for everything after it.
-		if err := pir.Validate(plan, planBindingCompatible); err != nil {
-			panic(fmt.Sprintf("internal: invalid plan for %q: %v", let.String(), err))
-		}
-		c.Plans[body] = append(c.Plans[body], plan)
-		c.promoteStatementBindings(let)
-		c.lowerAssignPlan(plan)
 	}
 }
 
-// planLetStatement is the capability router (plan §16 rule 2). Only
-// lowerRoutedBody invokes it, so no target sits under a function-owned
-// domain; an accepted statement has no legacy fallback.
-func (c *Compiler) planLetStatement(stmt *ast.LetStatement, fn string) (*pir.AssignPlan, bool) {
-	if len(stmt.Condition) > 0 {
-		return nil, false
+// lowerPlanned plans and lowers stmt when the capability router (plan §16
+// rule 2) accepts it; an accepted statement has no legacy fallback. An invalid
+// plan is a compiler bug. It panics to recoverICE: skipping the statement
+// would leave scope state inconsistent with the solved program for everything
+// after it.
+func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		if len(s.Condition) > 0 || !c.planValuesEligible(s.Value) {
+			return false
+		}
+		plan := c.buildLetPlan(s, fn)
+		pir.Elaborate(plan)
+		if err := pir.Validate(plan, planBindingCompatible); err != nil {
+			panic(fmt.Sprintf("internal: invalid plan for %q: %v", s.String(), err))
+		}
+		c.Plans[body] = append(c.Plans[body], plan)
+		c.promoteStatementBindings(s)
+		c.lowerAssignPlan(plan)
+		return true
+	case *ast.PrintStatement:
+		if !c.planValuesEligible(s.Expression.Arguments) {
+			return false
+		}
+		plan := c.buildPrintPlan(s, fn)
+		if err := pir.ValidatePrint(plan); err != nil {
+			panic(fmt.Sprintf("internal: invalid plan for %q: %v", s.String(), err))
+		}
+		c.Plans[body] = append(c.Plans[body], plan)
+		c.lowerPrintPlan(plan)
+		return true
 	}
-	for _, expr := range stmt.Value {
+	return false
+}
+
+// planValuesEligible reports whether every value of a statement is an
+// ordinary expression of a type plans carry. Only lowerRoutedBody's
+// statements reach it, so none sits under a function-owned domain.
+func (c *Compiler) planValuesEligible(exprs []ast.Expression) bool {
+	for _, expr := range exprs {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if !planValueTypesSupported(info.OutTypes) {
-			return nil, false
+			return false
 		}
 		if !c.planExprEligible(expr) {
-			return nil, false
+			return false
 		}
 	}
-	return c.buildLetPlan(stmt, fn), true
+	return true
 }
 
 func planValueTypesSupported(types []Type) bool {
@@ -215,12 +231,32 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	}
 
 	return &pir.AssignPlan{
-		Label:  "assign " + strings.Join(nameParts, ", "),
-		Func:   fn,
-		Source: stmt.String(),
+		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: stmt.String()},
 		Evals:  evals,
 		Commit: commit,
 	}
+}
+
+// buildPrintPlan gives each argument to the invocation in source order: a
+// string literal as itself, since print formats it in place, and any other
+// argument as the outcome of its eval.
+func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.PrintPlan {
+	plan := &pir.PrintPlan{Head: pir.Head{Label: "print", Func: fn, Source: stmt.String()}}
+	for _, expr := range stmt.Expression.Arguments {
+		if lit, isLit := expr.(*ast.StringLiteral); isLit {
+			plan.Args = append(plan.Args, pir.PrintArg{Literal: lit})
+			continue
+		}
+
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		ev := &pir.Eval{Result: pir.OutcomeID(len(plan.Evals)), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes))}
+		for slot, t := range info.OutTypes {
+			ev.Slots[slot] = c.planSlot(expr, t)
+		}
+		plan.Evals = append(plan.Evals, ev)
+		plan.Args = append(plan.Args, pir.PrintArg{Outcome: ev.Result})
+	}
+	return plan
 }
 
 // planBindingCompatible is the validator's type relation: directional
@@ -263,6 +299,46 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			c.freeSymbolValue(replaced[d.Target], "old_assign")
 		default:
 			panic(fmt.Sprintf("internal: plan %s: unknown drop kind %d", plan.Label, d.Kind))
+		}
+	}
+}
+
+// lowerPrintPlan implements a print plan (plan §3) and decides nothing
+// itself. How the line is assembled is the backend's choice: each argument is
+// formatted where it is evaluated, and one write prints the line.
+func (c *Compiler) lowerPrintPlan(plan *pir.PrintPlan) {
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
+
+	var formatStr string
+	var args []llvm.Value
+	var toFree []llvm.Value
+	for _, arg := range plan.Args {
+		if arg.Literal != nil {
+			c.appendPrintLiteral(arg.Literal, &formatStr, &args, &toFree)
+			continue
+		}
+		c.appendPrintOutcome(plan.Evals[arg.Outcome], &formatStr, &args, &toFree)
+	}
+
+	c.writePrintLine(formatStr, args, toFree)
+}
+
+// appendPrintOutcome evaluates one argument and adds its slots to the line.
+// The invocation releases each owned slot it took: a string after the write,
+// which reads it, and any other value once it is formatted.
+func (c *Compiler) appendPrintOutcome(ev *pir.Eval, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	syms := c.compileExpression(ev.Expr, nil)
+	loaded := make([]*Symbol, len(syms))
+	for i, sym := range syms {
+		loaded[i] = c.loadPrintSymbol(sym)
+		owned := ev.Slots[i].Ownership == pir.Owned
+		c.appendPrintSymbol(loaded[i], ev.Expr.Tok(), owned && loaded[i].Type.Kind() == StrKind, formatStr, args, toFree)
+	}
+
+	for i, sym := range syms {
+		if ev.Slots[i].Ownership == pir.Owned && loaded[i].Type.Kind() != StrKind {
+			c.freeSymbolValue(sym, "temp_free")
 		}
 	}
 }

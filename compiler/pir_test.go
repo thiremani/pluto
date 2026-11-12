@@ -25,17 +25,27 @@ func compileScript(t *testing.T, ctx llvm.Context, name, code, script string) *S
 	return sc
 }
 
-// compileScriptPlans returns the script-root statement plans the PIR router
-// accepted, in source order.
+// compileScriptPlans returns the script root's assignment plans, in source
+// order.
 func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
 	t.Helper()
-	return compileScript(t, ctx, name, code, script).Compiler.Plans[0]
+	return assignPlans(compileScript(t, ctx, name, code, script).Compiler.Plans[0])
 }
 
-func planLabels(plans []*pir.AssignPlan) []string {
+func assignPlans(plans []pir.Plan) []*pir.AssignPlan {
+	var assigns []*pir.AssignPlan
+	for _, p := range plans {
+		if assign, isAssign := p.(*pir.AssignPlan); isAssign {
+			assigns = append(assigns, assign)
+		}
+	}
+	return assigns
+}
+
+func planLabels[P pir.Plan](plans []P) []string {
 	labels := make([]string, len(plans))
 	for i, p := range plans {
-		labels[i] = p.Label
+		labels[i] = p.Heading().Label
 	}
 	return labels
 }
@@ -47,10 +57,10 @@ type planOwner struct {
 	Label string
 }
 
-func planOwners(plans []*pir.AssignPlan) []planOwner {
+func planOwners(plans []pir.Plan) []planOwner {
 	owners := make([]planOwner, len(plans))
 	for i, p := range plans {
-		owners[i] = planOwner{Func: p.Func, Label: p.Label}
+		owners[i] = planOwner{Func: p.Heading().Func, Label: p.Heading().Label}
 	}
 	return owners
 }
@@ -200,9 +210,9 @@ res = addOne(seed)
 after = seed + 1
 res, after`)
 
-	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(sc.Compiler.Plans[0]))
+	require.Equal(t, []string{"assign seed", "assign res", "assign after", "print"}, planLabels(sc.Compiler.Plans[0]))
 	require.Equal(t, []planOwner{
-		{Label: "assign seed"}, {Label: "assign res"}, {Label: "assign after"},
+		{Label: "assign seed"}, {Label: "assign res"}, {Label: "assign after"}, {Label: "print"},
 		{Func: "I64 = addOne(I64)", Label: "assign t"},
 		{Func: "I64 = addOne(I64)", Label: "assign c"},
 	}, planOwners(slices.Concat(sc.Compiler.Plans...)))
@@ -255,6 +265,35 @@ func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
 	t.Fatal("compileStatements returned normally")
 }
 
+// TestInvalidPrintPlanPanicsBeforeLowering drives the same wiring for a
+// print: an argument whose solved facts lost their output types builds an
+// eval with no slots. The panic must fire before the plan is recorded.
+func TestInvalidPrintPlanPanicsBeforeLowering(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	program := mustParseScript(t, "v = 1\nv")
+	cc := NewCodeCompiler(ctx, "printInvalid", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	sc := NewScriptCompiler(ctx, "printInvalid", program, cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	arg := program.Statements[1].(*ast.PrintStatement).Expression.Arguments[0]
+	sc.Compiler.ExprCache[key(sc.ScriptMangled, arg)].OutTypes = nil
+	sc.Compiler.addMain()
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "invalid plan must panic")
+		require.Contains(t, fmt.Sprint(r), `internal: invalid plan for "v"`)
+		require.Equal(t, []string{"assign v"}, planLabels(slices.Concat(sc.Compiler.Plans...)))
+	}()
+	sc.compileStatements()
+	t.Fatal("compileStatements returned normally")
+}
+
 func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -265,7 +304,7 @@ func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	sc := NewScriptCompiler(ctx, "planAST", program, cc)
 	require.Empty(t, sc.Compile())
 
-	plans := sc.Compiler.Plans[0]
+	plans := assignPlans(sc.Compiler.Plans[0])
 	require.Len(t, plans, 1)
 	stmt := program.Statements[0].(*ast.LetStatement)
 	require.Same(t, stmt.Value[0], plans[0].Evals[0].Expr)
@@ -863,7 +902,7 @@ n, o, k, p, q, one, acc`)
 	plans := slices.Concat(sc.Compiler.Plans...)
 	require.Equal(t, []planOwner{
 		{Label: "assign n"}, {Label: "assign h"}, {Label: "assign o, k"}, {Label: "assign p"},
-		{Label: "assign q"}, {Label: "assign one"}, {Label: "assign acc"},
+		{Label: "assign q"}, {Label: "assign one"}, {Label: "assign acc"}, {Label: "print"},
 		{Func: "I64 = AddOne(I64)", Label: "assign t"},
 		{Func: "I64 = AddOne(I64)", Label: "assign res"},
 		{Func: "Str, Str = Echo(Str)", Label: "assign out"},
@@ -884,7 +923,7 @@ n, o, k, p, q, one, acc`)
 
         commit
             t <- %t0
-`, plans[7].Render(false))
+`, plans[8].Render(false))
 	// Row 14: a direct scalar output is a plain store.
 	require.Equal(t, `    assign res
         source "res = (t * 2)"
@@ -894,7 +933,7 @@ n, o, k, p, q, one, acc`)
 
         commit
             output I64 res <- %t0
-`, plans[8].Render(true))
+`, plans[9].Render(true))
 	// Row 14i: a heap output takes an owned outcome and releases what it held.
 	require.Equal(t, `    assign out
         source "out = (s ⊕ \"!\")"
@@ -905,7 +944,7 @@ n, o, k, p, q, one, acc`)
         commit
             output Str out <- %t0 [move]
             drop out [old]
-`, plans[9].Render(true))
+`, plans[10].Render(true))
 	// A borrowed input survives the call, so the output gets its own copy.
 	require.Equal(t, `    assign kept
         source "kept = s"
@@ -916,7 +955,7 @@ n, o, k, p, q, one, acc`)
         commit
             output Str kept <- %t0 [copy]
             drop kept [old]
-`, plans[10].Render(true))
+`, plans[11].Render(true))
 	// A static string entering an output whose type owns heap is copied.
 	require.Equal(t, `    assign out
         source "out = \"none\""
@@ -927,7 +966,7 @@ n, o, k, p, q, one, acc`)
         commit
             output Str out <- %t0 [copy]
             drop out [old]
-`, plans[11].Render(true))
+`, plans[12].Render(true))
 }
 
 // A planned statement moves the bindings it passes by reference to memory
@@ -950,4 +989,91 @@ a, b`)
 	require.NotEqual(t, -1, promoted, "expected arr to be stored to memory")
 	require.NotEqual(t, -1, firstEval, "expected the call to Bump")
 	require.Less(t, promoted, firstEval, "arr must reach memory before the statement's first eval")
+}
+
+// Plan §3 and matrix rows 29, 29b, 29c: a print whose arguments are ordinary
+// plans as one invocation. A string literal is the invocation's own operand,
+// an owned slot is taken by it, and a print that can fail stays legacy.
+func TestPlanGoldenPrints(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planPrints", `out, kept = Echo(s)
+    out = s ⊕ "!"
+    kept = s
+
+res = Shout(a)
+    "in:", a
+    res = a + 1
+`, `n = 4
+h = "a" ⊕ "b"
+"hello"
+"n: -n", n
+h, h ⊕ "!"
+Echo(h)
+[1 2] ⊕ [3]
+m = Shout(n)
+n > 3
+m`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign n"}, {Label: "assign h"},
+		{Label: "print"}, {Label: "print"}, {Label: "print"}, {Label: "print"}, {Label: "print"},
+		{Label: "assign m"}, {Label: "print"},
+		{Func: "Str, Str = Echo(Str)", Label: "assign out"},
+		{Func: "Str, Str = Echo(Str)", Label: "assign kept"},
+		{Func: "I64 = Shout(I64)", Label: "print"},
+		{Func: "I64 = Shout(I64)", Label: "assign res"},
+	}, planOwners(plans))
+
+	// A print of literals alone has no eval.
+	require.Equal(t, `print
+    source "\"hello\""
+
+    execute
+        print "hello"
+`, plans[2].Render(true))
+	// A literal with a marker stays the invocation's operand: it reads n in
+	// place and allocates nothing, where the same literal as a value is an
+	// owned string.
+	require.Equal(t, `print
+    source "\"n: -n\", n"
+
+    execute
+        %t0 = eval I64 n
+        print "n: -n", %t0
+`, plans[3].Render(true))
+	// The invocation reads a binding's heap value and takes a temporary's.
+	require.Equal(t, `print
+    source "h, (h ⊕ \"!\")"
+
+    execute
+        %t0 = eval Str [borrowed=h] h
+        %t1 = eval Str [owned] h ⊕ "!"
+        print %t0, %t1 [move]
+`, plans[4].Render(true))
+	// Row 29c: every slot of a multi-output call prints, each owned one taken.
+	require.Equal(t, `print
+    source "Echo(h)"
+
+    execute
+        %t0 = eval Str [owned], Str [owned] Echo(h)
+        print %t0#0 [move], %t0#1 [move]
+`, plans[5].Render(true))
+	require.Equal(t, `print
+    source "([1 2] ⊕ [3])"
+
+    execute
+        %t0 = eval [I64] [owned] [1 2] ⊕ [3]
+        print %t0 [move]
+`, plans[6].Render(true))
+	// A print in a function body sits in that function's block.
+	require.Equal(t, `    print
+        source "\"in:\", a"
+
+        execute
+            %t0 = eval I64 a
+            print "in:", %t0
+`, plans[11].Render(false))
 }

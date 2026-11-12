@@ -115,3 +115,6 @@ rawHeap
 # Reassign heap string with markers
 heapMsg = "goodbye -name"
 heapMsg
+
+# A call's heap outputs print directly, and the line releases each one
+twoStr("left", "right")

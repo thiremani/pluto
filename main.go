@@ -385,7 +385,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 // given. mode is the parsed -emit-pir value ("" prints nothing, "expanded"
 // adds annotations). A failed write is an error: requested output must not be
 // silently partial.
-func emitPIR(w io.Writer, bodies [][]*pir.AssignPlan, mode string) error {
+func emitPIR(w io.Writer, bodies [][]pir.Plan, mode string) error {
 	if mode == "" {
 		return nil
 	}
@@ -403,11 +403,11 @@ func emitPIR(w io.Writer, bodies [][]*pir.AssignPlan, mode string) error {
 // emitPIRBody prints one body's plans, a function's under one header that
 // names it; a body without a plan prints nothing. emitted counts the plans
 // printed before this body.
-func emitPIRBody(w io.Writer, body []*pir.AssignPlan, expanded bool, emitted int) error {
+func emitPIRBody(w io.Writer, body []pir.Plan, expanded bool, emitted int) error {
 	if len(body) == 0 {
 		return nil
 	}
-	if fn := body[0].Func; fn != "" {
+	if fn := body[0].Heading().Func; fn != "" {
 		if _, err := fmt.Fprint(w, pir.FuncHeader(fn)); err != nil {
 			return fmt.Errorf("write PIR header of function %s: %w", fn, err)
 		}
@@ -415,7 +415,8 @@ func emitPIRBody(w io.Writer, body []*pir.AssignPlan, expanded bool, emitted int
 
 	for i, plan := range body {
 		if _, err := fmt.Fprintf(w, "%s\n", plan.Render(expanded)); err != nil {
-			return fmt.Errorf("write PIR plan %d %s %q: %w", emitted+i+1, plan.Label, plan.Source, err)
+			head := plan.Heading()
+			return fmt.Errorf("write PIR plan %d %s %q: %w", emitted+i+1, head.Label, head.Source, err)
 		}
 	}
 	return nil

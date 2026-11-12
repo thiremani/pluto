@@ -8,11 +8,8 @@ import "fmt"
 // the compiler's directional binding-compatibility relation (target,
 // outcome), never display or mangle equality.
 func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
-	if p.Label == "" {
-		return fmt.Errorf("plan has no label")
-	}
-	if p.Source == "" {
-		return fmt.Errorf("plan %s has no source rendering", p.Label)
+	if err := validateHead(p.Head); err != nil {
+		return err
 	}
 	if len(p.Evals) == 0 {
 		return fmt.Errorf("plan %s has no evals", p.Label)
@@ -46,6 +43,52 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	}
 
 	return p.validateReleases(replaced)
+}
+
+// ValidatePrint runs on every print plan before lowering (plan §14.1,
+// §14.12): the invocation prints each outcome exactly once, so none goes
+// unprinted and none prints twice. A print of literals alone has no evals.
+func ValidatePrint(p *PrintPlan) error {
+	if err := validateHead(p.Head); err != nil {
+		return err
+	}
+	if len(p.Args) == 0 {
+		return fmt.Errorf("plan %s has no arguments", p.Label)
+	}
+	for i, ev := range p.Evals {
+		if err := validateEval(p.Label, i, ev); err != nil {
+			return err
+		}
+	}
+
+	printed := make(map[OutcomeID]bool, len(p.Evals))
+	for _, arg := range p.Args {
+		if arg.Literal != nil {
+			continue
+		}
+		if arg.Outcome < 0 || int(arg.Outcome) >= len(p.Evals) {
+			return fmt.Errorf("plan %s: print references unknown outcome %%t%d", p.Label, arg.Outcome)
+		}
+		if printed[arg.Outcome] {
+			return fmt.Errorf("plan %s: outcome %%t%d printed twice", p.Label, arg.Outcome)
+		}
+		printed[arg.Outcome] = true
+	}
+	if len(printed) != len(p.Evals) {
+		return fmt.Errorf("plan %s: print takes %d of %d outcomes", p.Label, len(printed), len(p.Evals))
+	}
+
+	return nil
+}
+
+func validateHead(h Head) error {
+	if h.Label == "" {
+		return fmt.Errorf("plan has no label")
+	}
+	if h.Source == "" {
+		return fmt.Errorf("plan %s has no source rendering", h.Label)
+	}
+	return nil
 }
 
 func validateEval(plan string, i int, ev *Eval) error {
