@@ -390,7 +390,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = Pair(x)"
 
     execute
-        %t0 = eval I64, Str Pair(x) [unmanaged] [owned]
+        %t0 = eval I64, Str [owned] Pair(x)
 
     commit
         I64 a <- %t0#0
@@ -446,8 +446,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 b [unmanaged]
-        %t1 = eval I64 a [unmanaged]
+        %t0 = eval I64 b
+        %t1 = eval I64 a
 
     commit
         I64 a <- %t0
@@ -466,8 +466,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval Str b [borrowed=b]
-        %t1 = eval Str a [borrowed=a]
+        %t0 = eval Str [borrowed=b] b
+        %t1 = eval Str [borrowed=a] a
 
     commit
         Str a <- %t0 [move]
@@ -482,8 +482,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
-        %t0 = eval Str x ⊕ "!" [owned]
-        %t1 = eval Str "a" ⊕ "b" [owned]
+        %t0 = eval Str [owned] x ⊕ "!"
+        %t1 = eval Str [owned] "a" ⊕ "b"
 
     commit
         Str x <- %t0 [move]
@@ -539,16 +539,16 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 }
 
-// Plan §12: every slot's ownership prints in position, so two layouts over
-// identical displayed types render differently.
+// Plan §12: a slot's ownership prints beside its own type, so two layouts
+// over identical displayed types render differently.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
 	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
 	second := renderDiscardedPair(t, []Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
-	if !strings.Contains(first, "eval Str, Str pair [unmanaged] [borrowed=x]\n") {
+	if !strings.Contains(first, "eval Str, Str [borrowed=x] pair\n") {
 		t.Fatalf("first layout lost its positions:\n%s", first)
 	}
-	if !strings.Contains(second, "eval Str, Str pair [borrowed=x] [unmanaged]\n") {
+	if !strings.Contains(second, "eval Str [borrowed=x], Str pair\n") {
 		t.Fatalf("second layout lost its positions:\n%s", second)
 	}
 	if first == second {

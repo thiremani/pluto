@@ -604,9 +604,9 @@ no result type, even where, as with `yield`, they produce their region's
 value (§4); a commit mapping reads `target <- value` in the concise view
 and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
 arr <- %t0`; square brackets otherwise carry declarative policies, not
-executable code. The expanded view annotates each eval slot's
-ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]`, one per slot in
-order, so a multi-slot eval reads `[unmanaged] [owned]` — appends a
+executable code. The expanded view follows each eval slot's type with its
+ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
+which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
 mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed

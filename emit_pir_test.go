@@ -142,7 +142,7 @@ func TestEmitPIRExpanded(t *testing.T) {
     source "x = 5"
 
     execute
-        %t0 = eval I64 5 [unmanaged]
+        %t0 = eval I64 5
 
     commit
         I64 x <- %t0
