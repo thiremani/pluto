@@ -14,9 +14,6 @@ type ScriptCompiler struct {
 	Program       *ast.Program
 	Script        *Script
 	ScriptMangled string // immutable script-root key (_e; function keys use _f<N>)
-	// Plans holds the script-root statement plans the PIR router accepted, in
-	// source order; -emit-pir renders them after a successful compile.
-	Plans []*pir.AssignPlan
 }
 
 type Script struct {
@@ -73,12 +70,12 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 // compileStatements lowers the script's statements, routing eligible
 // assignments through PIR plans.
 func (sc *ScriptCompiler) compileStatements() {
-	sc.Plans = sc.Compiler.lowerRoutedBody(sc.Program.Statements, "")
+	sc.Compiler.lowerRoutedBody(sc.Program.Statements, "")
 }
 
 // EmittedPlans is the -emit-pir order: the script root's plans, then each
 // function specialization's, in the order the specializations were first
 // lowered.
 func (sc *ScriptCompiler) EmittedPlans() []*pir.AssignPlan {
-	return slices.Concat(sc.Plans, slices.Concat(sc.Compiler.FuncPlans...))
+	return slices.Concat(sc.Compiler.Plans...)
 }

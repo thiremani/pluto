@@ -9,12 +9,15 @@ import (
 )
 
 // lowerRoutedBody lowers a body's statements in order, routing each eligible
-// assignment through a PIR plan, and returns the accepted plans. The body is
-// the script root (fn empty) or that of a function specialization without a
-// range parameter, named by fn: a body a range parameter drives sits under a
-// function-owned domain and keeps legacy lowering (matrix row 14b).
-func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) []*pir.AssignPlan {
-	var plans []*pir.AssignPlan
+// assignment through a PIR plan recorded under the body's entry in c.Plans.
+// The body is the script root (fn empty) or that of a function specialization
+// without a range parameter, named by fn: a body a range parameter drives sits
+// under a function-owned domain and keeps legacy lowering (matrix row 14b).
+func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) {
+	// A statement may lower another body, so this body's entry comes first.
+	body := len(c.Plans)
+	c.Plans = append(c.Plans, nil)
+
 	for _, stmt := range stmts {
 		let, isLet := stmt.(*ast.LetStatement)
 		if !isLet {
@@ -34,11 +37,10 @@ func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) []*pir.Assi
 		if err := pir.Validate(plan, planBindingCompatible); err != nil {
 			panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
 		}
-		plans = append(plans, plan)
+		c.Plans[body] = append(c.Plans[body], plan)
 		c.promoteStatementBindings(let)
 		c.lowerAssignPlan(plan)
 	}
-	return plans
 }
 
 // planLetStatement is the capability router (plan §16 rule 2). Only

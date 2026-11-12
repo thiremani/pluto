@@ -28,7 +28,7 @@ func compileScript(t *testing.T, ctx llvm.Context, name, code, script string) *S
 // accepted, in source order.
 func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
 	t.Helper()
-	return compileScript(t, ctx, name, code, script).Plans
+	return compileScript(t, ctx, name, code, script).Compiler.Plans[0]
 }
 
 func planLabels(plans []*pir.AssignPlan) []string {
@@ -197,7 +197,7 @@ res = addOne(seed)
 after = seed + 1
 res, after`)
 
-	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(sc.Plans))
+	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(sc.Compiler.Plans[0]))
 	require.Equal(t, []string{
 		"assign seed", "assign res", "assign after",
 		"I64 = addOne(I64): assign t", "I64 = addOne(I64): assign c",
@@ -241,7 +241,7 @@ func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
 		r := recover()
 		require.NotNil(t, r, "invalid plan must panic")
 		require.Contains(t, fmt.Sprint(r), `invalid plan for "v = 1"`)
-		require.Empty(t, sc.Plans)
+		require.Empty(t, sc.EmittedPlans())
 		_, vBound := Get(sc.Compiler.Scopes, "v")
 		require.False(t, vBound)
 		_, uBound := Get(sc.Compiler.Scopes, "u")
@@ -261,7 +261,7 @@ func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	sc := NewScriptCompiler(ctx, "planAST", program, cc)
 	require.Empty(t, sc.Compile())
 
-	plans := sc.Plans
+	plans := sc.Compiler.Plans[0]
 	require.Len(t, plans, 1)
 	stmt := program.Statements[0].(*ast.LetStatement)
 	require.Same(t, stmt.Value[0], plans[0].Evals[0].Expr)
