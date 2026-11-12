@@ -1,8 +1,8 @@
 # Pluto Statement IR (PIR) Plan
 
 **Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
-in progress (two slices landed: heap values and ownership elaboration, then
-calls and multi-output outcomes)
+in progress (three slices landed: heap values and ownership elaboration,
+calls and multi-output outcomes, then function bodies and output targets)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
