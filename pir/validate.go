@@ -40,7 +40,7 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
 		}
 		consumed[m.Outcome] = true
-		if m.Target.Kind == LocalTarget && m.Target.HoldsHeap {
+		if m.Target.binds() && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
 	}
@@ -83,17 +83,15 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 	}
 	switch m.Target.Kind {
 	case LocalTarget:
-		if m.Target.Name == "" {
-			return fmt.Errorf("plan %s: local target has no name", p.Label)
+		return p.validateBinding(m, slot, compatible)
+	case OutputTarget:
+		if p.Func == "" {
+			return fmt.Errorf("plan %s: output target %s outside a function body", p.Label, m.Target.Name)
 		}
-		if m.Target.HoldsHeap && m.Target.Fresh {
-			return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
+		if m.Target.Fresh {
+			return fmt.Errorf("plan %s: output target %s is fresh", p.Label, m.Target.Name)
 		}
-		if !compatible(m.Target.Type, slot.Type) {
-			return fmt.Errorf("plan %s: target %s %s mapped to incompatible outcome %%t%d slot %d of type %s",
-				p.Label, m.Target.Type.String(), m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
-		}
-		return p.validateLocalTransfer(m, slot)
+		return p.validateBinding(m, slot, compatible)
 	case DiscardTarget:
 		if m.Target.Name != "" || m.Target.Type != nil || m.Target.TypeOwnsHeap || m.Target.Fresh || m.Target.HoldsHeap {
 			return fmt.Errorf("plan %s: discard target carries a name, type, or binding state", p.Label)
@@ -108,10 +106,27 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 	return nil
 }
 
-// validateLocalTransfer pins the transfer Elaborate must have derived (plan
+// validateBinding checks a local or output mapping: a named target of a
+// compatible type that takes its outcome by the derived transfer.
+func (p *AssignPlan) validateBinding(m Mapping, slot Slot, compatible func(target, outcome Type) bool) error {
+	if m.Target.Name == "" {
+		return fmt.Errorf("plan %s: binding target has no name", p.Label)
+	}
+	if m.Target.HoldsHeap && m.Target.Fresh {
+		return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
+	}
+	if !compatible(m.Target.Type, slot.Type) {
+		return fmt.Errorf("plan %s: target %s %s mapped to incompatible outcome %%t%d slot %d of type %s",
+			p.Label, m.Target.Type.String(), m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
+	}
+
+	return p.validateBindingTransfer(m, slot)
+}
+
+// validateBindingTransfer pins the transfer Elaborate must have derived (plan
 // §8, §14.20-22). A heap transfer into a target declared non-owning is
 // legal: the binding then holds heap state the next statement reads back.
-func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
+func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 	want := Store
 	switch slot.Ownership {
 	case Owned:
@@ -139,7 +154,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 
 func (p *AssignPlan) replacesOwner(name string) bool {
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.Name == name && m.Target.HoldsHeap {
+		if m.Target.binds() && m.Target.Name == name && m.Target.HoldsHeap {
 			return true
 		}
 	}

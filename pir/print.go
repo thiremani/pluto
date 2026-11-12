@@ -10,10 +10,12 @@ import (
 )
 
 // Render returns the deterministic text form of a plan (plan §12); the
-// in-memory tree is authoritative and this text is never parsed back.
+// in-memory tree is authoritative and this text is never parsed back. A
+// function body's plan sits one level in, under the header FuncHeader gives
+// its body.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "statement %s\n", p.Label)
+	fmt.Fprintf(&b, "%s\n", p.Label)
 	fmt.Fprintf(&b, "    source %s\n", strconv.Quote(p.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range p.Evals {
@@ -32,7 +34,28 @@ func (p *AssignPlan) Render(expanded bool) string {
 			fmt.Fprintf(&b, "        %s\n", p.dropString(d))
 		}
 	}
-	return b.String()
+
+	if p.Func == "" {
+		return b.String()
+	}
+	return indent(b.String())
+}
+
+// FuncHeader is the line that opens a function body's plans; fn is the
+// specialization's display signature.
+func FuncHeader(fn string) string {
+	return "function " + fn + "\n"
+}
+
+// indent moves every non-blank line one level in.
+func indent(text string) string {
+	lines := strings.SplitAfter(text, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			lines[i] = "    " + line
+		}
+	}
+	return strings.Join(lines, "")
 }
 
 // renderPayload renders an eval operand on one line: the ast's own spelling
@@ -125,14 +148,21 @@ func (t Transfer) String() string {
 	return fmt.Sprintf("transfer(%d)", int(t))
 }
 
+// targetString spells a mapping's target: `_` for a discard, the name for a
+// local, and the name after `output` for a function output; the expanded
+// view puts the target's type before the name.
 func targetString(t Target, expanded bool) string {
 	if t.Kind == DiscardTarget {
 		return "_"
 	}
+	name := t.Name
 	if expanded && t.Type != nil {
-		return t.Type.String() + " " + t.Name
+		name = t.Type.String() + " " + name
 	}
-	return t.Name
+	if t.Kind == OutputTarget {
+		return "output " + name
+	}
+	return name
 }
 
 func (p *AssignPlan) outcomeString(ref OutcomeRef) string {

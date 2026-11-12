@@ -95,25 +95,27 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 }
 
 // Labels are not unique, so the diagnostic must identify the failed plan by
-// its one-based source-order number and source text.
+// its one-based number in emit order, counted across bodies, and its source
+// text.
 func TestEmitPIRWriteFailure(t *testing.T) {
-	plans := []*pir.AssignPlan{emitPIRTestPlans()[0], emitPIRTestPlans()[0]}
-	plans[1].Source = "x = 6"
-	err := emitPIR(&failingWriter{writesLeft: 1}, plans, parsedEmitPIRMode(t, "-emit-pir"))
+	first, second := emitPIRTestPlans()[0], emitPIRTestPlans()[0]
+	second.Source = "x = 6"
+	bodies := [][]*pir.AssignPlan{{first}, {second}}
+	err := emitPIR(&failingWriter{writesLeft: 1}, bodies, parsedEmitPIRMode(t, "-emit-pir"))
 	require.ErrorContains(t, err, `write PIR plan 2 assign x "x = 6"`)
 }
 
 func TestEmitPIRDisabled(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, emitPIRTestPlans(), parsedEmitPIRMode(t, "dir")))
+	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()}, parsedEmitPIRMode(t, "dir")))
 	require.Empty(t, out.String())
 }
 
 // Plan §12: one emission group per plan, blank-line separated.
 func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, emitPIRTestPlans(), parsedEmitPIRMode(t, "-emit-pir")))
-	require.Equal(t, `statement assign x
+	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()}, parsedEmitPIRMode(t, "-emit-pir")))
+	require.Equal(t, `assign x
     source "x = 5"
 
     execute
@@ -122,7 +124,7 @@ func TestEmitPIRConcise(t *testing.T) {
     commit
         x <- %t0
 
-statement assign y
+assign y
     source "y = x"
 
     execute
@@ -134,12 +136,54 @@ statement assign y
 `, out.String())
 }
 
+// Plan §12: a function body's plans print one level in, under one header
+// that names the function; a body without a plan prints nothing.
+func TestEmitPIRFunctionBody(t *testing.T) {
+	body := emitPIRTestPlans()
+	for _, plan := range body {
+		plan.Func = "I64 = F(I64)"
+	}
+	bodies := [][]*pir.AssignPlan{emitPIRTestPlans()[:1], nil, body}
+
+	var out bytes.Buffer
+	require.NoError(t, emitPIR(&out, bodies, parsedEmitPIRMode(t, "-emit-pir")))
+	require.Equal(t, `assign x
+    source "x = 5"
+
+    execute
+        %t0 = eval I64 5
+
+    commit
+        x <- %t0
+
+function I64 = F(I64)
+    assign x
+        source "x = 5"
+
+        execute
+            %t0 = eval I64 5
+
+        commit
+            x <- %t0
+
+    assign y
+        source "y = x"
+
+        execute
+            %t0 = eval I64 x
+
+        commit
+            y <- %t0
+
+`, out.String())
+}
+
 // Plan §12: expanded view adds target types; an unmanaged slot carries no
 // ownership tag.
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, emitPIRTestPlans()[:1], parsedEmitPIRMode(t, "-emit-pir=expanded")))
-	require.Equal(t, `statement assign x
+	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()[:1]}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
+	require.Equal(t, `assign x
     source "x = 5"
 
     execute
