@@ -144,8 +144,9 @@ type AssignPlan struct {
 
 // PrintArg is one argument of a print invocation: a string literal, or an
 // outcome whose every slot is printed in order. The invocation formats a
-// literal in place, reading the bindings its markers name, so a literal has
-// no eval and nothing to release. Outcome is unused beside a Literal.
+// literal in place, reading the bindings its markers name, and never builds
+// the interpolated string, so a literal has no eval and no outcome to
+// release. Outcome is unused beside a Literal.
 type PrintArg struct {
 	Literal *ast.StringLiteral
 	Outcome OutcomeID

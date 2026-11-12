@@ -1035,8 +1035,8 @@ m`)
         print "hello"
 `, plans[2].Render(true))
 	// A literal with a marker stays the invocation's operand: it reads n in
-	// place and allocates nothing, where the same literal as a value is an
-	// owned string.
+	// place and is never built as one string, where the same literal as a
+	// value is an owned string.
 	require.Equal(t, `print
     source "\"n: -n\", n"
 

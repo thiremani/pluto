@@ -371,8 +371,8 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
-// Plan §3, §14.12: the invocation prints each outcome exactly once. A print
-// of literals alone has no evals and is valid.
+// Plan §3, §14.12: the invocation takes the outcomes in evaluation order,
+// each exactly once. A print of literals alone has no evals and is valid.
 func TestValidatePrint(t *testing.T) {
 	if err := ValidatePrint(printPlan()); err != nil {
 		t.Fatalf("valid print plan rejected: %v", err)
@@ -393,10 +393,9 @@ func TestValidatePrint(t *testing.T) {
 		{"NoSource", func(p *PrintPlan) { p.Source = "" }, "no source"},
 		{"NoArguments", func(p *PrintPlan) { p.Args = nil }, "has no arguments"},
 		{"SparseResultID", func(p *PrintPlan) { p.Evals[1].Result = 5 }, "dense"},
-		{"UnknownOutcome", func(p *PrintPlan) { p.Args[1].Outcome = 7 }, "unknown outcome %t7"},
-		{"NegativeOutcome", func(p *PrintPlan) { p.Args[1].Outcome = -1 }, "unknown outcome"},
-		{"PrintedTwice", func(p *PrintPlan) { p.Args[2].Outcome = 0 }, "outcome %t0 printed twice"},
+		{"OutOfOrder", func(p *PrintPlan) { p.Args[1].Outcome, p.Args[2].Outcome = 1, 0 }, "print takes %t1 where %t0 is next in evaluation order"},
 		{"Unprinted", func(p *PrintPlan) { p.Args = p.Args[:2] }, "print takes 1 of 2 outcomes"},
+		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

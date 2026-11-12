@@ -46,8 +46,9 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 }
 
 // ValidatePrint runs on every print plan before lowering (plan §14.1,
-// §14.12): the invocation prints each outcome exactly once, so none goes
-// unprinted and none prints twice. A print of literals alone has no evals.
+// §14.12): the invocation takes the outcomes in evaluation order, each exactly
+// once, so the line reads as its evals run and none goes unprinted or prints
+// twice. A print of literals alone has no evals.
 func ValidatePrint(p *PrintPlan) error {
 	if err := validateHead(p.Head); err != nil {
 		return err
@@ -61,21 +62,18 @@ func ValidatePrint(p *PrintPlan) error {
 		}
 	}
 
-	printed := make(map[OutcomeID]bool, len(p.Evals))
+	next := OutcomeID(0)
 	for _, arg := range p.Args {
 		if arg.Literal != nil {
 			continue
 		}
-		if arg.Outcome < 0 || int(arg.Outcome) >= len(p.Evals) {
-			return fmt.Errorf("plan %s: print references unknown outcome %%t%d", p.Label, arg.Outcome)
+		if arg.Outcome != next {
+			return fmt.Errorf("plan %s: print takes %%t%d where %%t%d is next in evaluation order", p.Label, arg.Outcome, next)
 		}
-		if printed[arg.Outcome] {
-			return fmt.Errorf("plan %s: outcome %%t%d printed twice", p.Label, arg.Outcome)
-		}
-		printed[arg.Outcome] = true
+		next++
 	}
-	if len(printed) != len(p.Evals) {
-		return fmt.Errorf("plan %s: print takes %d of %d outcomes", p.Label, len(printed), len(p.Evals))
+	if int(next) != len(p.Evals) {
+		return fmt.Errorf("plan %s: print takes %d of %d outcomes", p.Label, next, len(p.Evals))
 	}
 
 	return nil

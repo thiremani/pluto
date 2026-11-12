@@ -1308,9 +1308,13 @@ print
 
 An argument that is a string literal is the invocation's own operand, not an
 `eval`: print formats it in place, reading the bindings its markers name,
-and allocates nothing, whereas the same literal as a value is an owned
-string. Any other argument is an `eval`, and the invocation prints each slot
-of its outcome. The invocation takes each owned slot and releases it, which
+and never builds the interpolated string. As a value, a literal with
+markers is that string, owned, while one without markers is static in
+either position. Formatting a marker's value can still allocate a
+temporary — for an array, a float, a range, a table, or a `%q` or `%x`
+conversion — which belongs to the backend: it is freed after the write and
+is no plan outcome. Any other argument is an `eval`, and the invocation
+prints each slot of its outcome. The invocation takes each owned slot and releases it, which
 the expanded view marks `[move]`, and reads any other slot where it lies;
 with nothing to suppress it there is no other path, so the plan carries no
 `drop`. How the line is assembled stays the backend's choice (§3): each
