@@ -118,7 +118,7 @@ type Drop struct {
 // AssignPlan is the execution plan for one assignment statement; prepare and
 // finish phases are absent until carries and collectors land.
 type AssignPlan struct {
-	Label  string // derived from the targets, e.g. "assign a, b"; not unique, never referenced
+	Label  string // the header: the plan's kind and its targets, e.g. "assign a, b"; not unique, never referenced
 	Func   string // display signature of the owning function specialization; empty at the script root
 	Source string // source rendering of the statement
 	Evals  []*Eval

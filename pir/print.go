@@ -15,7 +15,7 @@ import (
 // its body.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "statement %s\n", p.Label)
+	fmt.Fprintf(&b, "%s\n", p.Label)
 	fmt.Fprintf(&b, "    source %s\n", strconv.Quote(p.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range p.Evals {

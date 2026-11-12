@@ -331,7 +331,7 @@ that iteration `n + 1` observes iteration `n` while the real target is
 committed only after the domain finishes:
 
 ```text
-statement update_sum_arr
+assign sum, arr
     prepare
         %sum_carry = carry I64 sum
         %arr_carry = carry [I64] arr
@@ -528,7 +528,7 @@ carry independent conditions.
 ## 10. Collectors
 
 ```text
-statement collect_result
+assign result
     prepare
         %result_collector = collector [I64]
 
@@ -668,7 +668,7 @@ stays outside the router until one is settled (matrix rows 2c and 36). `commit`
 and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
-statement assign x
+assign x
     source "x = a > 0 && data[i] || -1"
 
     execute
@@ -687,10 +687,11 @@ statement assign x
         x <- %result
 ```
 
-The `statement` header carries a display label derived from the targets
-(`assign a, b` — targets comma-separated, since `_` is an identifier
-character and a joined `assign_a_b` could not be read back); it is not
-unique and nothing references it — plans are
+A plan's header is its kind followed by its targets (`assign a, b` — targets
+comma-separated, since `_` is an identifier character and a joined
+`assign_a_b` could not be read back). The kind is a keyword, so the header
+needs no other opening word and a target may carry any name; the header is
+not unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
 identity. A function body's plans print one level in, under one header with
 the specialization's display signature, `function I64 = AddOne(I64)`; a body

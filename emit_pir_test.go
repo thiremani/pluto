@@ -115,7 +115,7 @@ func TestEmitPIRDisabled(t *testing.T) {
 func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()}, parsedEmitPIRMode(t, "-emit-pir")))
-	require.Equal(t, `statement assign x
+	require.Equal(t, `assign x
     source "x = 5"
 
     execute
@@ -124,7 +124,7 @@ func TestEmitPIRConcise(t *testing.T) {
     commit
         x <- %t0
 
-statement assign y
+assign y
     source "y = x"
 
     execute
@@ -147,7 +147,7 @@ func TestEmitPIRFunctionBody(t *testing.T) {
 
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, bodies, parsedEmitPIRMode(t, "-emit-pir")))
-	require.Equal(t, `statement assign x
+	require.Equal(t, `assign x
     source "x = 5"
 
     execute
@@ -157,7 +157,7 @@ func TestEmitPIRFunctionBody(t *testing.T) {
         x <- %t0
 
 function I64 = F(I64)
-    statement assign x
+    assign x
         source "x = 5"
 
         execute
@@ -166,7 +166,7 @@ function I64 = F(I64)
         commit
             x <- %t0
 
-    statement assign y
+    assign y
         source "y = x"
 
         execute
@@ -183,7 +183,7 @@ function I64 = F(I64)
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()[:1]}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
-	require.Equal(t, `statement assign x
+	require.Equal(t, `assign x
     source "x = 5"
 
     execute

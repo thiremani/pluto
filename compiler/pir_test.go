@@ -71,7 +71,7 @@ s`)
 
 	require.Equal(t, []string{"assign a", "assign b", "assign a, b", "assign _", "assign r", "assign s"}, planLabels(plans))
 
-	require.Equal(t, `statement assign a, b
+	require.Equal(t, `assign a, b
     source "a, b = b, a"
 
     execute
@@ -83,7 +83,7 @@ s`)
         b <- %t1
 `, plans[2].Render(false))
 
-	require.Equal(t, `statement assign b
+	require.Equal(t, `assign b
     source "b = (a + (2 * 3))"
 
     execute
@@ -93,7 +93,7 @@ s`)
         I64 b <- %t0
 `, plans[1].Render(true))
 
-	require.Equal(t, `statement assign _
+	require.Equal(t, `assign _
     source "_ = 7"
 
     execute
@@ -103,7 +103,7 @@ s`)
         _ <- %t0
 `, plans[3].Render(false))
 
-	require.Equal(t, `statement assign r
+	require.Equal(t, `assign r
     source "r = 0:10:2"
 
     execute
@@ -113,7 +113,7 @@ s`)
         r <- %t0
 `, plans[4].Render(false))
 
-	require.Equal(t, `statement assign s
+	require.Equal(t, `assign s
     source "s = r"
 
     execute
@@ -280,7 +280,7 @@ func TestPlanGoldenRangeDiscard(t *testing.T) {
 
 	plans := compileScriptPlans(t, ctx, "planRangeDiscard", "", "_ = 0:3")
 	require.Equal(t, []string{"assign _"}, planLabels(plans))
-	require.Equal(t, `statement assign _
+	require.Equal(t, `assign _
     source "_ = 0:3"
 
     execute
@@ -298,7 +298,7 @@ func TestPlanGoldenUnicode(t *testing.T) {
 
 	plans := compileScriptPlans(t, ctx, "planUnicode", "", "π = 3.14\nτ = π\nτ")
 	require.Equal(t, []string{"assign π", "assign τ"}, planLabels(plans))
-	require.Equal(t, `statement assign π
+	require.Equal(t, `assign π
     source "π = 3.14"
 
     execute
@@ -307,7 +307,7 @@ func TestPlanGoldenUnicode(t *testing.T) {
     commit
         π <- %t0
 `, plans[0].Render(false))
-	require.Equal(t, `statement assign τ
+	require.Equal(t, `assign τ
     source "τ = π"
 
     execute
@@ -325,7 +325,7 @@ func TestPlanGoldenPrefix(t *testing.T) {
 
 	plans := compileScriptPlans(t, ctx, "planPrefix", "", "a = 1\nn = -a\nn")
 	require.Equal(t, []string{"assign a", "assign n"}, planLabels(plans))
-	require.Equal(t, `statement assign n
+	require.Equal(t, `assign n
     source "n = (-a)"
 
     execute
@@ -344,7 +344,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
 
 	plans := compileScriptPlans(t, ctx, "planBare", "", "t0 = 1\nx = t0\ndiscard = 2\n_ = 3\nx, discard")
 	require.Equal(t, []string{"assign t0", "assign x", "assign discard", "assign _"}, planLabels(plans))
-	require.Equal(t, `statement assign x
+	require.Equal(t, `assign x
     source "x = t0"
 
     execute
@@ -353,7 +353,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     commit
         x <- %t0
 `, plans[1].Render(false))
-	require.Equal(t, `statement assign t0
+	require.Equal(t, `assign t0
     source "t0 = 1"
 
     execute
@@ -362,7 +362,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     commit
         t0 <- %t0
 `, plans[0].Render(false))
-	require.Equal(t, `statement assign discard
+	require.Equal(t, `assign discard
     source "discard = 2"
 
     execute
@@ -371,7 +371,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     commit
         discard <- %t0
 `, plans[2].Render(false))
-	require.Equal(t, `statement assign _
+	require.Equal(t, `assign _
     source "_ = 3"
 
     execute
@@ -393,7 +393,7 @@ h2 = "baz" ⊕ "qux"
 h1, h2 = h2, h1
 h1, h2`)
 	require.Equal(t, []string{"assign h1", "assign h2", "assign h1, h2"}, planLabels(plans))
-	require.Equal(t, `statement assign h1
+	require.Equal(t, `assign h1
     source "h1 = (\"foo\" ⊕ \"bar\")"
 
     execute
@@ -402,7 +402,7 @@ h1, h2`)
     commit
         Str h1 <- %t0 [move]
 `, plans[0].Render(true))
-	require.Equal(t, `statement assign h1, h2
+	require.Equal(t, `assign h1, h2
     source "h1, h2 = h2, h1"
 
     execute
@@ -426,7 +426,7 @@ d2 = "other" ⊕ "!"
 d1, d2
 d1, d2 = d1, d1
 d1, d2`)
-	require.Equal(t, `statement assign d1, d2
+	require.Equal(t, `assign d1, d2
     source "d1, d2 = d1, d1"
 
     execute
@@ -456,7 +456,7 @@ y = "c" ⊕ "d"
 x, y = y ⊕ "!", x
 x, y`)
 	require.Equal(t, []string{"assign x", "assign x", "assign _", "assign _", "assign y", "assign x, y"}, planLabels(plans))
-	require.Equal(t, `statement assign x
+	require.Equal(t, `assign x
     source "x = (x ⊕ \"!\")"
 
     execute
@@ -466,7 +466,7 @@ x, y`)
         Str x <- %t0 [move]
         drop x [old]
 `, plans[1].Render(true))
-	require.Equal(t, `statement assign _
+	require.Equal(t, `assign _
     source "_ = (x ⊕ \"?\")"
 
     execute
@@ -476,7 +476,7 @@ x, y`)
         _ <- %t0
         drop %t0
 `, plans[2].Render(true))
-	require.Equal(t, `statement assign _
+	require.Equal(t, `assign _
     source "_ = x"
 
     execute
@@ -485,7 +485,7 @@ x, y`)
     commit
         _ <- %t0
 `, plans[3].Render(true))
-	require.Equal(t, `statement assign x, y
+	require.Equal(t, `assign x, y
     source "x, y = (y ⊕ \"!\"), x"
 
     execute
@@ -513,7 +513,7 @@ g = "static"
 t = g
 s, t`)
 	require.Equal(t, []string{"assign s", "assign s", "assign g", "assign t"}, planLabels(plans))
-	require.Equal(t, `statement assign s
+	require.Equal(t, `assign s
     source "s = \"hi\""
 
     execute
@@ -522,7 +522,7 @@ s, t`)
     commit
         Str s <- %t0 [copy]
 `, plans[0].Render(true))
-	require.Equal(t, `statement assign t
+	require.Equal(t, `assign t
     source "t = g"
 
     execute
@@ -548,7 +548,7 @@ arr2 = [4 5 6]
 arr1 = []0
 arr1, arr2`)
 	require.Equal(t, []string{"assign arr1", "assign arr2", "assign arr2", "assign arr1"}, planLabels(plans))
-	require.Equal(t, `statement assign arr1
+	require.Equal(t, `assign arr1
     source "arr1 = [1 2 3]"
 
     execute
@@ -557,7 +557,7 @@ arr1, arr2`)
     commit
         [I64] arr1 <- %t0 [move]
 `, plans[0].Render(true))
-	require.Equal(t, `statement assign arr2
+	require.Equal(t, `assign arr2
     source "arr2 = arr1"
 
     execute
@@ -566,7 +566,7 @@ arr1, arr2`)
     commit
         [I64] arr2 <- %t0 [copy]
 `, plans[1].Render(true))
-	require.Equal(t, `statement assign arr2
+	require.Equal(t, `assign arr2
     source "arr2 = [4 5 6]"
 
     execute
@@ -576,7 +576,7 @@ arr1, arr2`)
         [I64] arr2 <- %t0 [move]
         drop arr2 [old]
 `, plans[2].Render(true))
-	require.Equal(t, `statement assign arr1
+	require.Equal(t, `assign arr1
     source "arr1 = []0"
 
     execute
@@ -610,7 +610,7 @@ col = scores.Score
 t2 = scores
 n, a, s2.age, col, t2`)
 	require.Equal(t, []string{"assign n", "assign a", "assign s2", "assign col", "assign t2"}, planLabels(plans))
-	require.Equal(t, `statement assign n
+	require.Equal(t, `assign n
     source "n = p.name"
 
     execute
@@ -619,7 +619,7 @@ n, a, s2.age, col, t2`)
     commit
         Str n <- %t0
 `, plans[0].Render(true))
-	require.Equal(t, `statement assign s2
+	require.Equal(t, `assign s2
     source "s2 = p"
 
     execute
@@ -628,7 +628,7 @@ n, a, s2.age, col, t2`)
     commit
         Person{name:Str age:I64} s2 <- %t0
 `, plans[2].Render(true))
-	require.Equal(t, `statement assign col
+	require.Equal(t, `assign col
     source "col = scores.Score"
 
     execute
@@ -637,7 +637,7 @@ n, a, s2.age, col, t2`)
     commit
         [I64] col <- %t0 [move]
 `, plans[3].Render(true))
-	require.Equal(t, `statement assign t2
+	require.Equal(t, `assign t2
     source "t2 = scores"
 
     execute
@@ -664,7 +664,7 @@ copy = other
 other = "new"
 copy, other, text`)
 	require.Equal(t, []string{"assign text", "assign text, other", "assign copy", "assign other"}, planLabels(plans))
-	require.Equal(t, `statement assign text, other
+	require.Equal(t, `assign text, other
     source "text, other = (text ⊕ \"!\"), text"
 
     execute
@@ -675,7 +675,7 @@ copy, other, text`)
         Str text <- %t0 [move]
         Str other <- %t1 [move]
 `, plans[1].Render(true))
-	require.Equal(t, `statement assign copy
+	require.Equal(t, `assign copy
     source "copy = other"
 
     execute
@@ -684,7 +684,7 @@ copy, other, text`)
     commit
         Str copy <- %t0 [copy]
 `, plans[2].Render(true))
-	require.Equal(t, `statement assign other
+	require.Equal(t, `assign other
     source "other = \"new\""
 
     execute
@@ -705,7 +705,7 @@ func TestPlanGoldenMultilineString(t *testing.T) {
 	defer ctx.Dispose()
 
 	plans := compileScriptPlans(t, ctx, "planMultiline", "", "s = \"line one\nline two\"\ns")
-	require.Equal(t, `statement assign s
+	require.Equal(t, `assign s
     source "s = \"line one\nline two\""
 
     execute
@@ -735,7 +735,7 @@ col = taken.Value
 direct = scores.Value
 col, direct, taken, headerOnly`)
 	require.Equal(t, []string{"assign taken", "assign headerOnly", "assign col", "assign direct"}, planLabels(plans))
-	require.Equal(t, `statement assign col
+	require.Equal(t, `assign col
     source "col = taken.Value"
 
     execute
@@ -776,7 +776,7 @@ l, _, n = twoStr(l, r), 9
 copied, tag = Copy(p)
 d, l, r, n, copied.age, tag`)
 	require.Equal(t, []string{"assign d", "assign d", "assign l, r", "assign l, _, n", "assign copied, tag"}, planLabels(plans))
-	require.Equal(t, `statement assign d
+	require.Equal(t, `assign d
     source "d = (Twice(d) + 1)"
 
     execute
@@ -785,7 +785,7 @@ d, l, r, n, copied.age, tag`)
     commit
         I64 d <- %t0
 `, plans[1].Render(true))
-	require.Equal(t, `statement assign l, r
+	require.Equal(t, `assign l, r
     source "l, r = twoStr(\"a\", \"b\")"
 
     execute
@@ -795,7 +795,7 @@ d, l, r, n, copied.age, tag`)
         Str l <- %t0#0 [move]
         Str r <- %t0#1 [move]
 `, plans[2].Render(true))
-	require.Equal(t, `statement assign l, _, n
+	require.Equal(t, `assign l, _, n
     source "l, _, n = twoStr(l, r), 9"
 
     execute
@@ -809,7 +809,7 @@ d, l, r, n, copied.age, tag`)
         drop %t0#1
         drop l [old]
 `, plans[3].Render(true))
-	require.Equal(t, `statement assign copied, tag
+	require.Equal(t, `assign copied, tag
     source "copied, tag = Copy(p)"
 
     execute
@@ -876,7 +876,7 @@ n, o, k, p, q, one, acc`)
 
 	// A function local is a local target; a function body's plan sits one
 	// level in.
-	require.Equal(t, `    statement assign t
+	require.Equal(t, `    assign t
         source "t = (a + 1)"
 
         execute
@@ -886,7 +886,7 @@ n, o, k, p, q, one, acc`)
             t <- %t0
 `, plans[7].Render(false))
 	// Row 14: a direct scalar output is a plain store.
-	require.Equal(t, `    statement assign res
+	require.Equal(t, `    assign res
         source "res = (t * 2)"
 
         execute
@@ -896,7 +896,7 @@ n, o, k, p, q, one, acc`)
             output I64 res <- %t0
 `, plans[8].Render(true))
 	// Row 14i: a heap output takes an owned outcome and releases what it held.
-	require.Equal(t, `    statement assign out
+	require.Equal(t, `    assign out
         source "out = (s ⊕ \"!\")"
 
         execute
@@ -907,7 +907,7 @@ n, o, k, p, q, one, acc`)
             drop out [old]
 `, plans[9].Render(true))
 	// A borrowed input survives the call, so the output gets its own copy.
-	require.Equal(t, `    statement assign kept
+	require.Equal(t, `    assign kept
         source "kept = s"
 
         execute
@@ -918,7 +918,7 @@ n, o, k, p, q, one, acc`)
             drop kept [old]
 `, plans[10].Render(true))
 	// A static string entering an output whose type owns heap is copied.
-	require.Equal(t, `    statement assign out
+	require.Equal(t, `    assign out
         source "out = \"none\""
 
         execute

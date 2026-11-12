@@ -376,7 +376,7 @@ func TestRenderConcise(t *testing.T) {
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 1}},
 		},
 	}
-	want := `statement assign x, _
+	want := `assign x, _
     source "x, _ = 5, 7"
 
     execute
@@ -410,7 +410,7 @@ func TestRenderMultiOutput(t *testing.T) {
 	if err := Validate(p, sameSpelling); err != nil {
 		t.Fatalf("multi-output plan rejected: %v", err)
 	}
-	want := `statement assign a, b
+	want := `assign a, b
     source "a, b = Pair(x)"
 
     execute
@@ -423,7 +423,7 @@ func TestRenderMultiOutput(t *testing.T) {
 	if got := p.Render(false); got != want {
 		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	wantExpanded := `statement assign a, b
+	wantExpanded := `assign a, b
     source "a, b = Pair(x)"
 
     execute
@@ -449,7 +449,7 @@ func TestRenderFunctionOutput(t *testing.T) {
 		t.Fatalf("function header mismatch: got %q, want %q", got, want)
 	}
 
-	want := `    statement assign res
+	want := `    assign res
         source "res = a ⊕ b"
 
         execute
@@ -461,7 +461,7 @@ func TestRenderFunctionOutput(t *testing.T) {
 	if got := p.Render(false); got != want {
 		t.Fatalf("function output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	wantExpanded := `    statement assign res
+	wantExpanded := `    assign res
         source "res = a ⊕ b"
 
         execute
@@ -516,7 +516,7 @@ func renderPanic(p *AssignPlan) (v any) {
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
-	want := `statement assign a, b
+	want := `assign a, b
     source "a, b = b, a"
 
     execute
@@ -536,7 +536,7 @@ func TestRenderExpanded(t *testing.T) {
 // copy or release; an owned replacement shows the move, the discard's
 // release, and the replaced value's release after the mappings.
 func TestRenderExpandedOwnership(t *testing.T) {
-	want := `statement assign a, b
+	want := `assign a, b
     source "a, b = b, a"
 
     execute
@@ -552,7 +552,7 @@ func TestRenderExpandedOwnership(t *testing.T) {
 	if got := heapSwap.Render(true); got != want {
 		t.Fatalf("heap swap render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	want = `statement assign x, _
+	want = `assign x, _
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
@@ -571,7 +571,7 @@ func TestRenderExpandedOwnership(t *testing.T) {
 		t.Fatalf("replace render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	// The concise view omits every derived decision.
-	want = `statement assign x, _
+	want = `assign x, _
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
