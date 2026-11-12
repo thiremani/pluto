@@ -35,7 +35,7 @@ func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) {
 		// statement would leave scope state inconsistent with the solved
 		// program for everything after it.
 		if err := pir.Validate(plan, planBindingCompatible); err != nil {
-			panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
+			panic(fmt.Sprintf("internal: invalid plan for %q: %v", let.String(), err))
 		}
 		c.Plans[body] = append(c.Plans[body], plan)
 		c.promoteStatementBindings(let)
@@ -262,7 +262,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 		case pir.DropReplaced:
 			c.freeSymbolValue(replaced[d.Target], "old_assign")
 		default:
-			panic(fmt.Sprintf("plan %s: unknown drop kind %d", plan.Label, d.Kind))
+			panic(fmt.Sprintf("internal: plan %s: unknown drop kind %d", plan.Label, d.Kind))
 		}
 	}
 }

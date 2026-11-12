@@ -240,7 +240,7 @@ func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
 	defer func() {
 		r := recover()
 		require.NotNil(t, r, "invalid plan must panic")
-		require.Contains(t, fmt.Sprint(r), `invalid plan for "v = 1"`)
+		require.Contains(t, fmt.Sprint(r), `internal: invalid plan for "v = 1"`)
 		require.Empty(t, sc.EmittedPlans())
 		_, vBound := Get(sc.Compiler.Scopes, "v")
 		require.False(t, vBound)
