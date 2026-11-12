@@ -540,7 +540,7 @@ follow when they migrate in Steps 7 and 8.
   retained language behavior under "Print invocation atomicity" below, which
   keeps evaluating conditions before siblings, stops checks at the first
   failure, and changes the out-of-bounds case (today a materialized zero
-  prints). ("Gated print" names the unscheduled no-comma syntax, not this.)
+  prints). ("Gated print" names the planned no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -601,16 +601,19 @@ follow when they migrate in Steps 7 and 8.
   already names an OOB read a failed condition. Scheduled with checked
   accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
   tests when it lands.
-- **Gated print (no longer scheduled; not current syntax):** a no-comma
-  prefix form such as `arr[oob] val1, val2` would reject the whole line
-  without evaluating the siblings. It was scheduled before PIR Step 6 to keep
-  that spelling once print arguments became strict; with checks first,
-  `arr[oob], val1, val2` already evaluates nothing beside the failed read, and
-  `c > 5 && a, b` already gates a line on a condition it doesn't print. It
-  does not parse today — `PrintStatement` has no gate — and would need its
-  own parser, AST, and solver work. If it lands, the gate must test the
-  access's yielded/in-bounds bit rather than its value, so an in-bounds zero
-  still admits the region.
+- **Gated print (planned with PIR Step 6; not current syntax):** a no-comma
+  prefix form, `c > 5 a, b`, rejects the whole line without evaluating its
+  values, as an assignment's gate does for its statement. It prints what
+  `c > 5 && a, b` prints today, so it adds no capability. It gives a
+  statement's values the same gate with or without targets, and it says on
+  the line that the condition covers all of it: in an assignment `&&` guards
+  one slot, and only the print invocation boundary makes it guard a line. A
+  failed argument still suppresses the whole line, gated or not ("Print
+  invocation atomicity"). It does not parse today — `PrintStatement` has no
+  gate — and needs its own parser, AST, and solver work, in its own PR. Where
+  a checked read is admitted as a gate, the gate must test the access's
+  yielded/in-bounds bit rather than its value, so an in-bounds zero still
+  admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
   `[i > 2 && (i * 10)]` → `[0 0 0 30 40]`); at an assignment root failing
