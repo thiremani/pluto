@@ -8,6 +8,7 @@ import (
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/pir"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
@@ -132,6 +133,10 @@ type Compiler struct {
 	Errors          []*token.CompileError
 	outputSlotTypes map[string]Type
 	stmtCtxStack    []stmtCtx
+	// FuncPlans holds, per function specialization lowered without a range
+	// parameter and in first-lowered order, the statement plans the PIR router
+	// accepted for its body, in source order.
+	FuncPlans [][]*pir.AssignPlan
 }
 
 type stmtCtx struct {
@@ -2722,7 +2727,11 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
-		c.compileFuncBody(template)
+		// A body may lower other specializations first, so reserve this one's
+		// place before its statements run.
+		body := len(c.FuncPlans)
+		c.FuncPlans = append(c.FuncPlans, nil)
+		c.FuncPlans[body] = c.lowerRoutedBody(template.Body.Statements, sig.FnInfo.Sig.String())
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.

@@ -14,6 +14,9 @@ import (
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "statement %s\n", p.Label)
+	if p.Func != "" {
+		fmt.Fprintf(&b, "    function %s\n", p.Func)
+	}
 	fmt.Fprintf(&b, "    source %s\n", strconv.Quote(p.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range p.Evals {
@@ -125,14 +128,21 @@ func (t Transfer) String() string {
 	return fmt.Sprintf("transfer(%d)", int(t))
 }
 
+// targetString spells a mapping's target: `_` for a discard, the name for a
+// local, and the name after `output` for a function output; the expanded
+// view puts the target's type before the name.
 func targetString(t Target, expanded bool) string {
 	if t.Kind == DiscardTarget {
 		return "_"
 	}
+	name := t.Name
 	if expanded && t.Type != nil {
-		return t.Type.String() + " " + t.Name
+		name = t.Type.String() + " " + name
 	}
-	return t.Name
+	if t.Kind == OutputTarget {
+		return "output " + name
+	}
+	return name
 }
 
 func (p *AssignPlan) outcomeString(ref OutcomeRef) string {

@@ -374,14 +374,14 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 			return llvm.Module{}, err
 		}
 	}
-	if err := emitPIR(os.Stdout, sc.Plans, p.EmitPIR); err != nil {
+	if err := emitPIR(os.Stdout, sc.EmittedPlans(), p.EmitPIR); err != nil {
 		return llvm.Module{}, err
 	}
 	moduleReturned = true
 	return scriptModule, nil
 }
 
-// emitPIR prints one script's statement plans in source order. mode is the
+// emitPIR prints one script's statement plans in the order given. mode is the
 // parsed -emit-pir value ("" prints nothing, "expanded" adds annotations).
 // A failed write is an error: requested output must not be silently partial.
 func emitPIR(w io.Writer, plans []*pir.AssignPlan, mode string) error {

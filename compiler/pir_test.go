@@ -11,9 +11,8 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-// compileScriptPlans runs the full script pipeline and returns the statement
-// plans the PIR router accepted, in source order.
-func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
+// compileScript runs the full script pipeline.
+func compileScript(t *testing.T, ctx llvm.Context, name, code, script string) *ScriptCompiler {
 	t.Helper()
 	cc := NewCodeCompiler(ctx, name, "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
@@ -22,7 +21,14 @@ func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script strin
 		linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
 	}
 	require.Empty(t, sc.Compile())
-	return sc.Plans
+	return sc
+}
+
+// compileScriptPlans returns the script-root statement plans the PIR router
+// accepted, in source order.
+func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
+	t.Helper()
+	return compileScript(t, ctx, name, code, script).Plans
 }
 
 func planLabels(plans []*pir.AssignPlan) []string {
@@ -31,6 +37,19 @@ func planLabels(plans []*pir.AssignPlan) []string {
 		labels[i] = p.Label
 	}
 	return labels
+}
+
+// planOwners labels each plan with the function it belongs to; a script-root
+// plan keeps its bare label.
+func planOwners(plans []*pir.AssignPlan) []string {
+	owners := make([]string, len(plans))
+	for i, p := range plans {
+		owners[i] = p.Label
+		if p.Func != "" {
+			owners[i] = p.Func + ": " + p.Label
+		}
+	}
+	return owners
 }
 
 // Plan §6 (simultaneous commit, swap) and §12 (text form).
@@ -162,15 +181,15 @@ func TestPlanValueTypeSupported(t *testing.T) {
 	require.False(t, planValueTypesSupported([]Type{I64, Func{}}))
 }
 
-// TestPlanRouterScriptRootOnly: the call plans, the statements of the body it
-// compiles produce no plans, and the assignment after the call pins that lazy
-// specialization compilation restores FuncNameMangled to the root key
-// (bindingSlotType relies on it).
-func TestPlanRouterScriptRootOnly(t *testing.T) {
+// TestPlanRouterRestoresRootAfterCall: the call plans, the body it compiles
+// plans apart from the script's statements, and the assignment after the call
+// pins that lazy specialization compilation restores FuncNameMangled to the
+// root key (bindingSlotType relies on it).
+func TestPlanRouterRestoresRootAfterCall(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planScriptRoot", `c = addOne(a)
+	sc := compileScript(t, ctx, "planScriptRoot", `c = addOne(a)
     t = a + 1
     c = t * 1
 `, `seed = 2
@@ -178,7 +197,11 @@ res = addOne(seed)
 after = seed + 1
 res, after`)
 
-	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(plans))
+	require.Equal(t, []string{"assign seed", "assign res", "assign after"}, planLabels(sc.Plans))
+	require.Equal(t, []string{
+		"assign seed", "assign res", "assign after",
+		"I64 = addOne(I64): assign t", "I64 = addOne(I64): assign c",
+	}, planOwners(sc.EmittedPlans()))
 }
 
 func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
@@ -792,6 +815,116 @@ d, l, r, n, copied.age, tag`)
         Person{name:Str age:I64} copied <- %t0#0
         Str tag <- %t0#1
 `, plans[4].Render(true))
+}
+
+// Matrix rows 14 and 14i: the body of a function without a range parameter
+// plans. The script's plans are emitted first, then each specialization's in
+// first-lowered order, so Outer's body precedes the Inner it calls. A gated
+// body statement stays legacy (row 14a: Pick's second line), and so does a
+// body a range parameter drives (row 14b): Sum plans for a scalar x only.
+func TestPlanGoldenFunctionOutputs(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planOutputs", `res = AddOne(a)
+    t = a + 1
+    res = t * 2
+
+out, kept = Echo(s)
+    out = s ⊕ "!"
+    kept = s
+
+out = Pick(s, n)
+    out = "none"
+    out = n > 0 s ⊕ "?"
+
+res = Outer(a)
+    res = Inner(a) + 1
+
+res = Inner(a)
+    res = a * 3
+
+res = Sum(a, x)
+    res = a + x
+`, `n = AddOne(4)
+h = "a" ⊕ "b"
+o, k = Echo(h)
+p = Pick(h, 1)
+q = Outer(2)
+one = Sum(1, 2)
+acc = 0
+acc = Sum(acc, 1:4)
+n, o, k, p, q, one, acc`)
+
+	plans := sc.EmittedPlans()
+	require.Equal(t, []string{
+		"assign n", "assign h", "assign o, k", "assign p", "assign q", "assign one", "assign acc",
+		"I64 = AddOne(I64): assign t", "I64 = AddOne(I64): assign res",
+		"Str, Str = Echo(Str): assign out", "Str, Str = Echo(Str): assign kept",
+		"Str = Pick(Str, I64): assign out",
+		"I64 = Outer(I64): assign res",
+		"I64 = Inner(I64): assign res",
+		"I64 = Sum(I64, I64): assign res",
+	}, planOwners(plans))
+
+	// A function local is a local target; the plan names its function.
+	require.Equal(t, `statement assign t
+    function I64 = AddOne(I64)
+    source "t = (a + 1)"
+
+    execute
+        %t0 = eval I64 a + 1
+
+    commit
+        t <- %t0
+`, plans[7].Render(false))
+	// Row 14: a direct scalar output is a plain store.
+	require.Equal(t, `statement assign res
+    function I64 = AddOne(I64)
+    source "res = (t * 2)"
+
+    execute
+        %t0 = eval I64 t * 2
+
+    commit
+        output I64 res <- %t0
+`, plans[8].Render(true))
+	// Row 14i: a heap output takes an owned outcome and releases what it held.
+	require.Equal(t, `statement assign out
+    function Str, Str = Echo(Str)
+    source "out = (s ⊕ \"!\")"
+
+    execute
+        %t0 = eval Str [owned] s ⊕ "!"
+
+    commit
+        output Str out <- %t0 [move]
+        drop out [old]
+`, plans[9].Render(true))
+	// A borrowed input survives the call, so the output gets its own copy.
+	require.Equal(t, `statement assign kept
+    function Str, Str = Echo(Str)
+    source "kept = s"
+
+    execute
+        %t0 = eval Str [borrowed=s] s
+
+    commit
+        output Str kept <- %t0 [copy]
+        drop kept [old]
+`, plans[10].Render(true))
+	// A static string entering an output whose type owns heap is copied.
+	require.Equal(t, `statement assign out
+    function Str = Pick(Str, I64)
+    source "out = \"none\""
+
+    execute
+        %t0 = eval Str "none"
+
+    commit
+        output Str out <- %t0 [copy]
+        drop out [old]
+`, plans[11].Render(true))
 }
 
 // A planned statement moves the bindings it passes by reference to memory

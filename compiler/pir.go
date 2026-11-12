@@ -8,10 +8,43 @@ import (
 	"github.com/thiremani/pluto/pir"
 )
 
-// planLetStatement is the capability router (plan §16 rule 2). Only the
-// script statement loop invokes it, so every named target is a script-root
-// binding; an accepted statement has no legacy fallback.
-func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
+// lowerRoutedBody lowers a body's statements in order, routing each eligible
+// assignment through a PIR plan, and returns the accepted plans. The body is
+// the script root (fn empty) or that of a function specialization without a
+// range parameter, named by fn: a body a range parameter drives sits under a
+// function-owned domain and keeps legacy lowering (matrix row 14b).
+func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) []*pir.AssignPlan {
+	var plans []*pir.AssignPlan
+	for _, stmt := range stmts {
+		let, isLet := stmt.(*ast.LetStatement)
+		if !isLet {
+			c.compileStatement(stmt)
+			continue
+		}
+		plan, planned := c.planLetStatement(let, fn)
+		if !planned {
+			c.compileStatement(stmt)
+			continue
+		}
+
+		pir.Elaborate(plan)
+		// An invalid plan is a compiler bug. Panic to recoverICE: skipping the
+		// statement would leave scope state inconsistent with the solved
+		// program for everything after it.
+		if err := pir.Validate(plan, planBindingCompatible); err != nil {
+			panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
+		}
+		plans = append(plans, plan)
+		c.promoteStatementBindings(let)
+		c.lowerAssignPlan(plan)
+	}
+	return plans
+}
+
+// planLetStatement is the capability router (plan §16 rule 2). Only
+// lowerRoutedBody invokes it, so no target sits under a function-owned
+// domain; an accepted statement has no legacy fallback.
+func (c *Compiler) planLetStatement(stmt *ast.LetStatement, fn string) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 {
 		return nil, false
 	}
@@ -24,7 +57,7 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 			return nil, false
 		}
 	}
-	return c.buildLetPlan(stmt), true
+	return c.buildLetPlan(stmt, fn), true
 }
 
 func planValueTypesSupported(types []Type) bool {
@@ -129,18 +162,24 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	return pir.Slot{Type: t, Ownership: pir.Owned}
 }
 
-// planTarget describes one LHS slot. Only an existing script-local binding
-// has an old value to replace, so Fresh and HoldsHeap read c.Scopes, as the
-// legacy old-value capture does.
+// planTarget describes one LHS slot. Only an existing binding has an old
+// value to replace, so Fresh and HoldsHeap read c.Scopes, as the legacy
+// old-value capture does. A function output is bound at function entry: it
+// exists from the first statement on, holding its slot's seed until the body
+// writes it.
 func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 	if isDiscard(ident) {
 		return pir.Target{Kind: pir.DiscardTarget}
 	}
 
+	kind := pir.LocalTarget
+	if _, isOutput := c.outputSlotTypes[ident.Value]; isOutput {
+		kind = pir.OutputTarget
+	}
 	targetType := c.bindingSlotType(ident.Value, nil)
 	sym, exists := Get(c.Scopes, ident.Value)
 	return pir.Target{
-		Kind: pir.LocalTarget,
+		Kind: kind,
 		Name: ident.Value,
 		Type: targetType,
 
@@ -152,7 +191,7 @@ func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 
 // buildLetPlan maps each expression's output slots onto the next targets in
 // order; the solver validated that the totals match.
-func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
+func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPlan {
 	evals := make([]*pir.Eval, len(stmt.Value))
 	commit := make([]pir.Mapping, 0, len(stmt.Name))
 	for i, expr := range stmt.Value {
@@ -175,6 +214,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 
 	return &pir.AssignPlan{
 		Label:  "assign " + strings.Join(nameParts, ", "),
+		Func:   fn,
 		Source: stmt.String(),
 		Evals:  evals,
 		Commit: commit,

@@ -1,7 +1,7 @@
 package compiler
 
 import (
-	"fmt"
+	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
@@ -14,8 +14,8 @@ type ScriptCompiler struct {
 	Program       *ast.Program
 	Script        *Script
 	ScriptMangled string // immutable script-root key (_e; function keys use _f<N>)
-	// Plans holds the statement plans the PIR router accepted, in source
-	// order; -emit-pir renders them after a successful compile.
+	// Plans holds the script-root statement plans the PIR router accepted, in
+	// source order; -emit-pir renders them after a successful compile.
 	Plans []*pir.AssignPlan
 }
 
@@ -71,26 +71,14 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 }
 
 // compileStatements lowers the script's statements, routing eligible
-// assignments through PIR plans. Routing only this loop's statements makes
-// the script-root context structural: function bodies never reach the router.
+// assignments through PIR plans.
 func (sc *ScriptCompiler) compileStatements() {
-	c := sc.Compiler
-	for _, stmt := range sc.Program.Statements {
-		if let, isLet := stmt.(*ast.LetStatement); isLet {
-			if plan, planned := c.planLetStatement(let); planned {
-				pir.Elaborate(plan)
-				// An invalid plan is a compiler bug. Panic to recoverICE:
-				// skipping the statement would leave scope state inconsistent
-				// with the solved program for everything after it.
-				if err := pir.Validate(plan, planBindingCompatible); err != nil {
-					panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
-				}
-				sc.Plans = append(sc.Plans, plan)
-				c.promoteStatementBindings(let)
-				c.lowerAssignPlan(plan)
-				continue
-			}
-		}
-		c.compileStatement(stmt)
-	}
+	sc.Plans = sc.Compiler.lowerRoutedBody(sc.Program.Statements, "")
+}
+
+// EmittedPlans is the -emit-pir order: the script root's plans, then each
+// function specialization's, in the order the specializations were first
+// lowered.
+func (sc *ScriptCompiler) EmittedPlans() []*pir.AssignPlan {
+	return slices.Concat(sc.Plans, slices.Concat(sc.Compiler.FuncPlans...))
 }

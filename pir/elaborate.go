@@ -10,7 +10,7 @@ package pir
 func Elaborate(p *AssignPlan) {
 	replaced := make(map[string]bool, len(p.Commit))
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.HoldsHeap {
+		if m.Target.binds() && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
 	}
@@ -27,7 +27,7 @@ func Elaborate(p *AssignPlan) {
 			}
 			continue
 		}
-		m.Transfer = localTransfer(slot, m.Target, replaced, taken)
+		m.Transfer = bindingTransfer(slot, m.Target, replaced, taken)
 	}
 
 	for _, m := range p.Commit {
@@ -37,7 +37,7 @@ func Elaborate(p *AssignPlan) {
 	}
 }
 
-func localTransfer(slot Slot, target Target, replaced, taken map[string]bool) Transfer {
+func bindingTransfer(slot Slot, target Target, replaced, taken map[string]bool) Transfer {
 	switch slot.Ownership {
 	case Owned:
 		return Move

@@ -603,7 +603,8 @@ while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 no result type, even where, as with `yield`, they produce their region's
 value (§4); a commit mapping reads `target <- value` in the concise view
 and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
-arr <- %t0`; square brackets otherwise carry declarative policies, not
+arr <- %t0`; an `output` target (§6) is spelled with that word first,
+`output res <- %t0` and `output Str res <- %t0`; square brackets otherwise carry declarative policies, not
 executable code. The expanded view follows each eval slot's type with its
 ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
 which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
@@ -691,7 +692,10 @@ The `statement` header carries a display label derived from the targets
 character and a joined `assign_a_b` could not be read back); it is not
 unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
-identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
+identity. A statement of a function body adds a line under its header with
+the specialization's display signature, `function I64 = AddOne(I64)`; the
+script's plans print first, then each specialization's, in the order the
+specializations were first lowered. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
 ownership annotations, target types, derived transfers, and derived release
 points, and — as the node kinds that vary them arrive — result domains and
 yield shapes (§5), target mappings, access IDs, affine forms, and collector
@@ -1264,6 +1268,23 @@ legacy statement (`TestPlanPromotesReferenceArgsFirst`). Pinned by
 `TestPlanGoldenCalls` (matrix rows 3, 5c, 6, 6b, 35d); a table output (36d)
 plans in `tests/array/array_func`.
 
+**Third slice landed — function bodies and output targets.** The router
+runs on the body of a function specialization without a range parameter,
+so its ordinary assignments plan as the script's do, a function local being
+a `local` target. A target that names a function output is an `output`
+target (§6). It follows a local's transfer and release rules, because the
+output's binding holds a value — its slot's seed, or an earlier write —
+that a replacement takes or releases; it is never fresh, and the validator
+admits it only in a plan that names its function. The lowerer is unchanged:
+a commit stores to the output's binding, a direct scalar output staying an
+SSA value (row 14) and an indirect one writing through its slot (row 14i),
+and no statement sets a write marker. A body a range parameter drives sits
+under a function-owned domain and stays legacy as a whole (row 14b, planned
+for Step 7), as a gated body statement does (row 14a, planned for Step 6).
+Pinned
+by `TestPlanGoldenFunctionOutputs` and, on hand-built plans, by `pir`'s
+`TestElaborate`, `TestValidateRejects` and `TestRenderFunctionOutput`.
+
 **Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
 rows 2c and 36) once an eval-operand spelling exists; field and column
 reads of a widened binding (a struct whose string fields widened to heap
@@ -1271,8 +1292,7 @@ storage), whose lowered value follows the effective storage rather than the
 solved type and so stay legacy — the follow-up resolves the field's
 ownership against the receiver's effective storage, as identifier reads
 already do, once `compileDotExpression` types the field by that storage as
-well; function
-`output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
+well; the `%t0#1.name` renderer golden, which
 needs an outcome-referencing operand; and the `unique` annotation and
 consuming promotion, which have no in-place consumer before Step 7's carried
 append.

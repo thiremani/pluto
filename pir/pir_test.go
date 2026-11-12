@@ -57,6 +57,24 @@ func widenedLocal(name string, t Type) Target {
 	return Target{Kind: LocalTarget, Name: name, Type: t, HoldsHeap: true}
 }
 
+// heapOutput is a function output of an owning type, holding its slot's seed
+// or an earlier write.
+func heapOutput(name string, t Type) Target {
+	return Target{Kind: OutputTarget, Name: name, Type: t, TypeOwnsHeap: true, HoldsHeap: true}
+}
+
+// joinPlan is `res = a ⊕ b` in the body of Join, before elaboration.
+func joinPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Label:  "assign res",
+		Func:   "Str = Join(Str, Str)",
+		Source: "res = a ⊕ b",
+		Evals:  []*Eval{{Result: 0, Expr: concat(ident("a"), ident("b")), Slots: []Slot{ownedSlot(str)}}},
+		Commit: []Mapping{{Target: heapOutput("res", str), Outcome: OutcomeRef{Outcome: 0}}},
+	}
+}
+
 func swapPlan() *AssignPlan {
 	return &AssignPlan{
 		Label:  "assign a, b",
@@ -183,6 +201,19 @@ func TestElaborate(t *testing.T) {
 			Evals:  []*Eval{{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
 			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Store}, nil},
+		{"output releases the value it held, as a local does", joinPlan(), []Transfer{Move},
+			[]Drop{{Kind: DropReplaced, Target: "res"}}},
+		{"swapped outputs take each other's old values", &AssignPlan{
+			Label: "assign a, b", Func: "Str, Str = Swap(Str, Str)", Source: "a, b = b, a",
+			Evals: []*Eval{
+				{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+			},
+			Commit: []Mapping{
+				{Target: heapOutput("a", str), Outcome: OutcomeRef{Outcome: 0}},
+				{Target: heapOutput("b", str), Outcome: OutcomeRef{Outcome: 1}},
+			},
+		}, []Transfer{Move, Move}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,7 +258,13 @@ func TestValidateRejects(t *testing.T) {
 		{"BorrowWithoutOwner", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = Borrowed }, "borrowed from no owner"},
 		{"UnknownOwnership", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = 9 }, "unknown ownership"},
 		{"MissingMapping", func(p *AssignPlan) { p.Commit = p.Commit[:1] }, "1 mappings for 2 outcome slots"},
-		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "local target has no name"},
+		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "binding target has no name"},
+		{"OutputOutsideFunction", func(p *AssignPlan) { p.Commit[0].Target.Kind = OutputTarget }, "output target a outside a function body"},
+		{"FreshOutput", func(p *AssignPlan) {
+			p.Func = "I64, I64 = Swap(I64, I64)"
+			p.Commit[0].Target.Kind = OutputTarget
+			p.Commit[0].Target.Fresh = true
+		}, "output target a is fresh"},
 		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Slots[0].Type = testType("F64") }, "target I64 a mapped to incompatible outcome %t0 slot 0 of type F64"},
 		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
@@ -399,6 +436,41 @@ func TestRenderMultiOutput(t *testing.T) {
 `
 	if got := p.Render(true); got != wantExpanded {
 		t.Fatalf("multi-output expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, wantExpanded)
+	}
+}
+
+// Plan §6, §12: a function-body plan names its function under the header,
+// and an output mapping is spelled `output`, before the type in the expanded
+// view.
+func TestRenderFunctionOutput(t *testing.T) {
+	p := joinPlan()
+	Elaborate(p)
+	want := `statement assign res
+    function Str = Join(Str, Str)
+    source "res = a ⊕ b"
+
+    execute
+        %t0 = eval Str a ⊕ b
+
+    commit
+        output res <- %t0
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("function output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	wantExpanded := `statement assign res
+    function Str = Join(Str, Str)
+    source "res = a ⊕ b"
+
+    execute
+        %t0 = eval Str [owned] a ⊕ b
+
+    commit
+        output Str res <- %t0 [move]
+        drop res [old]
+`
+	if got := p.Render(true); got != wantExpanded {
+		t.Fatalf("function output expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, wantExpanded)
 	}
 }
 

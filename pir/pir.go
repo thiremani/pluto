@@ -51,6 +51,9 @@ const (
 	LocalTarget TargetKind = iota
 	// DiscardTarget is a `_` slot: an independent sink, never bound or named.
 	DiscardTarget
+	// OutputTarget is a function output binding. It is bound at function
+	// entry, so it is never fresh, and a commit writes only the output.
+	OutputTarget
 )
 
 // Target is one LHS location; a discard has no name and no type. Type is the
@@ -67,6 +70,12 @@ type Target struct {
 	TypeOwnsHeap bool
 	Fresh        bool
 	HoldsHeap    bool
+}
+
+// binds reports a named binding, local or output; both take a transfer and
+// replace the value they hold under the same rules.
+func (t Target) binds() bool {
+	return t.Kind == LocalTarget || t.Kind == OutputTarget
 }
 
 type OutcomeRef struct {
@@ -110,6 +119,7 @@ type Drop struct {
 // finish phases are absent until carries and collectors land.
 type AssignPlan struct {
 	Label  string // derived from the targets, e.g. "assign a, b"; not unique, never referenced
+	Func   string // display signature of the owning function specialization; empty at the script root
 	Source string // source rendering of the statement
 	Evals  []*Eval
 	Commit []Mapping
