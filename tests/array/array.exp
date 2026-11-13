@@ -85,6 +85,10 @@ saved table: [
     "Ada" 10
     "Lin" 12
 ]
+[
+  : Name Score
+    "Zed" 30
+]
 empty array: []
 empty matrix: [
 ]

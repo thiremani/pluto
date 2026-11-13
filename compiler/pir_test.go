@@ -135,12 +135,12 @@ s`)
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// gates, conditional values, checked accesses, ranged RHS, and block-layout
-// literals keep their legacy lowering, and so does a call given a range or
-// an argument that can fail (matrix rows 13, 6c), while ordinary heap
-// values — both string flavours, concatenations, inline array literals —
-// and calls with ordinary arguments plan alongside scalars and Range
-// descriptors.
+// gates, conditional values, checked accesses, and ranged RHS keep their
+// legacy lowering, and so does a call given a range or an argument that can
+// fail (matrix rows 13, 6c), while ordinary heap values — both string
+// flavours, concatenations, array literals of either layout, table
+// literals — and calls with ordinary arguments plan alongside scalars and
+// Range descriptors.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -176,7 +176,7 @@ rc = [q]
 cc = [x > 2]
 g, y, sg, shc, z, w, d, dq, dz, dc, m, tbl, rc, cc`)
 
-	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _", "assign d"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _", "assign d", "assign m", "assign tbl"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -629,8 +629,9 @@ arr1, arr2`)
 
 // Plan §16 Step 4, §17: a struct field read (matrix row 2b) and a struct
 // value copy (35b) are unmanaged; a table column read (36g) is an owned
-// copy and a table value copy (36b) a borrow. The table literal itself is a
-// block-layout literal and stays legacy.
+// copy and a table value copy (36b) a borrow. The table literal (36) is a
+// block-layout literal: its operand is the source spelling with each line
+// break escaped (plan §12), and its value an owned outcome that moves.
 func TestPlanGoldenStructAndTable(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -648,7 +649,7 @@ scores = [
 col = scores.Score
 t2 = scores
 n, a, s2.age, col, t2`)
-	require.Equal(t, []string{"assign n", "assign a", "assign s2", "assign col", "assign t2"}, planLabels(plans))
+	require.Equal(t, []string{"assign n", "assign a", "assign s2", "assign scores", "assign col", "assign t2"}, planLabels(plans))
 	require.Equal(t, `assign n
     source "n = p.name"
 
@@ -667,6 +668,15 @@ n, a, s2.age, col, t2`)
     commit
         Person{name:Str age:I64} s2 <- %t0
 `, plans[2].Render(true))
+	require.Equal(t, `assign scores
+    source "scores = [\n  : Name Score\n    \"Ada\" 10\n]"
+
+    execute
+        %t0 = eval Table[Name:Str Score:I64] [owned] [\n  : Name Score\n    "Ada" 10\n]
+
+    commit
+        Table[Name:Str Score:I64] scores <- %t0 [move]
+`, plans[3].Render(true))
 	require.Equal(t, `assign col
     source "col = scores.Score"
 
@@ -675,7 +685,7 @@ n, a, s2.age, col, t2`)
 
     commit
         [I64] col <- %t0 [move]
-`, plans[3].Render(true))
+`, plans[4].Render(true))
 	require.Equal(t, `assign t2
     source "t2 = scores"
 
@@ -684,7 +694,7 @@ n, a, s2.age, col, t2`)
 
     commit
         Table[Name:Str Score:I64] t2 <- %t0 [copy]
-`, plans[4].Render(true))
+`, plans[5].Render(true))
 }
 
 // Plan §8: ownership is read from a binding's effective storage, not the
@@ -773,7 +783,7 @@ headerOnly = scores
 col = taken.Value
 direct = scores.Value
 col, direct, taken, headerOnly`)
-	require.Equal(t, []string{"assign taken", "assign headerOnly", "assign col", "assign direct"}, planLabels(plans))
+	require.Equal(t, []string{"assign scores", "assign headerOnly", "assign taken", "assign headerOnly", "assign col", "assign direct"}, planLabels(plans))
 	require.Equal(t, `assign col
     source "col = taken.Value"
 
@@ -782,7 +792,7 @@ col, direct, taken, headerOnly`)
 
     commit
         [I64] col <- %t0 [move]
-`, plans[2].Render(true))
+`, plans[4].Render(true))
 }
 
 // Plan §5, §6, §16 Step 4: a call stays inside its eval, alone or under an

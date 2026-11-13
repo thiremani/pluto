@@ -124,6 +124,12 @@ scores = [
 "saved table scores: -scoreColumn"
 "saved table: -savedScores"
 
+# a table literal printed directly is released once its line is written
+[
+  : Name Score
+    "Zed" 30
+]
+
 emptyArray = []0
 "empty array: -emptyArray"
 emptyMatrix = [

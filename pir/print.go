@@ -100,8 +100,9 @@ func indent(text string) string {
 
 // renderPayload renders an eval operand on one line: the ast's own spelling
 // minus the pair an operator root wraps itself in, with control characters
-// inside string literals escaped. Any node the router does not admit is an
-// ICE, so widening the router means admitting its kind and golden here.
+// escaped, both those inside a string literal and the line breaks of a
+// block-layout literal. Any node the router does not admit is an ICE, so
+// widening the router means admitting its kind and golden here.
 func renderPayload(expr ast.Expression) string {
 	checkRenderable(expr)
 	s := expr.String()
@@ -136,14 +137,10 @@ func escapeControls(s string) string {
 }
 
 func checkRenderable(expr ast.Expression) {
-	switch e := expr.(type) {
+	switch expr.(type) {
 	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral,
 		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression,
-		*ast.CallExpression:
-	case *ast.ArrayLiteral:
-		if e.Block || len(e.Headers) > 0 {
-			panic("pir: no one-line renderer for a block-layout array literal")
-		}
+		*ast.CallExpression, *ast.ArrayLiteral:
 	default:
 		panic(fmt.Sprintf("pir: no renderer for %T", expr))
 	}
