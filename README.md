@@ -359,7 +359,9 @@ default; an explicit `"-words%s"` prints their elements without quotes.
 A table formats the columns a specifier fits and prints its other columns as
 usual, so `"-scores%.2f"` formats the float columns of `scores`. A specifier
 that fits no column is a compile error, as one that does not fit an array's
-elements is.
+elements is. The exception is `%s`: on an array or a table that holds no
+strings it formats the value's whole text, so `"-ints%12s"` pads the entire
+array.
 
 An unescaped `%` immediately after a resolved marker starts a strict format specifier. Use `%%` or
 `\%` for a literal percent after a value, so `"Progress: -n%%"` prints a value followed by `%`;
