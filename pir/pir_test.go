@@ -38,6 +38,11 @@ func concat(left, right ast.Expression) ast.Expression {
 	return &ast.InfixExpression{Token: token.Token{Type: token.OPERATOR, Literal: "⊕"}, Left: left, Operator: "⊕", Right: right}
 }
 
+// read is `arr[index]`, a checked access.
+func read(arr string, index int64) ast.Expression {
+	return &ast.ArrayRangeExpression{Token: token.Token{Type: token.LBRACK, Literal: "["}, Array: ident(arr), Range: intLit(index)}
+}
+
 func unmanagedSlot(t Type) Slot { return Slot{Type: t} }
 func ownedSlot(t Type) Slot     { return Slot{Type: t, Ownership: Owned} }
 func borrowedSlot(t Type, owner string) Slot {
@@ -134,6 +139,26 @@ func replacePlan() *AssignPlan {
 	}
 }
 
+// skipPlan is `kept, fresh, _ = sarr[9], sarr[0], sarr[1]` over heap strings,
+// before elaboration: each read may skip, into a binding that holds a value,
+// a fresh binding, and a discard.
+func skipPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign kept, fresh, _", Source: "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"},
+		Evals: []*Eval{
+			{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			{Result: 1, Expr: read("sarr", 0), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			{Result: 2, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+		},
+		Commit: []Mapping{
+			{Target: heapLocal("kept", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
+			{Target: Target{Kind: LocalTarget, Name: "fresh", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 1}, OnSkip: ZeroOnSkip},
+			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 2}},
+		},
+	}
+}
+
 func TestValidateAccepts(t *testing.T) {
 	heapSwap := heapSwapPlan()
 	Elaborate(heapSwap)
@@ -223,6 +248,43 @@ func TestElaborate(t *testing.T) {
 				{Target: heapOutput("b", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
 		}, []Transfer{Move, Move}, nil},
+		{"a skipped owned outcome is released, a discarded one either way, an old value where replaced", skipPlan(),
+			[]Transfer{Move, Move, Store}, []Drop{
+				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}},
+				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
+				{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 2}},
+				{Kind: DropReplaced, Target: "kept"},
+			}},
+		{"a borrow copies when its owner's replacement may skip", &AssignPlan{
+			Head: Head{Label: "assign a, b", Source: "a, b = b, sarr[9]"},
+			Evals: []*Eval{
+				{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			},
+			Commit: []Mapping{
+				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
+				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip},
+			},
+		}, []Transfer{Copy, Move}, []Drop{
+			{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
+			{Kind: DropReplaced, Target: "a"},
+			{Kind: DropReplaced, Target: "b"},
+		}},
+		// No source statement builds a borrowed outcome that may skip yet.
+		{"a borrow that may skip copies though its owner is replaced", &AssignPlan{
+			Head: Head{Label: "assign a, b", Source: `a, b = views[9], "new"`},
+			Evals: []*Eval{
+				{Result: 0, Expr: read("views", 9), Slots: []Slot{borrowedSlot(str, "b")}, OnOOB: SkipOutcome},
+				{Result: 1, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
+			},
+			Commit: []Mapping{
+				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
+				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}},
+			},
+		}, []Transfer{Copy, Copy}, []Drop{
+			{Kind: DropReplaced, Target: "a"},
+			{Kind: DropReplaced, Target: "b"},
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -355,6 +417,57 @@ func TestValidateRejects(t *testing.T) {
 			p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}}
 		}, "%t0 slot 0 dropped twice"},
 		{"UnknownDropKind", func(p *AssignPlan) { p.Drops = []Drop{{Kind: 4}} }, "unknown drop kind"},
+		{"AccessWithoutScope", func(p *AssignPlan) { p.Evals[0].Expr = read("arr", 0) }, "eval %t0 holds a checked access with no out-of-bounds scope"},
+		{"ScopeWithoutAccess", func(p *AssignPlan) { p.Evals[0].OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
+		{"AccessInLiteralCell", func(p *AssignPlan) {
+			p.Evals[0].Expr = &ast.ArrayLiteral{Rows: [][]ast.Expression{{read("arr", 0)}}}
+		}, "eval %t0 holds a checked access in a literal cell"},
+		{"SkipWithoutPolicy", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+		}, "target a <- %t0 slot 0 has skip policy none; its outcome and target require keep"},
+		{"KeepOnFreshTarget", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Commit[0].Target.Fresh = true
+			p.Commit[0].OnSkip = KeepOnSkip
+		}, "has skip policy keep; its outcome and target require zero"},
+		{"PolicyOnCertainOutcome", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "has skip policy keep; its outcome and target require none"},
+		{"PolicyOnDiscard", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Commit[0].Target = Target{Kind: DiscardTarget}
+			p.Commit[0].OnSkip = KeepOnSkip
+		}, "target _ <- %t0 slot 0 has skip policy keep; its outcome and target require none"},
+		{"MovedBorrowOfOwnerThatMaySkip", func(p *AssignPlan) {
+			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfer = Move
+			p.Evals[1].Expr, p.Evals[1].OnOOB = read("arr", 0), SkipOutcome
+			p.Commit[1].Target.HoldsHeap = true
+			p.Commit[1].OnSkip = KeepOnSkip
+		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
+		{"MovedBorrowThatMaySkip", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfer = Move
+			p.Commit[0].OnSkip = KeepOnSkip
+			p.Commit[1].Target.HoldsHeap = true
+		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
+		{"SkippedOwnedNeverReleased", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Evals[0].Slots[0].Ownership = Owned
+			p.Commit[0].Transfer = Move
+			p.Commit[0].OnSkip = KeepOnSkip
+		}, "owned outcome %t0 slot 0 is never released where it skips"},
+		{"SkipDropOfCertainOutcome", func(p *AssignPlan) {
+			p.Evals[0].Slots[0].Ownership = Owned
+			p.Commit[0].Transfer = Move
+			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+		}, "skip-path drop of %t0 slot 0"},
+		{"SkippedDroppedTwice", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Evals[0].Slots[0].Ownership = Owned
+			p.Commit[0].Transfer = Move
+			p.Commit[0].OnSkip = KeepOnSkip
+			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+		}, "skipped %t0 slot 0 dropped twice"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -396,6 +509,9 @@ func TestValidatePrint(t *testing.T) {
 		{"OutOfOrder", func(p *PrintPlan) { p.Args[1].Outcome, p.Args[2].Outcome = 1, 0 }, "print takes %t1 where %t0 is next in evaluation order"},
 		{"Unprinted", func(p *PrintPlan) { p.Args = p.Args[:2] }, "print takes 1 of 2 outcomes"},
 		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
+		{"MaySkip", func(p *PrintPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+		}, "print takes %t0, which may skip"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -553,17 +669,18 @@ func TestRenderFunctionOutput(t *testing.T) {
 // Plan §12: the renderer rejects an unsupported node anywhere in the tree,
 // not only at the root.
 func TestRenderRejectsUnsupportedNode(t *testing.T) {
-	read := &ast.ArrayRangeExpression{Token: token.Token{Type: token.LBRACK, Literal: "["}, Array: ident("arr"), Range: intLit(0)}
+	person := &ast.StructLiteral{Token: token.Token{Type: token.IDENT, Literal: "Person"}, Row: []ast.Expression{intLit(1)}}
 	tests := []struct {
 		name string
 		expr ast.Expression
 		want string
 	}{
-		{"root", read, "pir: no renderer for *ast.ArrayRangeExpression"},
-		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: read}, "pir: no renderer for *ast.ArrayRangeExpression"},
-		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: read}}, "pir: no renderer for *ast.ArrayRangeExpression"},
-		{"read in array cell", &ast.ArrayLiteral{Rows: [][]ast.Expression{{intLit(1), read}}}, "pir: no renderer for *ast.ArrayRangeExpression"},
-		{"read as call argument", call("f", read), "pir: no renderer for *ast.ArrayRangeExpression"},
+		{"root", person, "pir: no renderer for *ast.StructLiteral"},
+		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: person}, "pir: no renderer for *ast.StructLiteral"},
+		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: person}}, "pir: no renderer for *ast.StructLiteral"},
+		{"in an array cell", &ast.ArrayLiteral{Rows: [][]ast.Expression{{intLit(1), person}}}, "pir: no renderer for *ast.StructLiteral"},
+		{"as a call argument", call("f", person), "pir: no renderer for *ast.StructLiteral"},
+		{"as a read's index", &ast.ArrayRangeExpression{Array: ident("arr"), Range: person}, "pir: no renderer for *ast.StructLiteral"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -655,6 +772,50 @@ func TestRenderExpandedOwnership(t *testing.T) {
 `
 	if got := replace.Render(false); got != want {
 		t.Fatalf("replace concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Plan §9, §12: an eval that may skip names its out-of-bounds scope, each
+// binding it maps to says what it holds on a skip, in both views, and the
+// expanded view lists the releases in the order they run.
+func TestRenderSkip(t *testing.T) {
+	p := skipPlan()
+	Elaborate(p)
+	want := `assign kept, fresh, _
+    source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
+
+    execute
+        %t0 = eval Str sarr[9] [on-oob=skip]
+        %t1 = eval Str sarr[0] [on-oob=skip]
+        %t2 = eval Str sarr[1] [on-oob=skip]
+
+    commit
+        kept <- %t0 [on-skip=keep]
+        fresh <- %t1 [on-skip=zero]
+        _ <- %t2
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	want = `assign kept, fresh, _
+    source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
+
+    execute
+        %t0 = eval Str [owned] sarr[9] [on-oob=skip]
+        %t1 = eval Str [owned] sarr[0] [on-oob=skip]
+        %t2 = eval Str [owned] sarr[1] [on-oob=skip]
+
+    commit
+        Str kept <- %t0 [move] [on-skip=keep]
+        Str fresh <- %t1 [move] [on-skip=zero]
+        _ <- %t2
+        drop %t0 [skipped]
+        drop %t1 [skipped]
+        drop %t2
+        drop kept [old]
+`
+	if got := p.Render(true); got != want {
+		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

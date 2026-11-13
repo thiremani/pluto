@@ -1,6 +1,10 @@
 package pir
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/thiremani/pluto/ast"
+)
 
 // Validate runs on every elaborated plan before lowering (plan §14). Several
 // invariants have no natural panic site — an unmapped outcome silently never
@@ -60,6 +64,9 @@ func ValidatePrint(p *PrintPlan) error {
 		if err := validateEval(p.Label, i, ev); err != nil {
 			return err
 		}
+		if ev.MaySkip() {
+			return fmt.Errorf("plan %s: print takes %%t%d, which may skip, and a print resolves no skip yet", p.Label, i)
+		}
 	}
 
 	next := OutcomeID(0)
@@ -114,12 +121,56 @@ func validateEval(plan string, i int, ev *Eval) error {
 		}
 	}
 
+	return validateAccesses(plan, i, ev)
+}
+
+// validateAccesses checks plan §14.15: every checked access has an explicit
+// out-of-bounds scope, which is its eval's outcome. A literal cell resolves a
+// failed access itself, a scope no plan node records.
+func validateAccesses(plan string, i int, ev *Eval) error {
+	outcome, cell := checkedAccesses(ev.Expr, false)
+	if cell > 0 {
+		return fmt.Errorf("plan %s: eval %%t%d holds a checked access in a literal cell, a scope no plan node records", plan, i)
+	}
+	if outcome > 0 && !ev.MaySkip() {
+		return fmt.Errorf("plan %s: eval %%t%d holds a checked access with no out-of-bounds scope", plan, i)
+	}
+	if outcome == 0 && ev.MaySkip() {
+		return fmt.Errorf("plan %s: eval %%t%d has an out-of-bounds scope and no checked access", plan, i)
+	}
+
 	return nil
+}
+
+// checkedAccesses counts expr's checked accesses by the region that resolves
+// a failed one (plan §9): the eval's outcome, or a literal cell around the
+// access.
+func checkedAccesses(expr ast.Expression, inCell bool) (outcome, cell int) {
+	switch expr.(type) {
+	case *ast.ArrayRangeExpression:
+		if inCell {
+			cell++
+		} else {
+			outcome++
+		}
+	case *ast.ArrayLiteral:
+		inCell = true
+	}
+
+	for _, child := range ast.ExprChildren(expr) {
+		childOutcome, childCell := checkedAccesses(child, inCell)
+		outcome += childOutcome
+		cell += childCell
+	}
+	return outcome, cell
 }
 
 func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome Type) bool) error {
 	slot, err := p.slot(m.Outcome)
 	if err != nil {
+		return err
+	}
+	if err := p.validateSkipPolicy(m); err != nil {
 		return err
 	}
 	switch m.Target.Kind {
@@ -142,6 +193,25 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		}
 	default:
 		return fmt.Errorf("plan %s: unknown target kind %d", p.Label, m.Target.Kind)
+	}
+
+	return nil
+}
+
+// validateSkipPolicy checks plan §9: a binding whose outcome may skip keeps
+// its value, or holds zero when it is fresh, and no other mapping carries a
+// policy.
+func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
+	want := NoSkip
+	if m.Target.binds() && !p.certain(m) {
+		want = KeepOnSkip
+		if m.Target.Fresh {
+			want = ZeroOnSkip
+		}
+	}
+	if m.OnSkip != want {
+		return fmt.Errorf("plan %s: target %s <- %%t%d slot %d has skip policy %s; its outcome and target require %s",
+			p.Label, targetString(m.Target, false), m.Outcome.Outcome, m.Outcome.Slot, m.OnSkip, want)
 	}
 
 	return nil
@@ -174,8 +244,12 @@ func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 		want = Move
 	case Borrowed:
 		if m.Transfer == Move {
-			if !p.replacesOwner(slot.Owner) {
+			replacement, replaced := p.replacement(slot.Owner)
+			if !replaced {
 				return fmt.Errorf("plan %s: target %s takes %s's old value, but %s is not replaced in this group", p.Label, m.Target.Name, slot.Owner, slot.Owner)
+			}
+			if !p.certain(m) || !p.certain(replacement) {
+				return fmt.Errorf("plan %s: target %s takes %s's old value, but one of the two mappings may skip without the other", p.Label, m.Target.Name, slot.Owner)
 			}
 			return nil
 		}
@@ -193,20 +267,23 @@ func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 	return nil
 }
 
-func (p *AssignPlan) replacesOwner(name string) bool {
+// replacement returns the mapping that replaces the value name holds.
+func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 	for _, m := range p.Commit {
 		if m.Target.binds() && m.Target.Name == name && m.Target.HoldsHeap {
-			return true
+			return m, true
 		}
 	}
-	return false
+	return Mapping{}, false
 }
 
 // validateReleases checks plan §14.19-21: every owned outcome and every
-// replaced held value is consumed or released exactly once.
+// replaced held value is consumed or released exactly once, on each path. An
+// owned outcome a binding takes where it yields is released where it skips.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDrop := make(map[OutcomeRef]bool)
+	needSkipDrop := make(map[OutcomeRef]bool)
 	for _, m := range p.Commit {
 		slot := p.Evals[m.Outcome.Outcome].Slots[m.Outcome.Slot]
 		// Only a moved borrow takes its owner's old value; moving an owned
@@ -214,8 +291,13 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 		if slot.Ownership == Borrowed && m.Transfer == Move {
 			taken[slot.Owner]++
 		}
-		if m.Target.Kind == DiscardTarget && slot.Ownership == Owned {
+		if slot.Ownership != Owned {
+			continue
+		}
+		if m.Target.Kind == DiscardTarget {
 			needDrop[m.Outcome] = true
+		} else if !p.certain(m) {
+			needSkipDrop[m.Outcome] = true
 		}
 	}
 	for owner, n := range taken {
@@ -225,9 +307,18 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 
 	droppedOutcome := make(map[OutcomeRef]bool)
+	droppedSkipped := make(map[OutcomeRef]bool)
 	droppedTarget := make(map[string]bool)
 	for _, d := range p.Drops {
 		switch d.Kind {
+		case DropSkipped:
+			if !needSkipDrop[d.Outcome] {
+				return fmt.Errorf("plan %s: skip-path drop of %%t%d slot %d, which is not an owned outcome a binding takes only where it yields", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
+			}
+			if droppedSkipped[d.Outcome] {
+				return fmt.Errorf("plan %s: skipped %%t%d slot %d dropped twice", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
+			}
+			droppedSkipped[d.Outcome] = true
 		case DropOutcome:
 			if !needDrop[d.Outcome] {
 				return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not a discarded owned outcome", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
@@ -255,6 +346,11 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	for ref := range needDrop {
 		if !droppedOutcome[ref] {
 			return fmt.Errorf("plan %s: discarded owned outcome %%t%d slot %d is never released", p.Label, ref.Outcome, ref.Slot)
+		}
+	}
+	for ref := range needSkipDrop {
+		if !droppedSkipped[ref] {
+			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d is never released where it skips", p.Label, ref.Outcome, ref.Slot)
 		}
 	}
 	for name := range replaced {

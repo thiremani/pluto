@@ -35,7 +35,7 @@ func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) {
 func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
-		if len(s.Condition) > 0 || !c.planValuesEligible(s.Value) {
+		if len(s.Condition) > 0 || !c.planValuesEligible(s.Value, true) {
 			return false
 		}
 		plan := c.buildLetPlan(s, fn)
@@ -48,7 +48,7 @@ func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 		c.lowerAssignPlan(plan)
 		return true
 	case *ast.PrintStatement:
-		if !c.planValuesEligible(s.Expression.Arguments) {
+		if !c.planValuesEligible(s.Expression.Arguments, false) {
 			return false
 		}
 		plan := c.buildPrintPlan(s, fn)
@@ -63,15 +63,17 @@ func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 }
 
 // planValuesEligible reports whether every value of a statement is an
-// ordinary expression of a type plans carry. Only lowerRoutedBody's
+// expression the router admits, of a type plans carry. reads says whether a
+// value may hold an index read: an assignment's commit resolves the skip, and
+// a print has no plan node for it yet (matrix row 31). Only lowerRoutedBody's
 // statements reach it, so none sits under a function-owned domain.
-func (c *Compiler) planValuesEligible(exprs []ast.Expression) bool {
+func (c *Compiler) planValuesEligible(exprs []ast.Expression, reads bool) bool {
 	for _, expr := range exprs {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if !planValueTypesSupported(info.OutTypes) {
 			return false
 		}
-		if !c.planExprEligible(expr) {
+		if !c.planExprEligible(expr, reads) {
 			return false
 		}
 	}
@@ -99,19 +101,29 @@ func planValueTypeSupported(t Type) bool {
 	}
 }
 
-// planExprEligible accepts ordinary expression trees only: whitelisted node
-// kinds with no range or conditional behavior at any depth. A field or
+// planExprEligible accepts whitelisted node kinds with no range or
+// conditional behavior at any depth. A field or
 // column read plans only off an identifier the router can inspect and that
 // is not widened; any other receiver fails closed. Deferred, not final: the
 // widened case needs ownership resolved against the receiver's effective
 // schema, as planSlot does for identifiers, once compileDotExpression types
-// the column by that schema too. A call is admitted with ordinary arguments
-// only: none can fail and none is a range, so the callee writes every output.
-func (c *Compiler) planExprEligible(expr ast.Expression) bool {
+// the column by that schema too. A call is admitted with arguments that
+// cannot fail and none a range, so the callee writes every output.
+//
+// An index read plans where reads holds, where its failure skips the
+// statement's own outcome: not below a literal cell, which zero-fills
+// instead, or a call argument, whose failure keeps the call from running
+// (matrix rows 2d, 6c).
+func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.CallExpression,
-		*ast.ArrayLiteral:
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral:
+	case *ast.CallExpression, *ast.ArrayLiteral:
+		reads = false
+	case *ast.ArrayRangeExpression:
+		if !reads {
+			return false
+		}
 	case *ast.DotExpression:
 		receiver, isIdent := e.Left.(*ast.Identifier)
 		if !isIdent || c.widenedRead(receiver) {
@@ -130,11 +142,37 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 		}
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if !c.planExprEligible(child) {
+		if !c.planExprEligible(child, reads) {
 			return false
 		}
 	}
 	return true
+}
+
+// planOOBScope gives an eval's index reads their scope (plan §9). The router
+// admits a read only where its failure skips the outcome, so any read in an
+// admitted tree has that scope.
+func planOOBScope(expr ast.Expression) pir.OOBScope {
+	var reads []*ast.ArrayRangeExpression
+	collectArrayIndexAccesses(expr, &reads)
+	if len(reads) == 0 {
+		return pir.NoChecks
+	}
+	return pir.SkipOutcome
+}
+
+// planSkipPolicy is what a target holds where its outcome skipped (plan §9):
+// the value it had, or zero when the statement introduces it. A discard
+// keeps nothing.
+func planSkipPolicy(scope pir.OOBScope, target pir.Target) pir.SkipPolicy {
+	switch {
+	case scope != pir.SkipOutcome || target.Kind == pir.DiscardTarget:
+		return pir.NoSkip
+	case target.Fresh:
+		return pir.ZeroOnSkip
+	default:
+		return pir.KeepOnSkip
+	}
 }
 
 // storedType is the type of the value a binding holds now, the source for
@@ -210,13 +248,15 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	commit := make([]pir.Mapping, 0, len(stmt.Name))
 	for i, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		evals[i] = &pir.Eval{Result: pir.OutcomeID(i), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes))}
+		evals[i] = &pir.Eval{Result: pir.OutcomeID(i), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), OnOOB: planOOBScope(expr)}
 
 		for slot, t := range info.OutTypes {
 			evals[i].Slots[slot] = c.planSlot(expr, t)
+			target := c.planTarget(stmt.Name[len(commit)])
 			commit = append(commit, pir.Mapping{
-				Target:  c.planTarget(stmt.Name[len(commit)]),
+				Target:  target,
 				Outcome: pir.OutcomeRef{Outcome: pir.OutcomeID(i), Slot: slot},
+				OnSkip:  planSkipPolicy(evals[i].OnOOB, target),
 			})
 		}
 	}
@@ -261,14 +301,16 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 	return bindingSlotCompatible(target.(Type), outcome.(Type))
 }
 
-// lowerAssignPlan implements an elaborated plan (plan §6, §13) and decides
-// nothing itself: old values are captured before any eval runs, and the
-// releases run after every mapping has landed so a swap never reads a freed
+// lowerAssignPlan implements an elaborated plan (plan §6, §9, §13) and
+// decides nothing itself: old values are captured before any eval runs, each
+// outcome's mappings land where it yielded, and the releases of replaced
+// values run after every mapping has landed, so a swap never reads a freed
 // payload.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
 
+	// What each commit replaces, by target.
 	replaced := make(map[string]*Symbol)
 	for _, d := range plan.Drops {
 		if d.Kind == pir.DropReplaced {
@@ -278,23 +320,90 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	}
 
 	outs := make([][]*Symbol, len(plan.Evals))
+	yielded := make([]llvm.Value, len(plan.Evals))
 	for i, ev := range plan.Evals {
-		outs[i] = c.compileExpression(ev.Expr, nil)
+		outs[i], yielded[i] = c.lowerEval(ev)
 	}
+
+	c.backSkippableTargets(plan, replaced)
+	for i := range plan.Evals {
+		c.withCondBranch(yielded[i], "assign_write", func() {
+			c.commitOutcome(plan, i, outs[i])
+		}, func() {
+			c.dropOutcomeSlots(plan, pir.DropSkipped, i, outs[i], "temp_free")
+		})
+	}
+
+	for i := range plan.Evals {
+		c.dropOutcomeSlots(plan, pir.DropOutcome, i, outs[i], "discard")
+	}
+	for i := range plan.Evals {
+		c.withCondBranch(yielded[i], "assign_free", func() {
+			c.dropReplaced(plan, i, replaced)
+		}, nil)
+	}
+}
+
+// lowerEval compiles one eval and returns its outcome with the bit that says
+// whether it yielded; the bit is nil for an eval that always does. An eval
+// that may skip runs under a bounds guard of its own, which each of its
+// index reads ANDs its in-bounds bit into (plan §9). A read past the end
+// still gives a zero for the rest of the expression to use, so the outcome
+// holds a value on the skip path too.
+func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
+	if !ev.MaySkip() {
+		return c.compileExpression(ev.Expr, nil), llvm.Value{}
+	}
+
+	guard := c.pushBoundsGuard("assign_bounds_guard")
+	defer c.popBoundsGuard()
+
+	out := c.compileExpression(ev.Expr, nil)
+	return out, c.createLoad(guard, Int{Width: 1}, "assign_bounds_ok")
+}
+
+// backSkippableTargets gives every binding a skip can leave alone storage
+// that both paths reach: an existing binding moves to memory, and a fresh one
+// starts at its zero, the value it holds where its outcome skipped. A commit
+// replaces that zero, so it joins replaced.
+func (c *Compiler) backSkippableTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
 	for _, m := range plan.Commit {
-		if m.Target.Kind == pir.DiscardTarget {
+		switch m.OnSkip {
+		case pir.KeepOnSkip:
+			c.promoteExistingSym(m.Target.Name)
+		case pir.ZeroOnSkip:
+			replaced[m.Target.Name] = c.seedFreshDest(m.Target.Name, m.Target.Type.(Type))
+		}
+	}
+}
+
+// commitOutcome lands the mappings of eval i.
+func (c *Compiler) commitOutcome(plan *pir.AssignPlan, i int, out []*Symbol) {
+	for _, m := range plan.Commit {
+		if int(m.Outcome.Outcome) != i || m.Target.Kind == pir.DiscardTarget {
 			continue
 		}
-		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
+		c.storeValue(m.Target.Name, out[m.Outcome.Slot], m.Transfer == pir.Copy)
 	}
+}
+
+// dropOutcomeSlots runs the plan's releases of the given kind for eval i.
+func (c *Compiler) dropOutcomeSlots(plan *pir.AssignPlan, kind pir.DropKind, i int, out []*Symbol, loadName string) {
 	for _, d := range plan.Drops {
-		switch d.Kind {
-		case pir.DropOutcome:
-			c.freeSymbolValue(outs[d.Outcome.Outcome][d.Outcome.Slot], "discard")
-		case pir.DropReplaced:
-			c.freeSymbolValue(replaced[d.Target], "old_assign")
-		default:
-			panic(fmt.Sprintf("internal: plan %s: unknown drop kind %d", plan.Label, d.Kind))
+		if d.Kind == kind && int(d.Outcome.Outcome) == i {
+			c.freeSymbolValue(out[d.Outcome.Slot], loadName)
+		}
+	}
+}
+
+// dropReplaced releases what the mappings of eval i replaced.
+func (c *Compiler) dropReplaced(plan *pir.AssignPlan, i int, replaced map[string]*Symbol) {
+	for _, m := range plan.Commit {
+		if int(m.Outcome.Outcome) != i {
+			continue
+		}
+		if old, held := replaced[m.Target.Name]; held {
+			c.freeSymbolValue(old, "old_assign")
 		}
 	}
 }

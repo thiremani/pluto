@@ -11,3 +11,6 @@ MixSkippedBefore: oldM
 MixSkipped: oldM |
 MixOkBefore: old2
 MixOk: pa qz
+LeakSwapBesideOob: right left 4
+LeakCopyBesideOobBefore: first second
+LeakCopyBesideOob: second second
