@@ -19,8 +19,10 @@ const (
 	STR_QUOTE_PREFIX = "str_quote_prefix"
 	STR_HEX          = "str_hex"
 	ARRAY_ND_STR     = "array_nd_str"
+	ARRAY_ND_FORMAT  = "array_nd_format"
 	ARRAY_SHAPE_FAIL = "array_shape_fail"
 	TABLE_STR        = "table_str"
+	TABLE_FORMAT     = "table_format"
 
 	ARRAY_DIM_OVERFLOW = "array_dim_overflow"
 	DIV_ZERO_FAIL      = "div_zero_fail"
@@ -105,12 +107,16 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i64, c.Context.Int32Type(), c.Context.Int32Type(), c.Context.Int32Type()}, false)
 	case ARRAY_ND_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i32, i64, llvm.PointerType(i64, 0)}, false)
+	case ARRAY_ND_FORMAT:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i32, i64, llvm.PointerType(i64, 0), charPtr, i32, i32, i32}, false)
 	case ARRAY_SHAPE_FAIL, ARRAY_DIM_OVERFLOW:
 		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{i64, i64}, false)
 	case DIV_ZERO_FAIL:
 		return llvm.FunctionType(c.Context.VoidType(), nil, false)
 	case TABLE_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{i64, i64, charPtr, charPtr, charPtr}, false)
+	case TABLE_FORMAT:
+		return llvm.FunctionType(charPtr, []llvm.Type{i64, i64, charPtr, charPtr, charPtr, i32, charPtr, i32, i32, i32}, false)
 
 	// Array I64 functions
 	case ARR_I64_NEW:

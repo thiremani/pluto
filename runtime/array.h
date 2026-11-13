@@ -81,10 +81,19 @@ typedef enum {
 } PtElementKind;
 
 const char* array_nd_str(const void* values, int32_t kind, size_t rank, const size_t* dimensions);
+/* Formats every cell with fmt, an element format as arr_*_format takes. */
+const char* array_nd_format(const void* values, int32_t kind, size_t rank, const size_t* dimensions,
+                            const char* fmt, int dynamic_arg_count, int first_arg, int second_arg);
 void array_shape_fail(size_t expected, size_t got);
 void array_dim_overflow(size_t left, size_t right);
 const char* table_str(size_t rows, size_t cols, const char* const* names,
                       const int32_t* kinds, const void* const* columns);
+/* Formats the cells of the columns whose kind is format_kind; the other
+   columns print as table_str prints them. */
+const char* table_format(size_t rows, size_t cols, const char* const* names,
+                         const int32_t* kinds, const void* const* columns,
+                         int32_t format_kind, const char* fmt,
+                         int dynamic_arg_count, int first_arg, int second_arg);
 
 #ifdef __cplusplus
 } /* extern "C" */

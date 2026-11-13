@@ -328,7 +328,57 @@ static int strbuf_format_str(StrBuf* sb, const char* fmt, int dynamic_arg_count,
                                  value ? value : "");
 }
 
-static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_t index) {
+/* A specifier formats the cells of one element kind. A cell of any other
+ * kind, as the other columns of a table have, prints its default. */
+typedef struct {
+    const char* fmt;
+    char* nul_fmt; /* fmt ending in %s, for the NUL byte that %c cannot print */
+    char conversion;
+    int32_t kind;
+    int dynamic_arg_count;
+    int first_arg;
+    int second_arg;
+} CellFormat;
+
+static int cell_format_init(CellFormat* format, const char* fmt, int32_t kind,
+                            int dynamic_arg_count, int first_arg, int second_arg) {
+    size_t fmt_len = strlen(fmt);
+    *format = (CellFormat){fmt, NULL, fmt[fmt_len - 1], kind,
+                           dynamic_arg_count, first_arg, second_arg};
+    if (format->conversion != 'c') return 0;
+
+    format->nul_fmt = dup_cstr(fmt);
+    if (!format->nul_fmt) return -1;
+    format->nul_fmt[fmt_len - 1] = 's';
+    return 0;
+}
+
+static int strbuf_format_cell(StrBuf* sb, const void* values, size_t index,
+                              const CellFormat* format) {
+    switch (format->kind) {
+    case PT_ELEM_I64:
+        return strbuf_format_i64(sb, format->fmt, format->nul_fmt, format->conversion,
+                                 format->dynamic_arg_count, format->first_arg,
+                                 format->second_arg,
+                                 arr_i64_get((const PtArrayI64*)values, index));
+    case PT_ELEM_F64:
+        return strbuf_format_f64(sb, format->fmt, format->dynamic_arg_count,
+                                 format->first_arg, format->second_arg,
+                                 arr_f64_get((const PtArrayF64*)values, index));
+    case PT_ELEM_STR:
+        return strbuf_format_str(sb, format->fmt, format->dynamic_arg_count,
+                                 format->first_arg, format->second_arg,
+                                 arr_str_borrow((const PtArrayStr*)values, index));
+    default:
+        return -1;
+    }
+}
+
+/* format is NULL when the value prints without a specifier. */
+static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_t index,
+                             const CellFormat* format) {
+    if (format && format->kind == kind) return strbuf_format_cell(sb, values, index, format);
+
     switch (kind) {
     case PT_ELEM_I64:
         return strbuf_printf(sb, "%lld", (long long)arr_i64_get((const PtArrayI64*)values, index));
@@ -359,13 +409,14 @@ static int strbuf_indent(StrBuf* sb, size_t depth) {
 }
 
 static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t rank,
-                           const size_t* dimensions, size_t depth, size_t* value_index) {
+                           const size_t* dimensions, size_t depth, size_t* value_index,
+                           const CellFormat* format) {
     if (strbuf_printf(sb, "[") < 0) return -1;
 
     if (rank == 1) {
         for (size_t i = 0; i < dimensions[0]; ++i) {
             if (i > 0 && strbuf_printf(sb, " ") < 0) return -1;
-            if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+            if (strbuf_array_cell(sb, values, kind, (*value_index)++, format) < 0) return -1;
         }
     } else if (rank == 2 && dimensions[0] > 0 && dimensions[1] == 0) {
         /* Empty rows need explicit child arrays because blank block rows carry no shape. */
@@ -380,9 +431,9 @@ static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t 
             for (size_t col = 0; col < dimensions[1]; ++col) {
                 if (col > 0 && strbuf_printf(sb, " ") < 0) return -1;
                 if (rank == 2) {
-                    if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+                    if (strbuf_array_cell(sb, values, kind, (*value_index)++, format) < 0) return -1;
                 } else if (strbuf_array_nd(sb, values, kind, rank - 2, dimensions + 2,
-                                           depth + 1, value_index) < 0) {
+                                           depth + 1, value_index, format) < 0) {
                     return -1;
                 }
             }
@@ -393,19 +444,37 @@ static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t 
     return strbuf_printf(sb, "]");
 }
 
-const char* array_nd_str(const void* values, int32_t kind, size_t rank,
-                         const size_t* dimensions) {
+static const char* array_nd_text(const void* values, int32_t kind, size_t rank,
+                                 const size_t* dimensions, const CellFormat* format) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
 
     if (rank == 0 || !dimensions) goto fail;
     size_t value_index = 0;
-    if (strbuf_array_nd(&sb, values, kind, rank, dimensions, 0, &value_index) < 0) goto fail;
+    if (strbuf_array_nd(&sb, values, kind, rank, dimensions, 0, &value_index, format) < 0) goto fail;
     return sb.data;
 
 fail:
     free(sb.data);
     return NULL;
+}
+
+const char* array_nd_str(const void* values, int32_t kind, size_t rank,
+                         const size_t* dimensions) {
+    return array_nd_text(values, kind, rank, dimensions, NULL);
+}
+
+const char* array_nd_format(const void* values, int32_t kind, size_t rank,
+                            const size_t* dimensions, const char* fmt,
+                            int dynamic_arg_count, int first_arg, int second_arg) {
+    CellFormat format;
+    if (cell_format_init(&format, fmt, kind, dynamic_arg_count, first_arg, second_arg) < 0) {
+        return NULL;
+    }
+
+    const char* text = array_nd_text(values, kind, rank, dimensions, &format);
+    free(format.nul_fmt);
+    return text;
 }
 
 /* Aborts the process; called from generated code when a runtime shape check
@@ -429,8 +498,9 @@ void array_dim_overflow(size_t left, size_t right) {
     abort();
 }
 
-const char* table_str(size_t rows, size_t cols, const char* const* names,
-                      const int32_t* kinds, const void* const* columns) {
+static const char* table_text(size_t rows, size_t cols, const char* const* names,
+                              const int32_t* kinds, const void* const* columns,
+                              const CellFormat* format) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
 
@@ -454,7 +524,7 @@ const char* table_str(size_t rows, size_t cols, const char* const* names,
         if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
         for (size_t col = 0; col < cols; ++col) {
             if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
-            if (strbuf_array_cell(&sb, columns[col], kinds[col], row) < 0) goto fail;
+            if (strbuf_array_cell(&sb, columns[col], kinds[col], row, format) < 0) goto fail;
         }
     }
     if ((has_headers || rows > 0) && strbuf_printf(&sb, "\n") < 0) goto fail;
@@ -464,6 +534,25 @@ const char* table_str(size_t rows, size_t cols, const char* const* names,
 fail:
     free(sb.data);
     return NULL;
+}
+
+const char* table_str(size_t rows, size_t cols, const char* const* names,
+                      const int32_t* kinds, const void* const* columns) {
+    return table_text(rows, cols, names, kinds, columns, NULL);
+}
+
+const char* table_format(size_t rows, size_t cols, const char* const* names,
+                         const int32_t* kinds, const void* const* columns,
+                         int32_t format_kind, const char* fmt,
+                         int dynamic_arg_count, int first_arg, int second_arg) {
+    CellFormat format;
+    if (cell_format_init(&format, fmt, format_kind, dynamic_arg_count, first_arg, second_arg) < 0) {
+        return NULL;
+    }
+
+    const char* text = table_text(rows, cols, names, kinds, columns, &format);
+    free(format.nul_fmt);
+    return text;
 }
 
 const char* arr_i64_str(const PtArrayI64* a) {
@@ -483,65 +572,20 @@ const char* arr_str_str(const PtArrayStr* a) {
 
 const char* arr_i64_format(const PtArrayI64* a, const char* fmt,
                            int dynamic_arg_count, int first_arg, int second_arg) {
-    size_t fmt_len = strlen(fmt);
-    char conversion = fmt[fmt_len - 1];
-    char* escaped_nul_fmt = NULL;
-    if (conversion == 'c') {
-        escaped_nul_fmt = dup_cstr(fmt);
-        if (!escaped_nul_fmt) return NULL;
-        escaped_nul_fmt[fmt_len - 1] = 's';
-    }
-
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) { free(escaped_nul_fmt); return NULL; }
-    if (strbuf_printf(&sb, "[") < 0) goto fail;
-    for (size_t i = 0; i < arr_i64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
-        if (strbuf_format_i64(&sb, fmt, escaped_nul_fmt, conversion, dynamic_arg_count,
-                              first_arg, second_arg, arr_i64_get(a, i)) < 0) goto fail;
-    }
-    if (strbuf_printf(&sb, "]") < 0) goto fail;
-    free(escaped_nul_fmt);
-    return sb.data;
-
-fail:
-    free(escaped_nul_fmt);
-    free(sb.data);
-    return NULL;
+    size_t length = arr_i64_len(a);
+    return array_nd_format(a, PT_ELEM_I64, 1, &length, fmt, dynamic_arg_count, first_arg, second_arg);
 }
 
 const char* arr_f64_format(const PtArrayF64* a, const char* fmt,
                            int dynamic_arg_count, int first_arg, int second_arg) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_f64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_format_f64(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
-                              arr_f64_get(a, i)) < 0) {
-            free(sb.data);
-            return NULL;
-        }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_f64_len(a);
+    return array_nd_format(a, PT_ELEM_F64, 1, &length, fmt, dynamic_arg_count, first_arg, second_arg);
 }
 
 const char* arr_str_format(const PtArrayStr* a, const char* fmt,
                            int dynamic_arg_count, int first_arg, int second_arg) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_str_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_format_str(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
-                              arr_str_borrow(a, i)) < 0) {
-            free(sb.data);
-            return NULL;
-        }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_str_len(a);
+    return array_nd_format(a, PT_ELEM_STR, 1, &length, fmt, dynamic_arg_count, first_arg, second_arg);
 }
 
 #undef PT_STRBUF_FORMAT_VALUE

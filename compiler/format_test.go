@@ -202,6 +202,15 @@ width = 3.5
 			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: t. Variable type: Table[Name:Str Score:I64]",
 		},
 		{
+			name: "TableSpecifierFitsNoColumn",
+			input: `t = [
+  : Name Score
+    "Ada" 10
+]
+"Value: -t%.2f"`,
+			expectError: "Format specifier end 'f' is not correct for variable type. Variable identifier: t. Variable type: Table[Name:Str Score:I64]",
+		},
+		{
 			name: "CountIsNotSupported",
 			input: `x = 5
 "Value: -x%n"`,

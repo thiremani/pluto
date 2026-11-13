@@ -11,6 +11,18 @@ arr float dynamic: |[    1.5    -2.5     3.0     4.2]|
 arr is ["foo" "bar" "baz"]
 arr str raw: [foo bar baz]
 quoted arr is ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "tab\tstop" "carriage\rreturn" "back\bspace" "form\ffeed" "escape\x1b" "dash-word" "π"]
+matrix digits: [
+    3.14159265358979 12345678
+    0.5 0.25
+]
+cube padded: [
+    [   1    2] [  30  400]
+]
+table fixed: [
+  : Name Score Rank
+    "Ada"     3.1 1
+    "Lin"     0.5 20
+]
 [1 2 3 4]
 arr2 is [1 2 3 4]
 [1.1 2.3 4 2.1]

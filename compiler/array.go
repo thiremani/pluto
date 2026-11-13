@@ -950,22 +950,38 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
 
-func (c *Compiler) arrayFormatArg(s *Symbol, info ArrayInfo, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+func (c *Compiler) arrayFormatArg(s *Symbol, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+	arr := s.Type.(Array)
+	if arr.Rank > 1 {
+		return c.arrayNDFormatArg(s, elementFormat, dynamicArgs)
+	}
+	info, ok := ArrayInfos[arr.ElemType.Kind()]
+	if !ok {
+		panic("internal: unsupported array element kind for formatting")
+	}
+
+	cast := c.ArrayBitCast(c.arrayDataValue(s.Val, arr), info, "arr_format_cast")
+	formatArgs := append([]llvm.Value{cast}, c.elementFormatArgs(elementFormat, dynamicArgs)...)
+	fnTy, fn := c.GetCFunc(info.FormatName)
+	return c.builder.CreateCall(fnTy, fn, formatArgs, "arr_format")
+}
+
+// elementFormatArgs are the trailing arguments of every runtime element
+// formatter: the element format, how many dynamic width and precision values
+// it takes, and those values in format order, zero when absent.
+func (c *Compiler) elementFormatArgs(elementFormat string, dynamicArgs []*Symbol) []llvm.Value {
 	i32 := c.Context.Int32Type()
 	zero := llvm.ConstInt(i32, 0, false)
-	formatArgs := []llvm.Value{
-		c.ArrayBitCast(c.arrayDataValue(s.Val, s.Type.(Array)), info, "arr_format_cast"),
+	args := []llvm.Value{
 		c.constCString(elementFormat),
 		llvm.ConstInt(i32, uint64(len(dynamicArgs)), false),
 		zero,
 		zero,
 	}
 	for i, dynamicArg := range dynamicArgs {
-		formatArgs[i+3] = c.formatCIntArg(dynamicArg, "array_format_size_i32")
+		args[i+2] = c.formatCIntArg(dynamicArg, "array_format_size_i32")
 	}
-
-	fnTy, fn := c.GetCFunc(info.FormatName)
-	return c.builder.CreateCall(fnTy, fn, formatArgs, "arr_format")
+	return args
 }
 
 func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*Symbol, *Symbol, Array) {
