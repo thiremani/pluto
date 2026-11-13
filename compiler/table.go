@@ -60,6 +60,24 @@ func (c *Compiler) copyTableValue(value llvm.Value, tableType Table) llvm.Value 
 }
 
 func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {
+	args := c.tablePrintArgs(s)
+	fnType, fn := c.GetCFunc(TABLE_STR)
+	return c.builder.CreateCall(fnType, fn, args, "table_str")
+}
+
+// tableFormatArg formats the columns whose element type is elementType and
+// leaves the others to their default print.
+func (c *Compiler) tableFormatArg(s *Symbol, elementType Type, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+	formatKind := llvm.ConstInt(c.Context.Int32Type(), runtimeElementKinds[elementType.Kind()], false)
+	args := append(c.tablePrintArgs(s), formatKind)
+	args = append(args, c.elementFormatArgs(elementFormat, dynamicArgs)...)
+	fnType, fn := c.GetCFunc(TABLE_FORMAT)
+	return c.builder.CreateCall(fnType, fn, args, "table_format")
+}
+
+// tablePrintArgs describes a table to the runtime's printers: its row and
+// column counts, then each column's name, element kind and data.
+func (c *Compiler) tablePrintArgs(s *Symbol) []llvm.Value {
 	tableType := s.Type.(Table)
 	rows := c.builder.CreateExtractValue(s.Val, 0, "table_rows")
 	columnCount := len(tableType.Columns)
@@ -85,12 +103,11 @@ func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {
 		c.builder.CreateStore(c.tableColumnValue(s.Val, i), columnSlot)
 	}
 
-	fnType, fn := c.GetCFunc(TABLE_STR)
-	return c.builder.CreateCall(fnType, fn, []llvm.Value{
+	return []llvm.Value{
 		rows,
 		c.ConstI64(uint64(columnCount)),
 		c.builder.CreateBitCast(names, i8p, "table_names_ptr"),
 		c.builder.CreateBitCast(kinds, i8p, "table_kinds_ptr"),
 		c.builder.CreateBitCast(columns, i8p, "table_columns_ptr"),
-	}, "table_str")
+	}
 }

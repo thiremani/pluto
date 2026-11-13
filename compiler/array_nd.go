@@ -428,6 +428,20 @@ func (c *Compiler) copyArrayValue(value llvm.Value, arrayType Array) llvm.Value 
 }
 
 func (c *Compiler) arrayNDStrArg(s *Symbol) llvm.Value {
+	args := c.arrayNDPrintArgs(s)
+	fnType, fn := c.GetCFunc(ARRAY_ND_STR)
+	return c.builder.CreateCall(fnType, fn, args, "array_nd_str")
+}
+
+func (c *Compiler) arrayNDFormatArg(s *Symbol, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+	args := append(c.arrayNDPrintArgs(s), c.elementFormatArgs(elementFormat, dynamicArgs)...)
+	fnType, fn := c.GetCFunc(ARRAY_ND_FORMAT)
+	return c.builder.CreateCall(fnType, fn, args, "array_nd_format")
+}
+
+// arrayNDPrintArgs describes an array to the runtime's printers: its data,
+// element kind, rank and dimensions.
+func (c *Compiler) arrayNDPrintArgs(s *Symbol) []llvm.Value {
 	arrayType := s.Type.(Array)
 	dimensions := c.arrayDimensions(s)
 	i64 := c.Context.Int64Type()
@@ -440,11 +454,10 @@ func (c *Compiler) arrayNDStrArg(s *Symbol) llvm.Value {
 	}
 
 	kind := llvm.ConstInt(c.Context.Int32Type(), runtimeElementKinds[arrayType.ElemType.Kind()], false)
-	fnType, fn := c.GetCFunc(ARRAY_ND_STR)
-	return c.builder.CreateCall(fnType, fn, []llvm.Value{
+	return []llvm.Value{
 		c.arrayDataValue(s.Val, arrayType),
 		kind,
 		c.ConstI64(uint64(arrayType.Rank)),
 		c.builder.CreateBitCast(dimensionsValue, llvm.PointerType(i64, 0), "array_dimensions_ptr"),
-	}, "array_nd_str")
+	}
 }

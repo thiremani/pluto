@@ -349,11 +349,17 @@ x = 3.14159265358979
 x, [x]  # 3.14159265358979 [3.14159]
 ```
 
-Compatible scalar format specifiers lift element-wise over 1-D arrays. For example,
+Compatible scalar format specifiers lift element-wise over arrays of any rank,
+which keep their layout. For example,
 `"-ints%4d"` pads every integer, `"-values%7.2f"` formats every float,
 `"-values%.15g"` prints every float with up to 15 digits, and
 `"-ints%#x"` prints every integer in hexadecimal. String arrays stay quoted by
 default; an explicit `"-words%s"` prints their elements without quotes.
+
+A table formats the columns a specifier fits and prints its other columns as
+usual, so `"-scores%.2f"` formats the float columns of `scores`. A specifier
+that fits no column is a compile error, as one that does not fit an array's
+elements is.
 
 An unescaped `%` immediately after a resolved marker starts a strict format specifier. Use `%%` or
 `\%` for a literal percent after a value, so `"Progress: -n%%"` prints a value followed by `%`;

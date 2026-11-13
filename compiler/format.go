@@ -508,25 +508,36 @@ func arrayElementSupportsSpecifier(element Type, conversion rune) bool {
 	return ok && expectedKind == element.Kind()
 }
 
-func (c *Compiler) tryFormatArrayElements(tok token.Token, value string, mainSym *Symbol, syms []*Symbol, spec parsedSpecifier) (formattedMarker, bool, *token.CompileError) {
-	if mainSym.Type.Kind() != ArrayKind {
-		return formattedMarker{}, false, nil
+// specifierElementType returns the element type a conversion formats in an
+// array or a table: the array's element type, or that of the table columns
+// the conversion fits. It reports false for any other value, and when the
+// conversion fits no element.
+func specifierElementType(t Type, conversion rune) (Type, bool) {
+	switch container := t.(type) {
+	case Array:
+		return container.ElemType, arrayElementSupportsSpecifier(container.ElemType, conversion)
+	case Table:
+		for _, column := range container.Columns {
+			if arrayElementSupportsSpecifier(column.ElemType, conversion) {
+				return column.ElemType, true
+			}
+		}
 	}
+	return nil, false
+}
+
+// tryFormatElements lifts a scalar specifier over the elements of an array of
+// any rank, and over the columns of a table it fits; a table's other columns
+// print their default. A conversion fits one element kind, so the fitting
+// columns share one element format.
+func (c *Compiler) tryFormatElements(tok token.Token, value string, mainSym *Symbol, syms []*Symbol, spec parsedSpecifier) (formattedMarker, bool, *token.CompileError) {
 	if spec.text == "" || spec.text == "%%" {
 		return formattedMarker{}, false, nil
 	}
 
-	arr := mainSym.Type.(Array)
-	if arr.Rank != 1 {
-		return formattedMarker{}, false, nil
-	}
-	elementType := arr.ElemType
 	conversion := rune(spec.text[len(spec.text)-1])
-	if !arrayElementSupportsSpecifier(elementType, conversion) {
-		return formattedMarker{}, false, nil
-	}
-	info, ok := ArrayInfos[elementType.Kind()]
-	if !ok {
+	elementType, fits := specifierElementType(mainSym.Type, conversion)
+	if !fits {
 		return formattedMarker{}, false, nil
 	}
 	if err := validateHexSpecifierType(tok, value, elementType, conversion, spec); err != nil {
@@ -538,7 +549,13 @@ func (c *Compiler) tryFormatArrayElements(tok token.Token, value string, mainSym
 	if elementType.Kind() == IntKind {
 		elementFormat = upgradeIntSpec(elementFormat)
 	}
-	formatted := c.arrayFormatArg(mainSym, info, elementFormat, syms[1:])
+
+	var formatted llvm.Value
+	if mainSym.Type.Kind() == TableKind {
+		formatted = c.tableFormatArg(mainSym, elementType, elementFormat, syms[1:])
+	} else {
+		formatted = c.arrayFormatArg(mainSym, elementFormat, syms[1:])
+	}
 	return formattedMarker{
 		text:   "%s",
 		args:   []llvm.Value{formatted},
@@ -745,7 +762,7 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms []*Symbol, spec parsedSpecifier) (formattedMarker, *token.CompileError) {
 	mainSym := syms[0]
 
-	if result, handled, err := c.tryFormatArrayElements(tok, value, mainSym, syms, spec); handled {
+	if result, handled, err := c.tryFormatElements(tok, value, mainSym, syms, spec); handled {
 		return result, err
 	}
 

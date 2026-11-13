@@ -23,6 +23,27 @@ arrStr
 arrStrQuoted = ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "tab\tstop" "carriage\rreturn" "back\bspace" "form\ffeed" "escape\x1b" "dash-word" "π"]
 "quoted arr is -arrStrQuoted"
 
+# a specifier formats every cell of a matrix, which keeps its block layout
+fmtMatrix = [
+    3.14159265358979 12345678.0
+    0.5 0.25
+]
+"matrix digits: -fmtMatrix%.15g"
+
+# every cell of a rank-3 array, here with a dynamic width
+fmtCube = [
+    [1 2] [30 400]
+]
+"cube padded: -fmtCube%(-arrIntWidth)d"
+
+# a table formats the columns its specifier fits; the others print as usual
+fmtScores = [
+  : Name Score Rank
+    "Ada" 3.14159265358979 1
+    "Lin" 0.5 20
+]
+"table fixed: -fmtScores%(-arrWidth).(-arrPrecision)f"
+
 # inline vector (no newline inside)
 arr2 = [1 2 3 4]
 arr2
