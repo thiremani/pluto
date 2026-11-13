@@ -472,7 +472,7 @@ resolve a later failure inside it.
 For assignment, a failed statement gate blocks every sibling write, while an
 OOB in one ordinary RHS leaves only that RHS's target unchanged.
 
-Print has **no gate**: `ast.PrintStatement` carries only an argument list.
+Print has **no gate** today: `ast.PrintStatement` carries only an argument list.
 Its failure resolver is the **invocation boundary** (§3): print is one N-ary
 call, so an argument failure that no closer `||` resolves suppresses the
 complete invocation and all of its output, by the same call-merge rule that
@@ -487,16 +487,25 @@ else and prints nothing. The suppression is silent by design; whether a
 debug build should report a suppressed invocation is a language decision
 outside this plan, which neither requires nor precludes it.
 
-A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
-evaluating the siblings — was scheduled before Step 6 so that print kept a
-lazy spelling once arguments became strict. With checks first (§3),
-`arr[oob], val1, val2` already evaluates nothing beside the failed read, so
-the gated print is **no longer scheduled**: it would only spell a condition
-the line doesn't print, which `c > 5 && a, b` already does. It does not
-parse: the parser builds a `PrintStatement` only from a plain expression
-list, and the solver rejects an OOB read as a statement condition. If it
-lands later, it is a parser/AST/solver feature with its own semantics-doc
-entry, tests, and capability rows, and its gate must test the access's
+A **gated print** — `c > 5 a, b`, a condition before the values with no
+comma, as an assignment's gate stands before its values — is **planned with
+Step 6** (decided 2026-11-13). It rejects the whole line without evaluating
+any value. That is what `c > 5 && a, b` already does, since a print is one
+invocation and a failed argument suppresses it, so the gate adds no
+capability. It is planned for two reasons. A statement's values then take a
+gate whether or not the statement has targets, one rule where assignments
+were an exception. And the line says what it means: in an assignment `&&`
+guards one slot, and only the invocation boundary makes it guard a whole
+print, which the line itself does not show. It was once scheduled before
+Step 6, in the form `arr[oob] val1, val2`, so that print kept a lazy spelling
+once arguments became strict, and was dropped when checks first (§3) made
+`arr[oob], val1, val2` evaluate nothing beside the failed read. It does not
+parse today: the parser builds a `PrintStatement` only from a plain
+expression list. It is a parser/AST/solver feature with its own PR,
+semantics-doc entry, tests, and capability rows; its plan is a `PrintPlan`
+under the statement `gate` Step 6 adds for assignments. A gate admits the
+conditions an assignment's gate admits. The solver rejects an OOB read as a
+statement condition; where one is admitted, the gate must test the access's
 yielded/in-bounds bit rather than its value, so an in-bounds zero still
 admits the region.
 
@@ -1131,8 +1140,8 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2 is complete.** Gated print syntax is no longer
-scheduled (§9); any language change gets its own PR with its semantics-doc
+and ranges. **Step 2 is complete.** Gated print syntax is planned with
+Step 6 (§9); any language change gets its own PR with its semantics-doc
 and rejection-test updates.
 
 ### Step 2: Write effects on settled specializations (~1-2 weeks)
@@ -1423,6 +1432,8 @@ append.
   side-effecting or owned-heap sibling of a failed conditional or OOB read,
   which never runs or allocates, and for a failed sibling suppressing a
   complete multi-line `Struct` emission.
+- The gated print (§9) lands with this step, in its own PR: the parser, AST
+  and solver first, then its `PrintPlan` under the statement `gate`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

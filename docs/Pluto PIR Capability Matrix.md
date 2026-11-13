@@ -48,11 +48,10 @@ a call at once (`tests/math/func.spt` carries all six across its statements).
 Only reachable combinations are listed; rectangles are collapsed where routing,
 disposition, and cutover step are identical across a range of values.
 
-Print has **no gate axis**: `ast.PrintStatement` carries only an expression, so
+Print has **no gate axis** today: `ast.PrintStatement` carries only an expression, so
 its conditionality comes entirely from cond-expressions inside its arguments.
-A gated print (`arr[oob] val1, val2`) does not parse today and is no
-longer scheduled (plan §9); it would get its own axis value and rows if it
-lands.
+A gated print (`c > 5 a, b`) does not parse today and is planned with
+Step 6 (plan §9); it gets its own axis value and rows when it lands.
 
 **Domain-role note.** `LoopInside` is the callee's flag, and the call site owns
 the loop when it is *false*: `compileCallExpression` selects
@@ -369,8 +368,10 @@ failure kinds is pinned in `tests/array/oob_print.spt`.
 Per-slot printing (a failed slot omitting only itself) was considered and
 rejected in favor of the call rule: print is a call, and calls merge lanes.
 Checks first already skips *evaluating* the siblings of a failed argument,
-so the **gated print** (`arr[oob] val1, val2`), which does not parse today
-(`PrintStatement` has no gate field), is no longer scheduled (plan §9).
+so the **gated print** (`c > 5 a, b`), which does not parse today
+(`PrintStatement` has no gate field), adds no capability; it is planned with
+Step 6 so that a statement's values take a gate with or without targets
+(plan §9).
 
 A direct `I64`/`F64` result carries no validity bit, and none is needed:
 #123 removed the unwritten direct return instead of adding a
