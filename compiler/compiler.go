@@ -3670,7 +3670,7 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	syms := c.compileExpression(expr, nil)
 	c.popBoundsGuard()
 	for _, s := range syms {
-		loaded := c.loadPrintSymbol(s)
+		loaded := c.derefIfPointer(s, "print_deref")
 		c.appendPrintSymbol(loaded, expr.Tok(), printOwnsHeapString(loaded, expr), formatStr, args, toFree)
 	}
 
@@ -3699,17 +3699,6 @@ func printOwnsHeapString(s *Symbol, expr ast.Expression) bool {
 	}
 	_, isIdent := expr.(*ast.Identifier)
 	return !isIdent
-}
-
-// loadPrintSymbol dereferences a pointer-backed print operand, as a function
-// argument is loaded.
-func (c *Compiler) loadPrintSymbol(s *Symbol) *Symbol {
-	if s.Type.Kind() != PtrKind {
-		return s
-	}
-	elemType := s.Type.(Ptr).Elem
-	derefed := c.createLoad(s.Val, elemType, "print_deref")
-	return &Symbol{Val: derefed, Type: elemType}
 }
 
 // appendPrintSymbol adds one loaded value to the line by its type. ownsString

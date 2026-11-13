@@ -331,7 +331,7 @@ func (c *Compiler) appendPrintOutcome(ev *pir.Eval, formatStr *string, args *[]l
 	syms := c.compileExpression(ev.Expr, nil)
 	loaded := make([]*Symbol, len(syms))
 	for i, sym := range syms {
-		loaded[i] = c.loadPrintSymbol(sym)
+		loaded[i] = c.derefIfPointer(sym, "print_deref")
 		owned := ev.Slots[i].Ownership == pir.Owned
 		c.appendPrintSymbol(loaded[i], ev.Expr.Tok(), owned && loaded[i].Type.Kind() == StrKind, formatStr, args, toFree)
 	}
