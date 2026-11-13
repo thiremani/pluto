@@ -1453,9 +1453,15 @@ assign skeep
         drop skeep [old]
 ```
 
-The order is today's: a read is tested where it is read and gives a zero
-when it fails, and the rest of the expression still runs, so a call beside
-the read is called and the outcome holds a value on the skip path too.
+The order is today's, left to right: a read is tested where it is read and
+gives a zero when it fails. The operators after it still compute with that
+zero, so the outcome holds a value on the skip path too. A call does not:
+it consults the eval's guard, so it runs only when every read lowered before
+it was in bounds, as a literal cell is stored only then. So
+`y = Loud(1) + arr[oob]` calls `Loud`, which has run by the time the read
+fails, and `y = arr[oob] + Loud(1)` does not. Step 6's checks-first order
+(§3) is planned to change the first of the two. `cond/value_cond_expr` pins
+both at run time (`PosNotYet`, `PosValueRead`).
 Elaboration derives the releases of both paths. An owned outcome moves into
 its binding where it yielded and is released where it skipped
 (`drop %t0 [skipped]`); one mapped to `_` is released either way; and a

@@ -1144,7 +1144,8 @@ keep, fresh, s, h1, h2, r`)
         keep <- %t0 [on-skip=keep]
 `, plans[3].Render(false))
 	// A target the statement introduces holds zero, and a call beside the read
-	// stays in the read's eval: it still runs when the read fails.
+	// stays in the read's eval, whose own order decides whether it runs
+	// (tests/cond/value_cond_expr pins that at run time).
 	require.Equal(t, `assign fresh
     source "fresh = (Loud(1) + arr[9])"
 

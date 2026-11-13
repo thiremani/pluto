@@ -348,8 +348,8 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 // whether it yielded; the bit is nil for an eval that always does. An eval
 // that may skip runs under a bounds guard of its own, which each of its
 // index reads ANDs its in-bounds bit into (plan §9). A read past the end
-// still gives a zero for the rest of the expression to use, so the outcome
-// holds a value on the skip path too.
+// gives a zero that later operators still compute with, and a call lowered
+// after it does not run, so the outcome holds a value on the skip path too.
 func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
 	if !ev.MaySkip() {
 		return c.compileExpression(ev.Expr, nil), llvm.Value{}
