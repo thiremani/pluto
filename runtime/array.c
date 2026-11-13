@@ -345,7 +345,7 @@ static int cell_format_init(CellFormat* format, const char* fmt, int32_t kind,
     size_t fmt_len = strlen(fmt);
     *format = (CellFormat){fmt, NULL, fmt[fmt_len - 1], kind,
                            dynamic_arg_count, first_arg, second_arg};
-    if (kind != PT_ELEM_I64 || format->conversion != 'c') return 0;
+    if (format->conversion != 'c') return 0;
 
     format->nul_fmt = dup_cstr(fmt);
     if (!format->nul_fmt) return -1;
