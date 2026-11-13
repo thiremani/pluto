@@ -135,9 +135,11 @@ s`)
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// gates, conditional values, checked accesses, and ranged RHS keep their
-// legacy lowering, and so does a call given a range or an argument that can
-// fail (matrix rows 13, 6c), while ordinary heap values — both string
+// gates, conditional values, and ranged RHS keep their legacy lowering, and
+// so does a call given a range or an argument that can fail (matrix rows 13,
+// 6c) and a literal with an index read in a cell, while an index read whose
+// failure skips the statement's own value plans (row 7), as do ordinary heap
+// values — both string
 // flavours, concatenations, array literals of either layout, table
 // literals — and calls with ordinary arguments plan alongside scalars and
 // Range descriptors.
@@ -157,6 +159,7 @@ sh = s ⊕ "!"
 shc = sh
 arr = [1 2]
 z = arr[0]
+zc = [arr[0]]
 q = 0:3
 w = q + 1
 _ = 0:3
@@ -174,9 +177,9 @@ tbl = [
 ]
 rc = [q]
 cc = [x > 2]
-g, y, sg, shc, z, w, d, dq, dz, dc, m, tbl, rc, cc`)
+g, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc`)
 
-	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _", "assign d", "assign m", "assign tbl"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -1086,4 +1089,133 @@ m`)
             %t0 = eval I64 a
             print "in:", %t0
 `, plans[11].Render(false))
+}
+
+// Plan §9 and matrix rows 5d, 7: an index read outside a literal cell and a
+// call argument gives its eval the out-of-bounds scope of its outcome, and
+// each mapping of that outcome says what its target holds where the outcome
+// skipped. A print with a read stays legacy (row 31).
+func TestPlanGoldenCheckedReads(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planCheckedReads", `res = First(v)
+    res = 0
+    res = v[0]
+
+res = Loud(x)
+    res = x
+`, `arr = [10 20 30]
+sarr = ["x" "y"]
+keep = 7
+keep = keep * arr[5]
+fresh = Loud(1) + arr[9]
+s = "old" ⊕ "!"
+s = s ⊕ sarr[9]
+_ = sarr[1]
+h1 = "one" ⊕ "!"
+h2 = "two" ⊕ "!"
+h1, h2, keep = h2, h1, arr[arr[9]]
+h1
+h1, h2 = h2, sarr[9]
+r = First(arr)
+arr[1]
+keep, fresh, s, h1, h2, r`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign arr"}, {Label: "assign sarr"}, {Label: "assign keep"}, {Label: "assign keep"},
+		{Label: "assign fresh"}, {Label: "assign s"}, {Label: "assign s"}, {Label: "assign _"},
+		{Label: "assign h1"}, {Label: "assign h2"}, {Label: "assign h1, h2, keep"}, {Label: "print"},
+		{Label: "assign h1, h2"}, {Label: "assign r"}, {Label: "print"},
+		{Func: "I64 = Loud(I64)", Label: "assign res"},
+		{Func: "I64 = First([I64])", Label: "assign res"},
+		{Func: "I64 = First([I64])", Label: "assign res"},
+	}, planOwners(plans))
+
+	// An existing target keeps its value.
+	require.Equal(t, `assign keep
+    source "keep = (keep * arr[5])"
+
+    execute
+        %t0 = eval I64 keep * arr[5] [on-oob=skip]
+
+    commit
+        keep <- %t0 [on-skip=keep]
+`, plans[3].Render(false))
+	// A target the statement introduces holds zero, and a call beside the read
+	// stays in the read's eval, whose own order decides whether it runs
+	// (tests/cond/value_cond_expr pins that at run time).
+	require.Equal(t, `assign fresh
+    source "fresh = (Loud(1) + arr[9])"
+
+    execute
+        %t0 = eval I64 Loud(1) + arr[9] [on-oob=skip]
+
+    commit
+        fresh <- %t0 [on-skip=zero]
+`, plans[4].Render(false))
+	// What a skipped outcome built is released, and the old value only where
+	// the mapping replaced it.
+	require.Equal(t, `assign s
+    source "s = (s ⊕ sarr[9])"
+
+    execute
+        %t0 = eval Str [owned] s ⊕ sarr[9] [on-oob=skip]
+
+    commit
+        Str s <- %t0 [move] [on-skip=keep]
+        drop %t0 [skipped]
+        drop s [old]
+`, plans[6].Render(true))
+	// Row 5d: a discard keeps nothing, and its outcome is released either way.
+	require.Equal(t, `assign _
+    source "_ = sarr[1]"
+
+    execute
+        %t0 = eval Str [owned] sarr[1] [on-oob=skip]
+
+    commit
+        _ <- %t0
+        drop %t0
+`, plans[7].Render(true))
+	// A swap beside a read still moves: both of its mappings always commit.
+	require.Equal(t, `assign h1, h2, keep
+    source "h1, h2, keep = h2, h1, arr[arr[9]]"
+
+    execute
+        %t0 = eval Str [borrowed=h2] h2
+        %t1 = eval Str [borrowed=h1] h1
+        %t2 = eval I64 arr[arr[9]] [on-oob=skip]
+
+    commit
+        Str h1 <- %t0 [move]
+        Str h2 <- %t1 [move]
+        I64 keep <- %t2 [on-skip=keep]
+`, plans[10].Render(true))
+	// h2's replacement may skip, so h1 cannot take the value h2 holds.
+	require.Equal(t, `assign h1, h2
+    source "h1, h2 = h2, sarr[9]"
+
+    execute
+        %t0 = eval Str [borrowed=h2] h2
+        %t1 = eval Str [owned] sarr[9] [on-oob=skip]
+
+    commit
+        Str h1 <- %t0 [copy]
+        Str h2 <- %t1 [move] [on-skip=keep]
+        drop %t1 [skipped]
+        drop h1 [old]
+        drop h2 [old]
+`, plans[12].Render(true))
+	// An output is never fresh, so it keeps the value it holds.
+	require.Equal(t, `    assign res
+        source "res = v[0]"
+
+        execute
+            %t0 = eval I64 v[0] [on-oob=skip]
+
+        commit
+            output res <- %t0 [on-skip=keep]
+`, plans[17].Render(false))
 }

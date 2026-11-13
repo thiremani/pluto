@@ -3,7 +3,8 @@
 **Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
 in progress (five slices landed: heap values and ownership elaboration,
 calls and multi-output outcomes, function bodies and output targets,
-ordinary prints, then block-layout literals)
+ordinary prints, then block-layout literals), Step 5 in progress (first
+slice landed: assignments whose value holds a checked index read)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -528,6 +529,27 @@ Per-iteration order:
 
 This is what prevents an OOB in `a = arr[i]` from suppressing `b = i + 1`.
 
+An assignment's commit resolves a skipped right-hand outcome mapping by
+mapping, and each mapping whose outcome may skip records what its target
+then holds: `[on-skip=keep]` for a binding that has a value, which stays as
+it was, and `[on-skip=zero]` for a binding the statement introduces, which
+holds its type's zero. A `_` slot keeps nothing and carries no policy. A
+mapping commits where its outcome yielded, so one that always yields prints
+as before, and siblings of a skipped outcome still commit.
+
+```text
+assign obA, obB
+    source "obA, obB = obArr[10], 5"
+
+    execute
+        %t0 = eval I64 obArr[10] [on-oob=skip]
+        %t1 = eval I64 5
+
+    commit
+        obA <- %t0 [on-skip=zero]
+        obB <- %t1
+```
+
 Checked accesses have one canonical representation — `eval` with an explicit
 `[on-oob=...]` scope — regardless of which legacy path produced them. A
 **caller-side** failure — a failed invocation or argument — is atomic: the
@@ -614,7 +636,10 @@ no result type, even where, as with `yield`, they produce their region's
 value (§4); a commit mapping reads `target <- value` in the concise view
 and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
 arr <- %t0`; an `output` target (§6) is spelled with that word first,
-`output res <- %t0` and `output Str res <- %t0`; square brackets otherwise carry declarative policies, not
+`output res <- %t0` and `output Str res <- %t0`; an eval that holds a
+checked access ends with its out-of-bounds scope, `[on-oob=skip]`, and each
+binding mapped from an outcome that may skip ends with what it holds then,
+`[on-skip=keep]` or `[on-skip=zero]` (§9), in both views; square brackets otherwise carry declarative policies, not
 executable code. The expanded view follows each eval slot's type with its
 ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
 which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
@@ -624,8 +649,12 @@ copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
 for a plain store — and follows the mappings with the derived releases,
-`drop %t1` for a discarded owned outcome and `drop x [old]` for a
-replaced target's old value, in the order they run (§8). Read the two
+`drop %t1` for a discarded owned outcome, `drop %t0 [skipped]` for what an
+owned outcome built before it skipped, and `drop x [old]` for a
+replaced target's old value, in the order they run (§8). Each names the
+value it frees, which exists on one path only: a skipped outcome's target
+kept its old value, and an outcome that yielded was moved into its target.
+Read the two
 kinds of annotation differently: an eval's states an outcome's ownership
 obligation, not how it was produced — an `[owned]` column read and an
 `[owned]` concatenation both allocated and copied, and the annotation says
@@ -1266,9 +1295,10 @@ or under operators, when its arguments are ordinary trees themselves. No
 ordinary node can fail, so every argument is `MustYield` without the router
 reading the effect; a call given a range, a comparison, or a checked read
 stays legacy with that argument's node (matrix rows 12, 13 and 6c;
-`TestPlanRouterRejections` pins one of each). The step that admits checked
-reads must make the router read a call's yield effect then, since a checked
-argument defers the call to Step 6. The call stays inside its `eval` (§5):
+`TestPlanRouterRejections` pins one of each). Step 5's first slice, which
+admits checked reads, keeps them out of call arguments by position, since a
+checked argument defers the call to Step 6; it cannot read a call's yield
+effect, which the solver derives for the script root only. The call stays inside its `eval` (§5):
 one eval per right-hand expression, with a slot per output, each owned when
 its type holds heap state and unmanaged otherwise — a static string or a
 struct output is unmanaged — and each commit mapping names its outcome and
@@ -1399,6 +1429,86 @@ append.
   that are explicitly intended.
 - The router records an explicit affine → force-checked rule, so affine
   accesses reach checked PIR until Step 10 restores the fast path.
+
+**First slice landed — assignments with a checked index read.** An ordinary
+assignment whose value holds an index read plans (matrix row 7, and row 5d
+for a `_` target), at the script root and in a body without a range
+parameter. The read stays inside its `eval`, which records the scope every
+access in it has: a failed read skips the eval's outcome, every slot of it
+(`[on-oob=skip]`). Each mapping of that outcome records what its target
+then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the builder
+and checked by the validator against the outcome and the target's
+freshness.
+
+```text
+assign skeep
+    source "skeep = (skeep ⊕ sarr[9])"
+
+    execute
+        %t0 = eval Str [owned] skeep ⊕ sarr[9] [on-oob=skip]
+
+    commit
+        Str skeep <- %t0 [move] [on-skip=keep]
+        drop %t0 [skipped]
+        drop skeep [old]
+```
+
+The order is today's, left to right: a read is tested where it is read and
+gives a zero when it fails. The operators after it still compute with that
+zero, so the outcome holds a value on the skip path too. A call does not:
+it consults the eval's guard, so it runs only when every read lowered before
+it was in bounds, as a literal cell is stored only then. So
+`y = Loud(1) + arr[oob]` calls `Loud`, which has run by the time the read
+fails, and `y = arr[oob] + Loud(1)` does not. Step 6's checks-first order
+(§3) is planned to change the first of the two. `cond/value_cond_expr` pins
+both at run time (`PosNotYet`, `PosValueRead`).
+Elaboration derives the releases of both paths. An owned outcome moves into
+its binding where it yielded and is released where it skipped
+(`drop %t0 [skipped]`); one mapped to `_` is released either way; and a
+replaced value is released only where its mapping committed. A borrow takes
+its owner's old value (§8) only when its own mapping and the owner's
+replacement both always commit. In `a, b = b, sarr[9]` the replacement of
+`b` may skip, so `a` copies; in `a, b, n = b, a, arr[9]` the swap still
+moves both strings, where legacy lowering copies them: in a statement that
+holds a checked read it decides each right-hand expression's copies alone,
+so it never sees that the other side replaces the owner.
+
+The validator enforces invariant 15 on every eval: an access outside a
+literal cell needs the eval's scope, and a scope needs an access. An access
+in a literal cell is rejected, because the cell resolves it and no plan node
+records that scope yet; so is a print eval that may skip.
+
+The lowerer emits the guard from the plan. An eval with the scope runs under
+a bounds guard of its own, which each read ANDs its in-bounds bit into, and
+the guard's final value is the outcome's yield bit. Before any mapping
+lands, a binding with `[on-skip=keep]` moves to memory and one with
+`[on-skip=zero]` starts at its zero, so both paths reach one storage. The
+mappings of each outcome then land under its bit, with the skipped releases
+on the other arm, and the replaced values are released under the same bit
+after every mapping. Replacing a fresh binding's zero releases it, which is
+the backend's way of giving the binding that zero and is no plan release.
+`commitAssignmentsPerExpr` and `ensureSeededDest` still serve the legacy
+statements.
+
+Staying legacy, as before: a read in a literal cell, which zero-fills the
+cell while the statement always commits (the literal stays legacy as a
+whole, planned for Step 8 with the collector nodes); a read in a call
+argument (row 6c, planned for Step 6); a print with a read (row 31); a read
+beside a comparison or under a gate (row 21, planned for Step 6); and a
+ranged read (planned for Step 7). The `||` fallback after a read (row 7b)
+and the affine rule above are this step's later slices.
+
+Over the fixtures as they stood before this slice, 76 more assignments plan
+and the machine code of 87 of the 88 executables is unchanged.
+`mem/leak/oob_paths` differs in one statement, without which it is unchanged
+too, `guardKeep, guardOther = Static(), arr[9]`: a planned call is
+handed no destination (Step 4's second slice), so its static result is
+copied once at the commit, where legacy lowering staged the output in a slot
+typed like the target, seeded it with an empty heap string, copied the
+result in and freed the seed. Pinned by `TestPlanGoldenCheckedReads` and
+`TestPlanRouterRejections`, on hand-built plans by `pir`'s `TestElaborate`,
+`TestValidateRejects`, `TestValidatePrint` and `TestRenderSkip`, and at run
+time by `array/oob_skip`, `discard` and `mem/leak/oob_paths`.
 
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 

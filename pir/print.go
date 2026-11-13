@@ -22,6 +22,9 @@ func (p *AssignPlan) Render(expanded bool) string {
 		if expanded && m.Transfer != Store {
 			fmt.Fprintf(&b, " [%s]", m.Transfer)
 		}
+		if m.OnSkip != NoSkip {
+			fmt.Fprintf(&b, " [on-skip=%s]", m.OnSkip)
+		}
 		b.WriteString("\n")
 	}
 	if expanded {
@@ -68,7 +71,11 @@ func writeExecute(b *strings.Builder, head Head, evals []*Eval, expanded bool) {
 	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range evals {
-		fmt.Fprintf(b, "        %%t%d = eval %s %s\n", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
+		fmt.Fprintf(b, "        %%t%d = eval %s %s", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
+		if ev.MaySkip() {
+			b.WriteString(" [on-oob=skip]")
+		}
+		b.WriteString("\n")
 	}
 }
 
@@ -140,7 +147,7 @@ func checkRenderable(expr ast.Expression) {
 	switch expr.(type) {
 	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral,
 		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression,
-		*ast.CallExpression, *ast.ArrayLiteral:
+		*ast.CallExpression, *ast.ArrayLiteral, *ast.ArrayRangeExpression:
 	default:
 		panic(fmt.Sprintf("pir: no renderer for %T", expr))
 	}
@@ -209,9 +216,26 @@ func outcomeString(evals []*Eval, ref OutcomeRef) string {
 	return fmt.Sprintf("%%t%d", ref.Outcome)
 }
 
+func (policy SkipPolicy) String() string {
+	switch policy {
+	case NoSkip:
+		return "none"
+	case KeepOnSkip:
+		return "keep"
+	case ZeroOnSkip:
+		return "zero"
+	}
+	return fmt.Sprintf("skip-policy(%d)", int(policy))
+}
+
+// dropString names a release by the value it frees: a target's old value,
+// what a skipped outcome built, or an outcome no target took.
 func (p *AssignPlan) dropString(d Drop) string {
-	if d.Kind == DropReplaced {
+	switch d.Kind {
+	case DropReplaced:
 		return "drop " + d.Target + " [old]"
+	case DropSkipped:
+		return "drop " + outcomeString(p.Evals, d.Outcome) + " [skipped]"
 	}
 	return "drop " + outcomeString(p.Evals, d.Outcome)
 }

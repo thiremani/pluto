@@ -22,6 +22,10 @@ res = Acc(a, x)
 res = Identity(x)
     res = x
 
+res = ElemOr(v, i, fallback)
+    res = fallback
+    res = v[i]
+
 res = ConcatElem(a, elem)
     res = a ⊕ [elem]
 

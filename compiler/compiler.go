@@ -1208,11 +1208,16 @@ func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) *Symb
 	if p, ok := t.(Ptr); ok {
 		t = p.Elem
 	}
-	t = c.bindingSlotType(ident.Value, t)
-	ptr := c.createEntryBlockAlloca(c.mapToLLVMType(t), ident.Value+".mem")
+	return c.seedFreshDest(ident.Value, c.bindingSlotType(ident.Value, t))
+}
+
+// seedFreshDest binds a fresh destination to memory holding its type's zero
+// and returns that zero.
+func (c *Compiler) seedFreshDest(name string, t Type) *Symbol {
+	ptr := c.createEntryBlockAlloca(c.mapToLLVMType(t), name+".mem")
 	zero := c.makeZeroValue(t)
 	c.createStore(zero.Val, ptr, t)
-	Put(c.Scopes, ident.Value, &Symbol{Val: ptr, Type: Ptr{Elem: t}})
+	Put(c.Scopes, name, &Symbol{Val: ptr, Type: Ptr{Elem: t}})
 	return zero
 }
 

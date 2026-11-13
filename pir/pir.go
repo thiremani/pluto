@@ -36,13 +36,29 @@ type Slot struct {
 	Owner     string // the borrowed-from binding; empty unless Borrowed
 }
 
+// OOBScope is what a failed checked access in an eval does (plan §9). The
+// accesses of one eval share one scope.
+type OOBScope int
+
+const (
+	// NoChecks: the eval holds no checked access, so its outcome always yields.
+	NoChecks OOBScope = iota
+	// SkipOutcome: a failed access skips the eval's outcome, every slot of it,
+	// and each mapping's OnSkip says what its target then holds.
+	SkipOutcome
+)
+
 // Eval evaluates one solved source expression; the builder splits out
 // anything that affects evaluation strategy before an expression lands here.
 type Eval struct {
 	Result OutcomeID
 	Expr   ast.Expression
 	Slots  []Slot // one entry per output slot
+	OnOOB  OOBScope
 }
+
+// MaySkip reports an outcome a failed check can keep from yielding.
+func (ev *Eval) MaySkip() bool { return ev.OnOOB == SkipOutcome }
 
 type TargetKind int
 
@@ -94,12 +110,24 @@ const (
 	Copy                  // the target gets its own owned copy: of a borrowed outcome, or of an unmanaged value entering a TypeOwnsHeap target
 )
 
+// SkipPolicy is what a binding holds where its mapping's outcome skipped
+// (plan §9).
+type SkipPolicy int
+
+const (
+	NoSkip     SkipPolicy = iota // the outcome always yields, or the target is a discard, which keeps nothing
+	KeepOnSkip                   // the binding keeps the value it holds
+	ZeroOnSkip                   // a fresh binding holds its type's zero
+)
+
 // Mapping is one recorded target <- outcome commit pair; the lowerer
-// consumes it as recorded, never rematching by name or position.
+// consumes it as recorded, never rematching by name or position. It commits
+// where its outcome yielded and follows OnSkip elsewhere.
 type Mapping struct {
 	Target   Target
 	Outcome  OutcomeRef
 	Transfer Transfer
+	OnSkip   SkipPolicy
 }
 
 type DropKind int
@@ -107,12 +135,16 @@ type DropKind int
 const (
 	DropOutcome  DropKind = iota // an owned outcome no target took
 	DropReplaced                 // a local target's old value, after every mapping
+	DropSkipped                  // what an outcome built before it skipped, which its binding never took
 )
 
-// Drop is one derived release (plan §8), never authored by the builder.
+// Drop is one derived release (plan §8), never authored by the builder. A
+// DropOutcome runs whether or not its outcome yielded, a DropSkipped only
+// where it skipped, and a DropReplaced only where the mapping that replaces
+// Target committed.
 type Drop struct {
 	Kind    DropKind
-	Outcome OutcomeRef // DropOutcome
+	Outcome OutcomeRef // DropOutcome, DropSkipped
 	Target  string     // DropReplaced
 }
 
@@ -139,7 +171,12 @@ type AssignPlan struct {
 	Head
 	Evals  []*Eval
 	Commit []Mapping
-	Drops  []Drop // derived by Elaborate
+	Drops  []Drop // derived by Elaborate, in the order they run
+}
+
+// certain reports a mapping that always commits: its outcome cannot skip.
+func (p *AssignPlan) certain(m Mapping) bool {
+	return !p.Evals[m.Outcome.Outcome].MaySkip()
 }
 
 // PrintArg is one argument of a print invocation: a string literal, or an
