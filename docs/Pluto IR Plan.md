@@ -1,9 +1,9 @@
 # Pluto Statement IR (PIR) Plan
 
 **Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
-in progress (four slices landed: heap values and ownership elaboration,
-calls and multi-output outcomes, function bodies and output targets, then
-ordinary prints)
+in progress (five slices landed: heap values and ownership elaboration,
+calls and multi-output outcomes, function bodies and output targets,
+ordinary prints, then block-layout literals)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -672,9 +672,10 @@ The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
 golden for its new node kinds. An eval operand is always one physical line:
 control characters inside a string literal are escaped (`"line one\nline
-two"`). A block-layout array literal — rank-2 rows, a table — prints on
-several lines and has no one-line spelling for an eval operand yet, so it
-stays outside the router until one is settled (matrix rows 2c and 36). `commit`
+two"`). A block-layout array literal — rank-2 rows, a table — is spelled as
+in the source with each of its line breaks escaped the same way
+(`[\n    1 2\n    3 4\n]`), as the plan's `source` line already shows it
+(decided 2026-11-13; matrix rows 2c and 36). `commit`
 and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
@@ -1334,8 +1335,30 @@ for Steps 5, 6 and 8), as does every print of a range-driven body. Pinned
 by `TestPlanGoldenPrints` and, on hand-built plans, by `pir`'s
 `TestRenderPrint` and `TestValidatePrint`.
 
-**Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
-rows 2c and 36) once an eval-operand spelling exists; field and column
+**Fifth slice landed — block-layout literals.** An array literal whose rows
+sit on their own lines, and a table literal, plan like an inline literal
+(rows 2c and 36): the value is an owned outcome, and each cell is held to
+the router's rules for any operand, so a literal with a ranged, conditional
+or checked cell stays legacy as a whole (row 36f; a ranged cell in a block
+literal is #67). Only the text form needed deciding (§12): the operand is
+the literal as the source spells it, with each line break escaped.
+
+```text
+assign scores
+    source "scores = [\n  : Name Score\n    \"Ada\" 10\n]"
+
+    execute
+        %t0 = eval Table[Name:Str Score:I64] [\n  : Name Score\n    "Ada" 10\n]
+
+    commit
+        scores <- %t0
+```
+
+A literal printed directly plans too, as an owned outcome the invocation
+takes. The literal itself lowers through the same code as before. Pinned by
+`TestPlanGoldenStructAndTable` and `TestPlanRouterRejections`.
+
+**Remaining in Step 4:** field and column
 reads of a widened binding (a struct whose string fields widened to heap
 storage), whose lowered value follows the effective storage rather than the
 solved type and so stay legacy — the follow-up resolves the field's

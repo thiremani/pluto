@@ -100,8 +100,7 @@ func planValueTypeSupported(t Type) bool {
 }
 
 // planExprEligible accepts ordinary expression trees only: whitelisted node
-// kinds with no range or conditional behavior at any depth. Block-layout
-// literals wait for a one-line eval-operand spelling (plan §12). A field or
+// kinds with no range or conditional behavior at any depth. A field or
 // column read plans only off an identifier the router can inspect and that
 // is not widened; any other receiver fails closed. Deferred, not final: the
 // widened case needs ownership resolved against the receiver's effective
@@ -111,11 +110,8 @@ func planValueTypeSupported(t Type) bool {
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.CallExpression:
-	case *ast.ArrayLiteral:
-		if e.Block || len(e.Headers) > 0 {
-			return false
-		}
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.CallExpression,
+		*ast.ArrayLiteral:
 	case *ast.DotExpression:
 		receiver, isIdent := e.Left.(*ast.Identifier)
 		if !isIdent || c.widenedRead(receiver) {

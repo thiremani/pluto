@@ -551,8 +551,7 @@ func TestRenderFunctionOutput(t *testing.T) {
 }
 
 // Plan §12: the renderer rejects an unsupported node anywhere in the tree,
-// not only at the root, and a block-layout literal that has no one-line
-// spelling.
+// not only at the root.
 func TestRenderRejectsUnsupportedNode(t *testing.T) {
 	read := &ast.ArrayRangeExpression{Token: token.Token{Type: token.LBRACK, Literal: "["}, Array: ident("arr"), Range: intLit(0)}
 	tests := []struct {
@@ -563,8 +562,6 @@ func TestRenderRejectsUnsupportedNode(t *testing.T) {
 		{"root", read, "pir: no renderer for *ast.ArrayRangeExpression"},
 		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: read}, "pir: no renderer for *ast.ArrayRangeExpression"},
 		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: read}}, "pir: no renderer for *ast.ArrayRangeExpression"},
-		{"block literal", &ast.ArrayLiteral{Block: true, Rows: [][]ast.Expression{{intLit(1)}, {intLit(2)}}}, "pir: no one-line renderer for a block-layout array literal"},
-		{"table literal", &ast.ArrayLiteral{Headers: []string{"Name"}, Rows: [][]ast.Expression{{strLit("Ann")}}}, "pir: no one-line renderer for a block-layout array literal"},
 		{"read in array cell", &ast.ArrayLiteral{Rows: [][]ast.Expression{{intLit(1), read}}}, "pir: no renderer for *ast.ArrayRangeExpression"},
 		{"read as call argument", call("f", read), "pir: no renderer for *ast.ArrayRangeExpression"},
 	}
