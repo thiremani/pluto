@@ -67,18 +67,29 @@ func heapOutput(name string, t Type) Target {
 func joinPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
-		Label:  "assign res",
-		Func:   "Str = Join(Str, Str)",
-		Source: "res = a ⊕ b",
+		Head:   Head{Label: "assign res", Func: "Str = Join(Str, Str)", Source: "res = a ⊕ b"},
 		Evals:  []*Eval{{Result: 0, Expr: concat(ident("a"), ident("b")), Slots: []Slot{ownedSlot(str)}}},
 		Commit: []Mapping{{Target: heapOutput("res", str), Outcome: OutcomeRef{Outcome: 0}}},
 	}
 }
 
+// printPlan is `"x: -x", s, Pair(n)` at the script root: a literal, a
+// borrowed read, and a call that yields an unmanaged slot and an owned one.
+func printPlan() *PrintPlan {
+	i64, str := testType("I64"), testType("Str")
+	return &PrintPlan{
+		Head: Head{Label: "print", Source: `"x: -x", s, Pair(n)`},
+		Evals: []*Eval{
+			{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}},
+			{Result: 1, Expr: call("Pair", ident("n")), Slots: []Slot{unmanagedSlot(i64), ownedSlot(str)}},
+		},
+		Args: []PrintArg{{Literal: strLit("x: -x").(*ast.StringLiteral)}, {Outcome: 0}, {Outcome: 1}},
+	}
+}
+
 func swapPlan() *AssignPlan {
 	return &AssignPlan{
-		Label:  "assign a, b",
-		Source: "a, b = b, a",
+		Head: Head{Label: "assign a, b", Source: "a, b = b, a"},
 		Evals: []*Eval{
 			{Result: 0, Expr: ident("b"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
 			{Result: 1, Expr: ident("a"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
@@ -94,8 +105,7 @@ func swapPlan() *AssignPlan {
 func heapSwapPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
-		Label:  "assign a, b",
-		Source: "a, b = b, a",
+		Head: Head{Label: "assign a, b", Source: "a, b = b, a"},
 		Evals: []*Eval{
 			{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
 			{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
@@ -112,8 +122,7 @@ func heapSwapPlan() *AssignPlan {
 func replacePlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
-		Label:  "assign x, _",
-		Source: `x, _ = x ⊕ "!", "a" ⊕ "b"`,
+		Head: Head{Label: "assign x, _", Source: `x, _ = x ⊕ "!", "a" ⊕ "b"`},
 		Evals: []*Eval{
 			{Result: 0, Expr: concat(ident("x"), strLit("!")), Slots: []Slot{ownedSlot(str)}},
 			{Result: 1, Expr: concat(strLit("a"), strLit("b")), Slots: []Slot{ownedSlot(str)}},
@@ -155,7 +164,7 @@ func TestElaborate(t *testing.T) {
 		{"owned replacement moves and releases the old value", replacePlan(), []Transfer{Move, Store},
 			[]Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 1}}, {Kind: DropReplaced, Target: "x"}}},
 		{"duplicate source: first takes, second copies", &AssignPlan{
-			Label: "assign d1, d2", Source: "d1, d2 = d1, d1",
+			Head: Head{Label: "assign d1, d2", Source: "d1, d2 = d1, d1"},
 			Evals: []*Eval{
 				{Result: 0, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
 				{Result: 1, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
@@ -166,27 +175,27 @@ func TestElaborate(t *testing.T) {
 			},
 		}, []Transfer{Move, Copy}, []Drop{{Kind: DropReplaced, Target: "d2"}}},
 		{"borrow of a surviving owner copies", &AssignPlan{
-			Label: "assign t", Source: "t = s",
+			Head:   Head{Label: "assign t", Source: "t = s"},
 			Evals:  []*Eval{{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
 			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "t", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Copy}, nil},
 		{"unmanaged into an owning target is copied", &AssignPlan{
-			Label: "assign s", Source: `s = "hi"`,
+			Head:   Head{Label: "assign s", Source: `s = "hi"`},
 			Evals:  []*Eval{{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Copy}, []Drop{{Kind: DropReplaced, Target: "s"}}},
 		{"heap transfer into a non-owning fresh target is legal", &AssignPlan{
-			Label: "assign other", Source: "other = text",
+			Head:   Head{Label: "assign other", Source: "other = text"},
 			Evals:  []*Eval{{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
 			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "other", Type: str, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Copy}, nil},
 		{"widened binding releases its held value on a plain store", &AssignPlan{
-			Label: "assign other", Source: `other = "new"`,
+			Head:   Head{Label: "assign other", Source: `other = "new"`},
 			Evals:  []*Eval{{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit: []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Store}, []Drop{{Kind: DropReplaced, Target: "other"}}},
 		{"widened owner is taken by a moved borrow", &AssignPlan{
-			Label: "assign a, other", Source: "a, other = other, a",
+			Head: Head{Label: "assign a, other", Source: "a, other = other, a"},
 			Evals: []*Eval{
 				{Result: 0, Expr: ident("other"), Slots: []Slot{borrowedSlot(str, "other")}},
 				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
@@ -197,14 +206,14 @@ func TestElaborate(t *testing.T) {
 			},
 		}, []Transfer{Move, Move}, nil},
 		{"discarded borrow releases nothing", &AssignPlan{
-			Label: "assign _", Source: "_ = h",
+			Head:   Head{Label: "assign _", Source: "_ = h"},
 			Evals:  []*Eval{{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
 			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Store}, nil},
 		{"output releases the value it held, as a local does", joinPlan(), []Transfer{Move},
 			[]Drop{{Kind: DropReplaced, Target: "res"}}},
 		{"swapped outputs take each other's old values", &AssignPlan{
-			Label: "assign a, b", Func: "Str, Str = Swap(Str, Str)", Source: "a, b = b, a",
+			Head: Head{Label: "assign a, b", Func: "Str, Str = Swap(Str, Str)", Source: "a, b = b, a"},
 			Evals: []*Eval{
 				{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
 				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
@@ -362,11 +371,77 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+// Plan §3, §14.12: the invocation takes the outcomes in evaluation order,
+// each exactly once. A print of literals alone has no evals and is valid.
+func TestValidatePrint(t *testing.T) {
+	if err := ValidatePrint(printPlan()); err != nil {
+		t.Fatalf("valid print plan rejected: %v", err)
+	}
+	literals := &PrintPlan{
+		Head: Head{Label: "print", Source: `"hello"`},
+		Args: []PrintArg{{Literal: strLit("hello").(*ast.StringLiteral)}},
+	}
+	if err := ValidatePrint(literals); err != nil {
+		t.Fatalf("print of a literal alone rejected: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(*PrintPlan)
+		wantErr string
+	}{
+		{"NoSource", func(p *PrintPlan) { p.Source = "" }, "no source"},
+		{"NoArguments", func(p *PrintPlan) { p.Args = nil }, "has no arguments"},
+		{"SparseResultID", func(p *PrintPlan) { p.Evals[1].Result = 5 }, "dense"},
+		{"OutOfOrder", func(p *PrintPlan) { p.Args[1].Outcome, p.Args[2].Outcome = 1, 0 }, "print takes %t1 where %t0 is next in evaluation order"},
+		{"Unprinted", func(p *PrintPlan) { p.Args = p.Args[:2] }, "print takes 1 of 2 outcomes"},
+		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := printPlan()
+			tc.mutate(p)
+			err := ValidatePrint(p)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §3, §12: a print plan has no commit. Its invocation closes the execute
+// region, prints a literal as written and every slot of an outcome, and in
+// the expanded view marks each owned slot it takes.
+func TestRenderPrint(t *testing.T) {
+	p := printPlan()
+	want := `print
+    source "\"x: -x\", s, Pair(n)"
+
+    execute
+        %t0 = eval Str s
+        %t1 = eval I64, Str Pair(n)
+        print "x: -x", %t0, %t1#0, %t1#1
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("print render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	wantExpanded := `print
+    source "\"x: -x\", s, Pair(n)"
+
+    execute
+        %t0 = eval Str [borrowed=s] s
+        %t1 = eval I64, Str [owned] Pair(n)
+        print "x: -x", %t0, %t1#0, %t1#1 [move]
+`
+	if got := p.Render(true); got != wantExpanded {
+		t.Fatalf("print expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, wantExpanded)
+	}
+}
+
 // Plan §12: text form, concise view.
 func TestRenderConcise(t *testing.T) {
 	p := &AssignPlan{
-		Label:  "assign x, _",
-		Source: "x, _ = 5, 7",
+		Head: Head{Label: "assign x, _", Source: "x, _ = 5, 7"},
 		Evals: []*Eval{
 			{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(testType("I64"))}},
 			{Result: 1, Expr: intLit(7), Slots: []Slot{unmanagedSlot(testType("I64"))}},
@@ -396,8 +471,7 @@ func TestRenderConcise(t *testing.T) {
 // numeric selector; the expanded view annotates each slot in order.
 func TestRenderMultiOutput(t *testing.T) {
 	p := &AssignPlan{
-		Label:  "assign a, b",
-		Source: "a, b = Pair(x)",
+		Head: Head{Label: "assign a, b", Source: "a, b = Pair(x)"},
 		Evals: []*Eval{
 			{Result: 0, Expr: call("Pair", ident("x")), Slots: []Slot{unmanagedSlot(testType("I64")), ownedSlot(testType("Str"))}},
 		},
@@ -635,9 +709,8 @@ func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 func renderDiscardedPair(t *testing.T, slots []Slot) string {
 	t.Helper()
 	p := &AssignPlan{
-		Label:  "assign _, _",
-		Source: "_, _ = pair",
-		Evals:  []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
+		Head:  Head{Label: "assign _, _", Source: "_, _ = pair"},
+		Evals: []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
 		Commit: []Mapping{
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},

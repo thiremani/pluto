@@ -15,15 +15,10 @@ import (
 // its body.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", p.Label)
-	fmt.Fprintf(&b, "    source %s\n", strconv.Quote(p.Source))
-	b.WriteString("\n    execute\n")
-	for _, ev := range p.Evals {
-		fmt.Fprintf(&b, "        %%t%d = eval %s %s\n", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
-	}
+	writeExecute(&b, p.Head, p.Evals, expanded)
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
-		fmt.Fprintf(&b, "        %s <- %s", targetString(m.Target, expanded), p.outcomeString(m.Outcome))
+		fmt.Fprintf(&b, "        %s <- %s", targetString(m.Target, expanded), outcomeString(p.Evals, m.Outcome))
 		if expanded && m.Transfer != Store {
 			fmt.Fprintf(&b, " [%s]", m.Transfer)
 		}
@@ -35,10 +30,55 @@ func (p *AssignPlan) Render(expanded bool) string {
 		}
 	}
 
-	if p.Func == "" {
-		return b.String()
+	return placed(b.String(), p.Func)
+}
+
+// Render returns a print plan's text: the invocation closes the execute
+// region, and the expanded view marks each owned slot it takes with [move].
+func (p *PrintPlan) Render(expanded bool) string {
+	var b strings.Builder
+	writeExecute(&b, p.Head, p.Evals, expanded)
+	fmt.Fprintf(&b, "        print %s\n", strings.Join(p.argStrings(expanded), ", "))
+
+	return placed(b.String(), p.Func)
+}
+
+func (p *PrintPlan) argStrings(expanded bool) []string {
+	var parts []string
+	for _, arg := range p.Args {
+		if arg.Literal != nil {
+			parts = append(parts, renderPayload(arg.Literal))
+			continue
+		}
+		for i, slot := range p.Evals[arg.Outcome].Slots {
+			part := outcomeString(p.Evals, OutcomeRef{Outcome: arg.Outcome, Slot: i})
+			if expanded && slot.Ownership == Owned {
+				part += " [" + Move.String() + "]"
+			}
+			parts = append(parts, part)
+		}
 	}
-	return indent(b.String())
+	return parts
+}
+
+// writeExecute writes what every plan opens with: its header, its source and
+// the evals of its execute region.
+func writeExecute(b *strings.Builder, head Head, evals []*Eval, expanded bool) {
+	fmt.Fprintf(b, "%s\n", head.Label)
+	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
+	b.WriteString("\n    execute\n")
+	for _, ev := range evals {
+		fmt.Fprintf(b, "        %%t%d = eval %s %s\n", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
+	}
+}
+
+// placed returns a plan's text at its level: one level in for a plan of the
+// function body fn names, unchanged at the script root.
+func placed(text, fn string) string {
+	if fn == "" {
+		return text
+	}
+	return indent(text)
 }
 
 // FuncHeader is the line that opens a function body's plans; fn is the
@@ -165,8 +205,8 @@ func targetString(t Target, expanded bool) string {
 	return name
 }
 
-func (p *AssignPlan) outcomeString(ref OutcomeRef) string {
-	if len(p.Evals[ref.Outcome].Slots) > 1 {
+func outcomeString(evals []*Eval, ref OutcomeRef) string {
+	if len(evals[ref.Outcome].Slots) > 1 {
 		return fmt.Sprintf("%%t%d#%d", ref.Outcome, ref.Slot)
 	}
 	return fmt.Sprintf("%%t%d", ref.Outcome)
@@ -176,5 +216,5 @@ func (p *AssignPlan) dropString(d Drop) string {
 	if d.Kind == DropReplaced {
 		return "drop " + d.Target + " [old]"
 	}
-	return "drop " + p.outcomeString(d.Outcome)
+	return "drop " + outcomeString(p.Evals, d.Outcome)
 }

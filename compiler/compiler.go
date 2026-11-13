@@ -137,7 +137,7 @@ type Compiler struct {
 	// body it lowered and each in source order: the script root first, then
 	// each function specialization without a range parameter, in first-lowered
 	// order.
-	Plans [][]*pir.AssignPlan
+	Plans [][]pir.Plan
 }
 
 type stmtCtx struct {
@@ -3636,29 +3636,31 @@ func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 		c.appendPrintExpression(expr, &formatStr, &args, &toFree)
 	}
 
+	c.writePrintLine(formatStr, args, toFree)
+}
+
+// writePrintLine prints one line from its accumulated format and arguments,
+// then releases the values that had to outlive the write.
+func (c *Compiler) writePrintLine(formatStr string, args []llvm.Value, toFree []llvm.Value) {
 	formatPtr := c.createPrintFormatGlobal(formatStr)
 	allArgs := append([]llvm.Value{formatPtr}, args...)
 	c.printf(allArgs)
 	c.free(toFree)
 }
 
-// asStringLiteral extracts token and value from string literal expressions.
-func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok bool) {
-	switch e := expr.(type) {
-	case *ast.StringLiteral:
-		return e.Token, e.Token.Literal, true
-	}
-	return token.Token{}, "", false
+// appendPrintLiteral adds a string literal's text to the line, formatting the
+// bindings its markers name in place.
+func (c *Compiler) appendPrintLiteral(lit *ast.StringLiteral, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	processed, newArgs, toFreeArgs := c.formatString(lit.Token, lit.Token.Literal)
+	*formatStr += processed + " "
+	*args = append(*args, newArgs...)
+	*toFree = append(*toFree, toFreeArgs...)
 }
 
 // appendPrintExpression handles one print expression (string literal or compiled expression)
 func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
-	// String literals with markers are processed specially.
-	if tok, value, ok := asStringLiteral(expr); ok {
-		processed, newArgs, toFreeArgs := c.formatString(tok, value)
-		*formatStr += processed + " "
-		*args = append(*args, newArgs...)
-		*toFree = append(*toFree, toFreeArgs...)
+	if lit, isLit := expr.(*ast.StringLiteral); isLit {
+		c.appendPrintLiteral(lit, formatStr, args, toFree)
 		return
 	}
 
@@ -3668,7 +3670,8 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	syms := c.compileExpression(expr, nil)
 	c.popBoundsGuard()
 	for _, s := range syms {
-		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
+		loaded := c.derefIfPointer(s, "print_deref")
+		c.appendPrintSymbol(loaded, expr.Tok(), printOwnsHeapString(loaded, expr), formatStr, args, toFree)
 	}
 
 	// String temporaries are consumed by printf directly, so defer freeing until
@@ -3698,15 +3701,10 @@ func printOwnsHeapString(s *Symbol, expr ast.Expression) bool {
 	return !isIdent
 }
 
-// appendPrintSymbol handles printing one symbol based on its type
-func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
-	// Dereference pointers first - treat print args like function args
-	if s.Type.Kind() == PtrKind {
-		elemType := s.Type.(Ptr).Elem
-		derefed := c.createLoad(s.Val, elemType, "print_deref")
-		s = &Symbol{Val: derefed, Type: elemType}
-	}
-
+// appendPrintSymbol adds one loaded value to the line by its type. ownsString
+// says the line must release a heap string after the write; tok locates a
+// type that cannot be printed.
+func (c *Compiler) appendPrintSymbol(s *Symbol, tok token.Token, ownsString bool, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
 	// Structs produce multi-line output with a trailing \n separator.
 	if s.Type.Kind() == StructKind {
 		fmtStr, fmtArgs, fmtFree := c.structFormatArgs(s)
@@ -3720,7 +3718,7 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 	spec, err := defaultSpecifier(s.Type)
 	if err != nil {
 		c.Errors = append(c.Errors, &token.CompileError{
-			Token: expr.Tok(),
+			Token: tok,
 			Msg:   err.Error(),
 		})
 		return
@@ -3745,7 +3743,7 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 	case StrKind:
 		*args = append(*args, s.Val)
 		// Heap string temporaries must survive until printf executes.
-		if printOwnsHeapString(s, expr) {
+		if ownsString {
 			*toFree = append(*toFree, s.Val)
 		}
 	case RangeKind:

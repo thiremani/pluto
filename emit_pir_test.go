@@ -43,12 +43,13 @@ type pirTestType string
 
 func (t pirTestType) String() string { return string(t) }
 
-func emitPIRTestPlans() []*pir.AssignPlan {
+// emitPIRTestPlans is `x = 5` then `y = x`, in the body of fn or, with fn
+// empty, at the script root.
+func emitPIRTestPlans(fn string) []pir.Plan {
 	i64 := pirTestType("I64")
-	return []*pir.AssignPlan{
-		{
-			Label:  "assign x",
-			Source: "x = 5",
+	return []pir.Plan{
+		&pir.AssignPlan{
+			Head: pir.Head{Label: "assign x", Func: fn, Source: "x = 5"},
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5},
@@ -58,9 +59,8 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 				Target: pir.Target{Kind: pir.LocalTarget, Name: "x", Type: i64},
 			}},
 		},
-		{
-			Label:  "assign y",
-			Source: "y = x",
+		&pir.AssignPlan{
+			Head: pir.Head{Label: "assign y", Func: fn, Source: "y = x"},
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
@@ -98,23 +98,23 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 // its one-based number in emit order, counted across bodies, and its source
 // text.
 func TestEmitPIRWriteFailure(t *testing.T) {
-	first, second := emitPIRTestPlans()[0], emitPIRTestPlans()[0]
+	first, second := emitPIRTestPlans("")[0], emitPIRTestPlans("")[0].(*pir.AssignPlan)
 	second.Source = "x = 6"
-	bodies := [][]*pir.AssignPlan{{first}, {second}}
+	bodies := [][]pir.Plan{{first}, {second}}
 	err := emitPIR(&failingWriter{writesLeft: 1}, bodies, parsedEmitPIRMode(t, "-emit-pir"))
 	require.ErrorContains(t, err, `write PIR plan 2 assign x "x = 6"`)
 }
 
 func TestEmitPIRDisabled(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()}, parsedEmitPIRMode(t, "dir")))
+	require.NoError(t, emitPIR(&out, [][]pir.Plan{emitPIRTestPlans("")}, parsedEmitPIRMode(t, "dir")))
 	require.Empty(t, out.String())
 }
 
 // Plan §12: one emission group per plan, blank-line separated.
 func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()}, parsedEmitPIRMode(t, "-emit-pir")))
+	require.NoError(t, emitPIR(&out, [][]pir.Plan{emitPIRTestPlans("")}, parsedEmitPIRMode(t, "-emit-pir")))
 	require.Equal(t, `assign x
     source "x = 5"
 
@@ -137,13 +137,20 @@ assign y
 }
 
 // Plan §12: a function body's plans print one level in, under one header
-// that names the function; a body without a plan prints nothing.
+// that names the function, a print plan among them; a body without a plan
+// prints nothing.
 func TestEmitPIRFunctionBody(t *testing.T) {
-	body := emitPIRTestPlans()
-	for _, plan := range body {
-		plan.Func = "I64 = F(I64)"
-	}
-	bodies := [][]*pir.AssignPlan{emitPIRTestPlans()[:1], nil, body}
+	fn := "I64 = F(I64)"
+	y := &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "y"}, Value: "y"}
+	body := append(emitPIRTestPlans(fn), &pir.PrintPlan{
+		Head:  pir.Head{Label: "print", Func: fn, Source: `"y:", y`},
+		Evals: []*pir.Eval{{Result: 0, Expr: y, Slots: []pir.Slot{{Type: pirTestType("I64")}}}},
+		Args: []pir.PrintArg{
+			{Literal: &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "y:"}}},
+			{Outcome: 0},
+		},
+	})
+	bodies := [][]pir.Plan{emitPIRTestPlans("")[:1], nil, body}
 
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, bodies, parsedEmitPIRMode(t, "-emit-pir")))
@@ -175,6 +182,13 @@ function I64 = F(I64)
         commit
             y <- %t0
 
+    print
+        source "\"y:\", y"
+
+        execute
+            %t0 = eval I64 y
+            print "y:", %t0
+
 `, out.String())
 }
 
@@ -182,7 +196,7 @@ function I64 = F(I64)
 // ownership tag.
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, [][]*pir.AssignPlan{emitPIRTestPlans()[:1]}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
+	require.NoError(t, emitPIR(&out, [][]pir.Plan{emitPIRTestPlans("")[:1]}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
 	require.Equal(t, `assign x
     source "x = 5"
 

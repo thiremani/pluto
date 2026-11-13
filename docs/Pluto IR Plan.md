@@ -1,8 +1,9 @@
 # Pluto Statement IR (PIR) Plan
 
 **Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
-in progress (three slices landed: heap values and ownership elaboration,
-calls and multi-output outcomes, then function bodies and output targets)
+in progress (four slices landed: heap values and ownership elaboration,
+calls and multi-output outcomes, function bodies and output targets, then
+ordinary prints)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -689,7 +690,8 @@ assign x
 
 A plan's header is its kind followed by its targets (`assign a, b` — targets
 comma-separated, since `_` is an identifier character and a joined
-`assign_a_b` could not be read back). The kind is a keyword, so the header
+`assign_a_b` could not be read back); a print plan has no targets and its
+header is `print`. The kind is a keyword, so the header
 needs no other opening word and a target may carry any name; the header is
 not unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
@@ -1287,6 +1289,42 @@ Pinned
 by `TestPlanGoldenFunctionOutputs` and, on hand-built plans, by `pir`'s
 `TestElaborate`, `TestValidateRejects` and `TestRenderFunctionOutput`.
 
+**Fourth slice landed — ordinary prints.** A print whose every argument is
+an ordinary expression, as the router admits for an assignment's value,
+lowers from a `PrintPlan` (§3; rows 29, 29b, 29c, 35c, 35e, 36c and 36e),
+at the script root and in a body without a range parameter. The plan has no
+`commit`: one `print` invocation closes `execute` and takes every argument
+in source order.
+
+```text
+print
+    source "\"n: -n\", h, (h ⊕ \"!\")"
+
+    execute
+        %t0 = eval Str [borrowed=h] h
+        %t1 = eval Str [owned] h ⊕ "!"
+        print "n: -n", %t0, %t1 [move]
+```
+
+An argument that is a string literal is the invocation's own operand, not an
+`eval`: print formats it in place, reading the bindings its markers name,
+and never builds the interpolated string. As a value, a literal with
+markers is that string, owned, while one without markers is static in
+either position. Formatting a marker's value can still allocate a
+temporary — for an array, a float, a range, a table, or a `%q` or `%x`
+conversion — which belongs to the backend: it is freed after the write and
+is no plan outcome. Any other argument is an `eval`, and the invocation
+prints each slot of its outcome. The invocation takes each owned slot and releases it, which
+the expanded view marks `[move]`, and reads any other slot where it lies;
+with nothing to suppress it there is no other path, so the plan carries no
+`drop`. How the line is assembled stays the backend's choice (§3): each
+argument is formatted where it is evaluated, a string is released after the
+write and any other value once it is formatted, as before. Prints with a
+comparison, a checked read or a range in an argument stay legacy (planned
+for Steps 5, 6 and 8), as does every print of a range-driven body. Pinned
+by `TestPlanGoldenPrints` and, on hand-built plans, by `pir`'s
+`TestRenderPrint` and `TestValidatePrint`.
+
 **Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
 rows 2c and 36) once an eval-operand spelling exists; field and column
 reads of a widened binding (a struct whose string fields widened to heap
@@ -1375,9 +1413,10 @@ append.
   pin that no call beside a failed check runs, in values, calls, cells and
   prints, and its `PosNotYet` block pins the evaluation still to change, so that
   block's `called` lines go here.
-- All non-ranged prints lower as `PrintPlan`s (§3), including call
-  arguments: a call that runs writes every output, so a call argument fails
-  only through its own arguments or invocation.
+- The non-ranged prints still on legacy lowering join the ordinary ones
+  Step 4 planned as `PrintPlan`s (§3), so that every non-ranged print lowers
+  from a plan: a call that runs writes every output, so a call argument
+  fails only through its own arguments or invocation.
   The conditional suppression outcome is retained, and an OOB read becomes a
   check, so its materialized zero becomes invocation suppression (§3, §9). Update
   `tests/array/oob_print.exp` in the same PR, with regressions for a

@@ -84,7 +84,8 @@ type OutcomeRef struct {
 }
 
 // Transfer is how a commit mapping hands its outcome to its target (plan
-// §6, §8); Elaborate derives it.
+// §6, §8); Elaborate derives it. A print invocation takes an owned slot as a
+// Move, which is always the case and so is not recorded.
 type Transfer int
 
 const (
@@ -115,13 +116,48 @@ type Drop struct {
 	Target  string     // DropReplaced
 }
 
+// Head is what every plan carries.
+type Head struct {
+	Label  string // the header: the plan's kind, then an assignment's targets, e.g. "assign a, b" or "print"; not unique, never referenced
+	Func   string // display signature of the owning function specialization; empty at the script root
+	Source string // source rendering of the statement
+}
+
+// Heading returns the head; both plan kinds embed Head, so it gives a Plan's
+// head whatever its kind.
+func (h Head) Heading() Head { return h }
+
+// Plan is one statement's plan: an *AssignPlan or a *PrintPlan.
+type Plan interface {
+	Heading() Head
+	Render(expanded bool) string
+}
+
 // AssignPlan is the execution plan for one assignment statement; prepare and
 // finish phases are absent until carries and collectors land.
 type AssignPlan struct {
-	Label  string // the header: the plan's kind and its targets, e.g. "assign a, b"; not unique, never referenced
-	Func   string // display signature of the owning function specialization; empty at the script root
-	Source string // source rendering of the statement
+	Head
 	Evals  []*Eval
 	Commit []Mapping
 	Drops  []Drop // derived by Elaborate
+}
+
+// PrintArg is one argument of a print invocation: a string literal, or an
+// outcome whose every slot is printed in order. The invocation formats a
+// literal in place, reading the bindings its markers name, and never builds
+// the interpolated string, so a literal has no eval and no outcome to
+// release. Outcome is unused beside a Literal.
+type PrintArg struct {
+	Literal *ast.StringLiteral
+	Outcome OutcomeID
+}
+
+// PrintPlan is the execution plan for one print statement (plan §3): its
+// evals, then one invocation that prints every argument on one line. It has
+// no commit. The invocation takes each owned slot it is handed and releases
+// it, and reads any other slot where it lies.
+type PrintPlan struct {
+	Head
+	Evals []*Eval
+	Args  []PrintArg
 }
