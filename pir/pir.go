@@ -115,9 +115,9 @@ const (
 type SkipPolicy int
 
 const (
-	NoSkip     SkipPolicy = iota // the outcome always yields, or the target is a discard, which keeps nothing
-	KeepOnSkip                   // the binding keeps the value it holds
-	ZeroOnSkip                   // a fresh binding holds its type's zero
+	NoSkipPolicy SkipPolicy = iota // the outcome always yields, or the target is a discard, which keeps nothing
+	KeepOnSkip                     // the binding keeps the value it holds
+	ZeroOnSkip                     // a fresh binding holds its type's zero
 )
 
 // Mapping is one recorded target <- outcome commit pair; the lowerer

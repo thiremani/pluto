@@ -202,7 +202,7 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 // its value, or holds zero when it is fresh, and no other mapping carries a
 // policy.
 func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
-	want := NoSkip
+	want := NoSkipPolicy
 	if m.Target.binds() && !p.certain(m) {
 		want = KeepOnSkip
 		if m.Target.Fresh {

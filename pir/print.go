@@ -22,7 +22,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 		if expanded && m.Transfer != Store {
 			fmt.Fprintf(&b, " [%s]", m.Transfer)
 		}
-		if m.OnSkip != NoSkip {
+		if m.OnSkip != NoSkipPolicy {
 			fmt.Fprintf(&b, " [on-skip=%s]", m.OnSkip)
 		}
 		b.WriteString("\n")
@@ -218,7 +218,7 @@ func outcomeString(evals []*Eval, ref OutcomeRef) string {
 
 func (policy SkipPolicy) String() string {
 	switch policy {
-	case NoSkip:
+	case NoSkipPolicy:
 		return "none"
 	case KeepOnSkip:
 		return "keep"

@@ -167,7 +167,7 @@ func planOOBScope(expr ast.Expression) pir.OOBScope {
 func planSkipPolicy(scope pir.OOBScope, target pir.Target) pir.SkipPolicy {
 	switch {
 	case scope != pir.SkipOutcome || target.Kind == pir.DiscardTarget:
-		return pir.NoSkip
+		return pir.NoSkipPolicy
 	case target.Fresh:
 		return pir.ZeroOnSkip
 	default:
