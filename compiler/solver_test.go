@@ -1484,6 +1484,49 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
+// TestFallbackAfterRead pins the fallback's own rule: an index read without a
+// range may stand left of ||, alone or as the last alternative of the ||
+// before it. Nothing else widens: a ranged or wrapped read, a read before &&
+// and a read as a gate stay errors.
+func TestFallbackAfterRead(t *testing.T) {
+	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
+	cases := []struct {
+		name   string
+		script string
+		want   string // empty when the script types cleanly
+	}{
+		{"Read", "arr = [1 2]\nx = arr[9] || -1\nx", ""},
+		{"Chain", "arr = [1 2]\nx = arr[9] || arr[8] || -1\nx", ""},
+		{"ChainGroupedRight", "arr = [1 2]\nx = arr[9] || (arr[8] || -1)\nx", ""},
+		{"ChainAfterComparison", "arr = [1 2]\nn = 3\nx = n > 5 || arr[9] || -1\nx", ""},
+		{"RangedRead", "arr = [1 2]\ni = 0:5\nx = arr[i] || -1\nx", orMsg + "arr[i]"},
+		{"WrappedRead", "arr = [1 2]\nx = (arr[9] + 1) || -1\nx", orMsg + "(arr[9] + 1)"},
+		{"ChainPastValue", "arr = [1 2]\nx = (arr[9] || 5) || 7\nx", orMsg + "(arr[9] || 5)"},
+		{"ReadBeforeAnd", "arr = [1 2]\nx = arr[9] && 5\nx", "logical AND in value position requires a conditional left operand"},
+		{"ReadAsGate", "arr = [1 2]\nx = 4\nx = arr[9] 7\nx", "statement condition must be a comparison or bare range/array-selection driver"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			if tc.want == "" {
+				require.Empty(t, ts.Errors)
+				return
+			}
+			require.Len(t, ts.Errors, 1)
+			require.Contains(t, ts.Errors[0].Msg, tc.want)
+		})
+	}
+}
+
 // TestLogicalChainGrouping: an && or || chain is conditions followed by one
 // value however it is grouped. A value where a condition belongs is one error
 // at the operator after it, and a chain of conditions types cleanly.

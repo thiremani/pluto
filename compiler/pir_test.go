@@ -138,7 +138,10 @@ s`)
 // gates, conditional values, and ranged RHS keep their legacy lowering, and
 // so does a call given a range or an argument that can fail (matrix rows 13,
 // 6c) and a literal with an index read in a cell, while an index read whose
-// failure skips the statement's own value plans (row 7), as do ordinary heap
+// failure skips the statement's own value plans (row 7), and so does a ||
+// after one when it is the whole value (row 7b), not under an operator, in a
+// cell or a call argument, beside a comparison, or with a side of several
+// slots. Ordinary heap
 // values — both string
 // flavours, concatenations, array literals of either layout, table
 // literals — and calls with ordinary arguments plan alongside scalars and
@@ -149,6 +152,10 @@ func TestPlanRouterRejections(t *testing.T) {
 
 	plans := compileScriptPlans(t, ctx, "planRejections", `c = Twice(a)
     c = a * 2
+
+lo, hi = Both(a)
+    lo = a
+    hi = a + 1
 `, `x = 5
 g = x > 2 13
 y = 0
@@ -177,9 +184,15 @@ tbl = [
 ]
 rc = [q]
 cc = [x > 2]
-g, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc`)
+f = arr[9] || 1
+fo = (arr[9] || 1) + 1
+fc = [arr[9] || 1]
+fd = Twice(arr[9] || 1)
+fx = x > 9 || arr[9] || 1
+fm, fn = arr[9] || Both(x)
+g, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -1218,4 +1231,141 @@ keep, fresh, s, h1, h2, r`)
         commit
             output res = %t0 [on-skip=keep]
 `, plans[17].Render(false))
+}
+
+// Plan §4, §9 and matrix row 7b: a || after an index read plans as a first.
+// The read falls back where it fails, so its mapping carries a skip policy
+// only when the last side can fail too, and a chain is one first. A print
+// with a fallback stays legacy.
+func TestPlanGoldenFallbacks(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planFallbacks", `res = At(v, i)
+    res = v[i] || -1
+`, `arr = [10 20 30]
+sarr = ["x" "y"]
+h = "heap" ⊕ "!"
+a = arr[9] || -1
+s = "old" ⊕ "!"
+s
+s = sarr[9] || h
+c = arr[9] || arr[8] || -3
+g = 5
+g = arr[9] || arr[8]
+_ = sarr[9] || (h ⊕ "?")
+p, q = arr[9] || -1, 5
+r = At(arr, 9)
+arr[9] || -1
+a, s, c, g, p, q, r`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign arr"}, {Label: "assign sarr"}, {Label: "assign h"}, {Label: "assign a"},
+		{Label: "assign s"}, {Label: "print"}, {Label: "assign s"}, {Label: "assign c"},
+		{Label: "assign g"}, {Label: "assign g"}, {Label: "assign _"}, {Label: "assign p, q"},
+		{Label: "assign r"}, {Label: "print"},
+		{Func: "I64 = At([I64], I64)", Label: "assign res"},
+	}, planOwners(plans))
+
+	// A fresh target and an existing one read alike: the first always yields.
+	require.Equal(t, `assign a
+    source "a = (arr[9] || (-1))"
+
+    execute
+        %t0 = first I64
+                %t1 = eval I64 arr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval I64 -1
+
+    commit
+        a = %t0
+`, plans[3].Render(true))
+	// The read's copy moves and the binding is copied; what the failed read
+	// built is released where the fallback ran.
+	require.Equal(t, `assign s
+    source "s = (sarr[9] || h)"
+
+    execute
+        %t0 = first Str
+                %t1 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval borrowed Str h
+
+    commit
+        s = %t0 [move %t1] [copy %t2]
+        drop %t1 [on-fallback]
+        drop s [old]
+`, plans[6].Render(true))
+	// A chain is one first, however it is grouped.
+	require.Equal(t, `assign c
+    source "c = ((arr[9] || arr[8]) || (-3))"
+
+    execute
+        %t0 = first I64
+                %t1 = eval I64 arr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval I64 arr[8] [on-oob=fallback]
+            fallback
+                %t3 = eval I64 -3
+
+    commit
+        c = %t0
+`, plans[7].Render(false))
+	// A last side that can fail skips the outcome, so the target keeps its
+	// value.
+	require.Equal(t, `assign g
+    source "g = (arr[9] || arr[8])"
+
+    execute
+        %t0 = first I64
+                %t1 = eval I64 arr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval I64 arr[8] [on-oob=skip]
+
+    commit
+        g = %t0 [on-skip=keep]
+`, plans[9].Render(false))
+	// A discard releases each owned side where it ran.
+	require.Equal(t, `assign _
+    source "_ = (sarr[9] || (h ⊕ \"?\"))"
+
+    execute
+        %t0 = first Str
+                %t1 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval owned Str h ⊕ "?"
+
+    commit
+        _ = %t0
+        drop %t1
+        drop %t2
+`, plans[10].Render(true))
+	// The eval after a first takes the ID after its sides.
+	require.Equal(t, `assign p, q
+    source "p, q = (arr[9] || (-1)), 5"
+
+    execute
+        %t0 = first I64
+                %t1 = eval I64 arr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval I64 -1
+        %t3 = eval I64 5
+
+    commit
+        p = %t0
+        q = %t3
+`, plans[11].Render(false))
+	require.Equal(t, `    assign res
+        source "res = (v[i] || (-1))"
+
+        execute
+            %t0 = first I64
+                    %t1 = eval I64 v[i] [on-oob=fallback]
+                fallback
+                    %t2 = eval I64 -1
+
+        commit
+            output res = %t0
+`, plans[14].Render(false))
 }

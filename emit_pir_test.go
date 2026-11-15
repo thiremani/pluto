@@ -199,7 +199,7 @@ func TestEmitPIRExpanded(t *testing.T) {
 	plan := emitPIRTestPlans("")[1].(*pir.AssignPlan)
 	plan.Evals[0].Slots[0] = pir.Slot{Type: str, Ownership: pir.Borrowed, Owner: "x"}
 	plan.Commit[0].Target.Type = str
-	plan.Commit[0].Transfer = pir.Copy
+	plan.Commit[0].Transfers = []pir.Transfer{pir.Copy}
 
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, [][]pir.Plan{{plan}}, parsedEmitPIRMode(t, "-emit-pir=expanded")))

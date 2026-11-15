@@ -73,11 +73,43 @@ func (c *Compiler) planValuesEligible(exprs []ast.Expression, reads bool) bool {
 		if !planValueTypesSupported(info.OutTypes) {
 			return false
 		}
-		if !c.planExprEligible(expr, reads) {
+		if !c.planValueEligible(expr, reads) {
 			return false
 		}
 	}
 	return true
+}
+
+// planValueEligible admits a value as one eval, or as a first when it is a
+// value-position ||: each side an eval of one slot. A first plans where reads
+// holds, in an assignment, and the solver has left it a side that can fail
+// before every fallback.
+func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
+	sides := fallbackSides(expr)
+	if len(sides) == 1 {
+		return c.planExprEligible(expr, reads)
+	}
+	if !reads {
+		return false
+	}
+
+	for _, side := range sides {
+		if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) != 1 || !c.planExprEligible(side, true) {
+			return false
+		}
+	}
+	return true
+}
+
+// fallbackSides lists the sides of a value-position || in the order they are
+// tried. A chain takes the first side that yields however it is grouped, so
+// it is one list; any other expression is its own one side.
+func fallbackSides(expr ast.Expression) []ast.Expression {
+	or, isOr := ast.IsLogicalOr(expr)
+	if !isOr {
+		return []ast.Expression{expr}
+	}
+	return append(fallbackSides(or.Left), fallbackSides(or.Right)...)
 }
 
 func planValueTypesSupported(types []Type) bool {
@@ -149,24 +181,28 @@ func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 	return true
 }
 
-// planOOBScope gives an eval's index reads their scope (plan §9). The router
-// admits a read only where its failure skips the outcome, so any read in an
-// admitted tree has that scope.
-func planOOBScope(expr ast.Expression) pir.OOBScope {
+// planOOBScope gives an eval's index reads their scope (plan §9): a failed
+// read runs the fallback that follows its side of a first, and skips the
+// outcome otherwise. The router admits a read only in those two places.
+func planOOBScope(expr ast.Expression, fallbackFollows bool) pir.OOBScope {
 	var reads []*ast.ArrayRangeExpression
 	collectArrayIndexAccesses(expr, &reads)
-	if len(reads) == 0 {
+	switch {
+	case len(reads) == 0:
 		return pir.NoChecks
+	case fallbackFollows:
+		return pir.UseFallback
+	default:
+		return pir.SkipOutcome
 	}
-	return pir.SkipOutcome
 }
 
 // planSkipPolicy is what a target holds where its outcome skipped (plan §9):
 // the value it had, or zero when the statement introduces it. A discard
 // keeps nothing.
-func planSkipPolicy(scope pir.OOBScope, target pir.Target) pir.SkipPolicy {
+func planSkipPolicy(maySkip bool, target pir.Target) pir.SkipPolicy {
 	switch {
-	case scope != pir.SkipOutcome || target.Kind == pir.DiscardTarget:
+	case !maySkip || target.Kind == pir.DiscardTarget:
 		return pir.NoSkipPolicy
 	case target.Fresh:
 		return pir.ZeroOnSkip
@@ -242,35 +278,69 @@ func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 }
 
 // buildLetPlan maps each expression's output slots onto the next targets in
-// order; the solver validated that the totals match.
+// order; the solver validated that the totals match. A value-position ||
+// becomes a first, which has one slot.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPlan {
-	evals := make([]*pir.Eval, len(stmt.Value))
-	commit := make([]pir.Mapping, 0, len(stmt.Name))
-	for i, expr := range stmt.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		evals[i] = &pir.Eval{Result: pir.OutcomeID(i), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), OnOOB: planOOBScope(expr)}
-
-		for slot, t := range info.OutTypes {
-			evals[i].Slots[slot] = c.planSlot(expr, t)
-			target := c.planTarget(stmt.Name[len(commit)])
-			commit = append(commit, pir.Mapping{
-				Target:  target,
-				Outcome: pir.OutcomeRef{Outcome: pir.OutcomeID(i), Slot: slot},
-				OnSkip:  planSkipPolicy(evals[i].OnOOB, target),
-			})
-		}
-	}
-
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
 		nameParts[i] = ident.Value
 	}
-
-	return &pir.AssignPlan{
+	plan := &pir.AssignPlan{
 		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: stmt.String()},
-		Evals:  evals,
-		Commit: commit,
+		Commit: make([]pir.Mapping, 0, len(stmt.Name)),
 	}
+
+	next := pir.OutcomeID(0)
+	for _, expr := range stmt.Value {
+		sides := fallbackSides(expr)
+		if len(sides) > 1 {
+			first := c.buildFirst(expr, sides, next)
+			plan.Firsts = append(plan.Firsts, first)
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, first.MaySkip())
+			next += pir.OutcomeID(1 + len(sides))
+			continue
+		}
+
+		ev := c.buildEval(expr, next, false)
+		plan.Evals = append(plan.Evals, ev)
+		for slot := range ev.Slots {
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, ev.MaySkip())
+		}
+		next++
+	}
+
+	return plan
+}
+
+// buildEval plans expr as one eval; fallbackFollows says it is a side of a
+// first with a side after it.
+func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID, fallbackFollows bool) *pir.Eval {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	ev := &pir.Eval{Result: id, Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), OnOOB: planOOBScope(expr, fallbackFollows)}
+	for slot, t := range info.OutTypes {
+		ev.Slots[slot] = c.planSlot(expr, t)
+	}
+	return ev
+}
+
+// buildFirst plans the value-position || expr, whose outcome is id; its sides
+// take the IDs after it.
+func (c *Compiler) buildFirst(expr ast.Expression, sides []ast.Expression, id pir.OutcomeID) *pir.First {
+	first := &pir.First{
+		Result: id,
+		Type:   c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0],
+		Sides:  make([]*pir.Eval, len(sides)),
+	}
+	for i, side := range sides {
+		first.Sides[i] = c.buildEval(side, id+pir.OutcomeID(1+i), i < len(sides)-1)
+	}
+	return first
+}
+
+// mapNextTarget maps an outcome slot onto the statement's next target.
+func (c *Compiler) mapNextTarget(plan *pir.AssignPlan, stmt *ast.LetStatement, outcome pir.OutcomeRef, maySkip bool) {
+	target := c.planTarget(stmt.Name[len(plan.Commit)])
+	plan.Commit = append(plan.Commit, pir.Mapping{Target: target, Outcome: outcome, OnSkip: planSkipPolicy(maySkip, target)})
 }
 
 // buildPrintPlan gives each argument to the invocation in source order: a
@@ -284,11 +354,7 @@ func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.Prin
 			continue
 		}
 
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		ev := &pir.Eval{Result: pir.OutcomeID(len(plan.Evals)), Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes))}
-		for slot, t := range info.OutTypes {
-			ev.Slots[slot] = c.planSlot(expr, t)
-		}
+		ev := c.buildEval(expr, pir.OutcomeID(len(plan.Evals)), false)
 		plan.Evals = append(plan.Evals, ev)
 		plan.Args = append(plan.Args, pir.PrintArg{Outcome: ev.Result})
 	}
@@ -299,6 +365,24 @@ func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.Prin
 // binding-slot compatibility, never display or mangle equality.
 func planBindingCompatible(target, outcome pir.Type) bool {
 	return bindingSlotCompatible(target.(Type), outcome.(Type))
+}
+
+// loweredSource is one eval that can supply a node's outcome, after it ran:
+// its slots, and the bit that says whether it yielded, nil when it always
+// does. staged marks a first's side, which runs on a path of its own, so its
+// slots sit in memory for the commit to load.
+type loweredSource struct {
+	eval    *pir.Eval
+	out     []*Symbol
+	yielded llvm.Value
+	staged  bool
+}
+
+// loweredNode is one node of a plan's execute region after it ran: the evals
+// that can supply its outcome, in the order they were tried.
+type loweredNode struct {
+	id      pir.OutcomeID
+	sources []loweredSource
 }
 
 // lowerAssignPlan implements an elaborated plan (plan §6, §9, §13) and
@@ -319,39 +403,40 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 		}
 	}
 
-	outs := make([][]*Symbol, len(plan.Evals))
-	yielded := make([]llvm.Value, len(plan.Evals))
-	for i, ev := range plan.Evals {
-		outs[i], yielded[i] = c.lowerEval(ev)
+	var nodes []loweredNode
+	for _, node := range plan.Nodes() {
+		switch n := node.(type) {
+		case *pir.Eval:
+			out, yielded := c.lowerEval(n)
+			nodes = append(nodes, loweredNode{id: n.Result, sources: []loweredSource{{eval: n, out: out, yielded: yielded}}})
+		case *pir.First:
+			nodes = append(nodes, c.lowerFirst(n))
+		}
 	}
 
-	c.backSkippableTargets(plan, replaced)
-	for i := range plan.Evals {
-		c.withCondBranch(yielded[i], "assign_write", func() {
-			c.commitOutcome(plan, i, outs[i])
-		}, func() {
-			c.dropOutcomeSlots(plan, pir.DropSkipped, i, outs[i], "temp_free")
-		})
+	c.backBranchedTargets(plan, replaced)
+	for _, n := range nodes {
+		c.landSources(plan, n, 0)
 	}
 
-	for i := range plan.Evals {
-		c.dropOutcomeSlots(plan, pir.DropOutcome, i, outs[i], "discard")
+	for _, n := range nodes {
+		c.dropDiscarded(plan, n, 0)
 	}
-	for i := range plan.Evals {
-		c.withCondBranch(yielded[i], "assign_free", func() {
-			c.dropReplaced(plan, i, replaced)
+	for _, n := range nodes {
+		c.withCondBranch(c.nodeYielded(n), "assign_free", func() {
+			c.dropReplaced(plan, n.id, replaced)
 		}, nil)
 	}
 }
 
 // lowerEval compiles one eval and returns its outcome with the bit that says
 // whether it yielded; the bit is nil for an eval that always does. An eval
-// that may skip runs under a bounds guard of its own, which each of its
+// that may fail runs under a bounds guard of its own, which each of its
 // index reads ANDs its in-bounds bit into (plan §9). A read past the end
 // gives a zero that later operators still compute with, and a call lowered
-// after it does not run, so the outcome holds a value on the skip path too.
+// after it does not run, so the outcome holds a value where it failed too.
 func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
-	if !ev.MaySkip() {
+	if !ev.MayFail() {
 		return c.compileExpression(ev.Expr, nil), llvm.Value{}
 	}
 
@@ -362,44 +447,155 @@ func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
 	return out, c.createLoad(guard, Int{Width: 1}, "assign_bounds_ok")
 }
 
-// backSkippableTargets gives every binding a skip can leave alone storage
-// that both paths reach: an existing binding moves to memory, and a fresh one
-// starts at its zero, the value it holds where its outcome skipped. A commit
-// replaces that zero, so it joins replaced.
-func (c *Compiler) backSkippableTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
+// lowerFirst runs a first's sides in order until one yields (plan §4). A
+// side's yield flag starts false, so it reads false wherever the side did
+// not run.
+func (c *Compiler) lowerFirst(f *pir.First) loweredNode {
+	i1 := Int{Width: 1}
+	sides := make([]loweredSource, len(f.Sides))
+	flags := make([]llvm.Value, len(f.Sides))
+	for i, side := range f.Sides {
+		sides[i] = loweredSource{eval: side, staged: true}
+		if side.MayFail() {
+			flags[i] = c.createEntryBlockAlloca(c.mapToLLVMType(i1), "first_yielded.mem")
+			c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 0, false), flags[i], i1)
+		}
+	}
+
+	c.lowerSides(sides, flags, 0)
+
+	for i, flag := range flags {
+		if !flag.IsNil() {
+			sides[i].yielded = c.createLoad(flag, i1, "first_yielded")
+		}
+	}
+	return loweredNode{id: f.Result, sources: sides}
+}
+
+// lowerSides runs side i, stages its value and its yield flag, and runs the
+// sides after it only where it failed.
+func (c *Compiler) lowerSides(sides []loweredSource, flags []llvm.Value, i int) {
+	out, yielded := c.lowerEval(sides[i].eval)
+	value := c.derefIfPointer(out[0], "first_side")
+	slot := c.createEntryBlockAlloca(c.mapToLLVMType(value.Type), "first_side.mem")
+	c.createStore(value.Val, slot, value.Type)
+	sides[i].out = []*Symbol{{Val: slot, Type: Ptr{Elem: value.Type}}}
+	if yielded.IsNil() {
+		return
+	}
+
+	c.createStore(yielded, flags[i], Int{Width: 1})
+	if i+1 == len(sides) {
+		return
+	}
+	c.withCondBranch(c.builder.CreateNot(yielded, "first_failed"), "first_fallback", func() {
+		c.lowerSides(sides, flags, i+1)
+	}, nil)
+}
+
+// sourceValue returns a slot of src's outcome, loading a staged one.
+func (c *Compiler) sourceValue(src loweredSource, slot int) *Symbol {
+	if !src.staged {
+		return src.out[slot]
+	}
+	return c.derefIfPointer(src.out[slot], "first_side")
+}
+
+// nodeYielded is the bit that says whether a node's outcome yielded: some
+// source did. It is nil when the last one always yields.
+func (c *Compiler) nodeYielded(n loweredNode) llvm.Value {
+	yielded := n.sources[len(n.sources)-1].yielded
+	if yielded.IsNil() {
+		return yielded
+	}
+	for _, src := range n.sources[:len(n.sources)-1] {
+		yielded = c.builder.CreateOr(src.yielded, yielded, "first_any_yielded")
+	}
+	return yielded
+}
+
+// backBranchedTargets gives every binding whose mapping lands on one path of
+// several storage that all of them reach. A binding a skip can leave alone
+// moves to memory when it exists, and a fresh one starts at its zero, the
+// value it holds where its outcome skipped; a commit replaces that zero, so
+// it joins replaced. A first's binding takes its value on the path of the
+// side that yielded, so it sits in memory too.
+func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
 	for _, m := range plan.Commit {
-		switch m.OnSkip {
-		case pir.KeepOnSkip:
-			c.promoteExistingSym(m.Target.Name)
-		case pir.ZeroOnSkip:
+		branched := len(m.Transfers) > 1
+		switch {
+		case m.OnSkip == pir.ZeroOnSkip:
 			replaced[m.Target.Name] = c.seedFreshDest(m.Target.Name, m.Target.Type.(Type))
+		case branched && m.Target.Fresh:
+			c.bindFreshDest(m.Target.Name, m.Target.Type.(Type))
+		case m.OnSkip == pir.KeepOnSkip || branched:
+			c.promoteExistingSym(m.Target.Name)
 		}
 	}
 }
 
-// commitOutcome lands the mappings of eval i.
-func (c *Compiler) commitOutcome(plan *pir.AssignPlan, i int, out []*Symbol) {
+// landSources commits a node's outcome from the first of its sources, from
+// index i on, that yielded, and releases what each one before it built.
+func (c *Compiler) landSources(plan *pir.AssignPlan, n loweredNode, i int) {
+	c.withCondBranch(n.sources[i].yielded, "assign_write", func() {
+		c.commitSource(plan, n, i)
+	}, func() {
+		c.dropSourceSlots(plan, pir.DropSkipped, n.sources[i], "temp_free")
+		if i+1 < len(n.sources) {
+			c.landSources(plan, n, i+1)
+		}
+	})
+}
+
+// commitSource lands the mappings of n's outcome with the value source i
+// supplies.
+func (c *Compiler) commitSource(plan *pir.AssignPlan, n loweredNode, i int) {
 	for _, m := range plan.Commit {
-		if int(m.Outcome.Outcome) != i || m.Target.Kind == pir.DiscardTarget {
+		if m.Outcome.Outcome != n.id || m.Target.Kind == pir.DiscardTarget {
 			continue
 		}
-		c.storeValue(m.Target.Name, out[m.Outcome.Slot], m.Transfer == pir.Copy)
+		c.storeValue(m.Target.Name, c.sourceValue(n.sources[i], m.Outcome.Slot), m.Transfers[i] == pir.Copy)
 	}
 }
 
-// dropOutcomeSlots runs the plan's releases of the given kind for eval i.
-func (c *Compiler) dropOutcomeSlots(plan *pir.AssignPlan, kind pir.DropKind, i int, out []*Symbol, loadName string) {
+// dropDiscarded releases the slots of n's sources that no target took, from
+// index i on, each where it ran: a source after the first only where the one
+// before it failed.
+func (c *Compiler) dropDiscarded(plan *pir.AssignPlan, n loweredNode, i int) {
+	c.dropSourceSlots(plan, pir.DropOutcome, n.sources[i], "discard")
+	if !planDropsAny(plan, pir.DropOutcome, n.sources[i+1:]) {
+		return
+	}
+	c.withCondBranch(c.builder.CreateNot(n.sources[i].yielded, "discard_failed"), "discard_fallback", func() {
+		c.dropDiscarded(plan, n, i+1)
+	}, nil)
+}
+
+// planDropsAny reports a release of the given kind for one of the sources.
+func planDropsAny(plan *pir.AssignPlan, kind pir.DropKind, sources []loweredSource) bool {
 	for _, d := range plan.Drops {
-		if d.Kind == kind && int(d.Outcome.Outcome) == i {
-			c.freeSymbolValue(out[d.Outcome.Slot], loadName)
+		for _, src := range sources {
+			if d.Kind == kind && d.Outcome.Outcome == src.eval.Result {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dropSourceSlots runs the plan's releases of the given kind for src.
+func (c *Compiler) dropSourceSlots(plan *pir.AssignPlan, kind pir.DropKind, src loweredSource, loadName string) {
+	for _, d := range plan.Drops {
+		if d.Kind == kind && d.Outcome.Outcome == src.eval.Result {
+			c.freeSymbolValue(src.out[d.Outcome.Slot], loadName)
 		}
 	}
 }
 
-// dropReplaced releases what the mappings of eval i replaced.
-func (c *Compiler) dropReplaced(plan *pir.AssignPlan, i int, replaced map[string]*Symbol) {
+// dropReplaced releases what the mappings of outcome id replaced.
+func (c *Compiler) dropReplaced(plan *pir.AssignPlan, id pir.OutcomeID, replaced map[string]*Symbol) {
 	for _, m := range plan.Commit {
-		if int(m.Outcome.Outcome) != i {
+		if m.Outcome.Outcome != id {
 			continue
 		}
 		if old, held := replaced[m.Target.Name]; held {

@@ -1,0 +1,26 @@
+Fresh: -1 10
+InBoundsZero: 0
+ExistingSeed: 7
+ExistingOut: -1
+ExistingIn: 30
+HeapSeed: old!
+HeapStatic: static
+HeapBorrowed: heap! heap!
+HeapOwned: heap!?
+HeapIn: y
+HeapFresh: heap!
+Chain: 30 -1
+BothOut: 5 []
+FirstIn: x
+called 4
+Lazy: 4 10
+Siblings: -1 0 30
+Output: -1 none x
+Print: -1 30
+Cell: [-1 0]
+CallArgument: 9
+Operator: 99
+GatedSeed: 4
+Gated: 8
+Ranged: [100 101 102]
+Mixed: -4

@@ -206,7 +206,10 @@ parentheses:
 
 Only a left operand with **no** condition anywhere in its tree is rejected
 (`(5 + 3) || -1`, `a || -1`) — there is nothing that can fail for `||` to
-catch.
+catch. An index read is the one left operand that needs no condition: it
+fails where its index is out of bounds, so `arr[i] || -1` is the element or
+`-1`, and `a[i] || b[j] || -1` tries each read in turn ("Checked-access
+fallback" under Status).
 
 ## Precedence: conditions bind first
 
@@ -464,10 +467,11 @@ fed by an OOB read fails its lanes, and a call with an OOB argument fails its
 whole output tuple as a unit. The **nearest enclosing resolver** then decides:
 `x = arr[oob]` and `x = arr[oob] > 0` keep `x` (the resolver is `=`); sibling
 expressions in one statement commit independently (`a, b = arr[oob], 5` keeps
-`a`, sets `b`); `x = arr[oob] > 0 || -1` takes `-1`; and `Id(arr[oob]) || -1`
-reaches the fallback after the call propagates its tuple failure (decided —
-see "Checked-access fallback" under Status; today the solver rejects OOB-fed
-`||`). An unevaluated `||` right side cannot fail anything. Inside a collector
+`a`, sets `b`); `x = arr[oob] > 0 || -1` and `x = arr[oob] || -1` take `-1`; and
+`Id(arr[oob]) || -1` reaches the fallback after the call propagates its tuple
+failure (decided — see "Checked-access fallback" under Status; today the
+solver rejects a `||` whose left side fails only through a call's argument).
+An unevaluated `||` right side cannot fail anything. Inside a collector
 or fixed-array cell, an **unresolved** OOB zero-fills that cell to preserve
 shape — unresolved meaning no closer resolver claimed it first: in
 `[arr[oob] || -1]` the `||` wins and the cell holds `-1`.
@@ -591,16 +595,20 @@ follow when they migrate in Steps 7 and 8.
   #123 removed the need for one instead of adding it: a body that runs writes
   every output, so a print argument that is a call either yields or failed
   before the call ran.
-- **Checked-access fallback (decided, not yet implemented):** the nearest
-  resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
-  `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
-  yielded/in-bounds bit, never the value: an in-bounds zero yields `0`. Today
-  the solver rejects this source ("logical OR in value position requires a
-  conditional left operand") because `conditionPropagates` excludes
-  checked-access failure — in conflict with the propagation rule above, which
-  already names an OOB read a failed condition. Scheduled with checked
-  accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
-  tests when it lands.
+- **Checked-access fallback (implemented for a read left of `||`):** the
+  nearest resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print
+  position `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
+  yielded/in-bounds bit, never the value: an in-bounds zero yields `0`. The
+  read stands immediately left of `||`, alone or as the last alternative of
+  the `||` before it, so `a[i] || b[j] || -1` tries each in turn; where the
+  last side is a read that fails too, nothing yields and the target keeps
+  its value. The rule is the fallback's own: a read is still no statement
+  gate and no `&&` left side. Not yet legal, and rejected with "logical OR
+  in value position requires a conditional left operand": a read driven by a
+  range left of `||` (`arr[i] || -1` with `i` a range), and a read wrapped
+  in an operator or passed through a call there (`(arr[i] + 1) || -1`,
+  `Id(arr[i]) || -1`), planned with the PIR migration's Steps 6 and 7.
+  `tests/array/oob_fallback` pins the behavior.
 - **Gated print (planned with PIR Step 6; not current syntax):** a no-comma
   prefix form, `c > 5 a, b`, rejects the whole line without evaluating its
   values, as an assignment's gate does for its statement. It prints what

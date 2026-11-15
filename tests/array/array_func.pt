@@ -26,6 +26,10 @@ res = ElemOr(v, i, fallback)
     res = fallback
     res = v[i]
 
+# An element, or the fallback where the index is out of bounds.
+res = ElemElse(v, i, fallback)
+    res = v[i] || fallback
+
 res = ConcatElem(a, elem)
     res = a ⊕ [elem]
 

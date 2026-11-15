@@ -46,6 +46,9 @@ const (
 	// SkipOutcome: a failed access skips the eval's outcome, every slot of it,
 	// and each mapping's OnSkip says what its target then holds.
 	SkipOutcome
+	// UseFallback: the eval is a side of a first with a side after it, which
+	// runs where an access fails.
+	UseFallback
 )
 
 // Eval evaluates one solved source expression; the builder splits out
@@ -57,8 +60,35 @@ type Eval struct {
 	OnOOB  OOBScope
 }
 
-// MaySkip reports an outcome a failed check can keep from yielding.
+// MayFail reports an eval a failed check can keep from yielding.
+func (ev *Eval) MayFail() bool { return ev.OnOOB != NoChecks }
+
+// MaySkip reports an eval whose failure no fallback resolves, so it reaches
+// the commit.
 func (ev *Eval) MaySkip() bool { return ev.OnOOB == SkipOutcome }
+
+// First is a value-position || (plan §4): its sides run in order until one
+// yields, and that side's value is its outcome. A side before the last falls
+// back to the next where it fails; where the last skips, the outcome skips.
+// Each side has one slot, and a chain of || is one First however it is
+// grouped. Its sides take the outcome IDs after Result.
+type First struct {
+	Result OutcomeID
+	Type   Type
+	Sides  []*Eval
+}
+
+// MaySkip reports a first whose last side may skip, when no side yields.
+func (f *First) MaySkip() bool { return f.Sides[len(f.Sides)-1].MaySkip() }
+
+// Node is one operation of an assignment's execute region: an *Eval or a
+// *First.
+type Node interface {
+	ID() OutcomeID
+}
+
+func (ev *Eval) ID() OutcomeID { return ev.Result }
+func (f *First) ID() OutcomeID { return f.Result }
 
 type TargetKind int
 
@@ -122,12 +152,14 @@ const (
 
 // Mapping is one recorded target = outcome commit pair; the lowerer
 // consumes it as recorded, never rematching by name or position. It commits
-// where its outcome yielded and follows OnSkip elsewhere.
+// where its outcome yielded and follows OnSkip elsewhere. Transfers holds one
+// entry per eval that can supply the value: the outcome's own, or each side
+// of a first in order.
 type Mapping struct {
-	Target   Target
-	Outcome  OutcomeRef
-	Transfer Transfer
-	OnSkip   SkipPolicy
+	Target    Target
+	Outcome   OutcomeRef
+	Transfers []Transfer
+	OnSkip    SkipPolicy
 }
 
 type DropKind int
@@ -135,13 +167,14 @@ type DropKind int
 const (
 	DropOutcome  DropKind = iota // an owned outcome no target took
 	DropReplaced                 // a local target's old value, after every mapping
-	DropSkipped                  // what an outcome built before it skipped, which its binding never took
+	DropSkipped                  // what an eval built before it failed, which its binding never took
 )
 
 // Drop is one derived release (plan §8), never authored by the builder. A
-// DropOutcome runs whether or not its outcome yielded, a DropSkipped only
-// where it skipped, and a DropReplaced only where the mapping that replaces
-// Target committed.
+// DropOutcome runs where its eval ran, whether or not it yielded, a
+// DropSkipped only where it failed, and a DropReplaced only where the mapping
+// that replaces Target committed. Outcome names an eval, a first's side
+// included.
 type Drop struct {
 	Kind    DropKind
 	Outcome OutcomeRef // DropOutcome, DropSkipped
@@ -166,17 +199,70 @@ type Plan interface {
 }
 
 // AssignPlan is the execution plan for one assignment statement; prepare and
-// finish phases are absent until carries and collectors land.
+// finish phases are absent until carries and collectors land. Evals holds the
+// evals outside a first and Firsts the firsts, each in execution order;
+// outcome IDs, dense in the order the plan prints, order the two.
 type AssignPlan struct {
 	Head
 	Evals  []*Eval
+	Firsts []*First
 	Commit []Mapping
 	Drops  []Drop // derived by Elaborate, in the order they run
 }
 
-// maySkip reports a mapping that may not commit: its outcome may skip.
+// Nodes returns the execute region in execution order.
+func (p *AssignPlan) Nodes() []Node {
+	nodes := make([]Node, 0, len(p.Evals)+len(p.Firsts))
+	firsts := p.Firsts
+	for _, ev := range p.Evals {
+		for len(firsts) > 0 && firsts[0].Result < ev.Result {
+			nodes = append(nodes, firsts[0])
+			firsts = firsts[1:]
+		}
+		nodes = append(nodes, ev)
+	}
+	for _, f := range firsts {
+		nodes = append(nodes, f)
+	}
+	return nodes
+}
+
+// source is one eval a mapping can take its value from, and the slot it
+// gives.
+type source struct {
+	ref  OutcomeRef
+	eval *Eval
+}
+
+func (s source) slot() Slot { return s.eval.Slots[s.ref.Slot] }
+
+// sources returns the evals that can supply ref's value, in the order they
+// run: the outcome's own eval, or each side of a first. It is empty when ref
+// names neither.
+func (p *AssignPlan) sources(ref OutcomeRef) []source {
+	for _, ev := range p.Evals {
+		if ev.Result == ref.Outcome {
+			return []source{{ref: ref, eval: ev}}
+		}
+	}
+	for _, f := range p.Firsts {
+		if f.Result != ref.Outcome {
+			continue
+		}
+		sides := make([]source, len(f.Sides))
+		for i, side := range f.Sides {
+			sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, eval: side}
+		}
+		return sides
+	}
+	return nil
+}
+
+// maySkip reports a mapping that may not commit: the last eval that can
+// supply its value may skip.
 func (p *AssignPlan) maySkip(m Mapping) bool {
-	return p.Evals[m.Outcome.Outcome].MaySkip()
+	sources := p.sources(m.Outcome)
+	return sources[len(sources)-1].eval.MaySkip()
 }
 
 // PrintArg is one argument of a print invocation: a string literal, or an

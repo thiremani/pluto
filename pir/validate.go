@@ -15,16 +15,29 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	if err := validateHead(p.Head); err != nil {
 		return err
 	}
-	if len(p.Evals) == 0 {
+	if len(p.Evals) == 0 && len(p.Firsts) == 0 {
 		return fmt.Errorf("plan %s has no evals", p.Label)
 	}
 
-	slots := 0
-	for i, ev := range p.Evals {
-		if err := validateEval(p.Label, i, ev); err != nil {
-			return err
+	next, slots := 0, 0
+	for _, node := range p.Nodes() {
+		switch n := node.(type) {
+		case *Eval:
+			if err := validateEval(p.Label, next, n); err != nil {
+				return err
+			}
+			if n.OnOOB == UseFallback {
+				return fmt.Errorf("plan %s: eval %%t%d falls back, but is no side of a first", p.Label, next)
+			}
+			next++
+			slots += len(n.Slots)
+		case *First:
+			if err := validateFirst(p.Label, next, n, compatible); err != nil {
+				return err
+			}
+			next += 1 + len(n.Sides)
+			slots++
 		}
-		slots += len(ev.Slots)
 	}
 
 	if len(p.Commit) != slots {
@@ -47,6 +60,44 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	}
 
 	return p.validateReleases(replaced)
+}
+
+// validateFirst checks a first whose outcome is id: at least two sides of one
+// slot each, numbered after it, that fit its type. A side with a side after
+// it falls back where it fails, so it must be able to fail, and the last has
+// nothing to fall back to.
+func validateFirst(plan string, id int, f *First, compatible func(target, outcome Type) bool) error {
+	if f.Result != OutcomeID(id) {
+		return fmt.Errorf("plan %s: first has result ID %d where %d is next; IDs must be dense in execution order", plan, f.Result, id)
+	}
+	if f.Type == nil {
+		return fmt.Errorf("plan %s: first %%t%d has no type", plan, id)
+	}
+	if len(f.Sides) < 2 {
+		return fmt.Errorf("plan %s: first %%t%d has %d sides and needs a fallback", plan, id, len(f.Sides))
+	}
+
+	last := len(f.Sides) - 1
+	for i, side := range f.Sides {
+		sideID := id + 1 + i
+		if err := validateEval(plan, sideID, side); err != nil {
+			return err
+		}
+		if len(side.Slots) != 1 {
+			return fmt.Errorf("plan %s: side %%t%d of first %%t%d has %d slots", plan, sideID, id, len(side.Slots))
+		}
+		if !compatible(f.Type, side.Slots[0].Type) {
+			return fmt.Errorf("plan %s: side %%t%d of type %s does not fit first %%t%d of type %s", plan, sideID, side.Slots[0].Type.String(), id, f.Type.String())
+		}
+		if i < last && side.OnOOB != UseFallback {
+			return fmt.Errorf("plan %s: side %%t%d of first %%t%d has out-of-bounds scope %s; the fallback after it needs fallback", plan, sideID, id, side.OnOOB)
+		}
+		if i == last && side.OnOOB == UseFallback {
+			return fmt.Errorf("plan %s: the last side %%t%d of first %%t%d falls back to nothing", plan, sideID, id)
+		}
+	}
+
+	return nil
 }
 
 // ValidatePrint runs on every print plan before lowering (plan §14.1,
@@ -125,17 +176,17 @@ func validateEval(plan string, i int, ev *Eval) error {
 }
 
 // validateAccesses checks plan §14.15: every checked access has an explicit
-// out-of-bounds scope, which is its eval's outcome. A literal cell resolves a
+// out-of-bounds scope, which its eval records. A literal cell resolves a
 // failed access itself, a scope no plan node records.
 func validateAccesses(plan string, i int, ev *Eval) error {
 	outcome, cell := checkedAccesses(ev.Expr, false)
 	if cell > 0 {
 		return fmt.Errorf("plan %s: eval %%t%d holds a checked access in a literal cell, a scope no plan node records", plan, i)
 	}
-	if outcome > 0 && !ev.MaySkip() {
+	if outcome > 0 && !ev.MayFail() {
 		return fmt.Errorf("plan %s: eval %%t%d holds a checked access with no out-of-bounds scope", plan, i)
 	}
-	if outcome == 0 && ev.MaySkip() {
+	if outcome == 0 && ev.MayFail() {
 		return fmt.Errorf("plan %s: eval %%t%d has an out-of-bounds scope and no checked access", plan, i)
 	}
 
@@ -166,16 +217,21 @@ func checkedAccesses(expr ast.Expression, inCell bool) (outcome, cell int) {
 }
 
 func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome Type) bool) error {
-	slot, err := p.slot(m.Outcome)
+	outcome, err := p.outcomeType(m.Outcome)
 	if err != nil {
 		return err
+	}
+	sources := p.sources(m.Outcome)
+	if len(m.Transfers) != len(sources) {
+		return fmt.Errorf("plan %s: target %s = %%t%d slot %d has %d transfers for the %d evals that can supply it",
+			p.Label, targetString(m.Target), m.Outcome.Outcome, m.Outcome.Slot, len(m.Transfers), len(sources))
 	}
 	if err := p.validateSkipPolicy(m); err != nil {
 		return err
 	}
 	switch m.Target.Kind {
 	case LocalTarget:
-		return p.validateBinding(m, slot, compatible)
+		return p.validateBinding(m, outcome, sources, compatible)
 	case OutputTarget:
 		if p.Func == "" {
 			return fmt.Errorf("plan %s: output target %s outside a function body", p.Label, m.Target.Name)
@@ -183,13 +239,15 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		if m.Target.Fresh {
 			return fmt.Errorf("plan %s: output target %s is fresh", p.Label, m.Target.Name)
 		}
-		return p.validateBinding(m, slot, compatible)
+		return p.validateBinding(m, outcome, sources, compatible)
 	case DiscardTarget:
 		if m.Target.Name != "" || m.Target.Type != nil || m.Target.TypeOwnsHeap || m.Target.Fresh || m.Target.HoldsHeap {
 			return fmt.Errorf("plan %s: discard target carries a name, type, or binding state", p.Label)
 		}
-		if m.Transfer != Store {
-			return fmt.Errorf("plan %s: discard of %%t%d slot %d carries a transfer", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
+		for _, transfer := range m.Transfers {
+			if transfer != Store {
+				return fmt.Errorf("plan %s: discard of %%t%d slot %d carries a transfer", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
+			}
 		}
 	default:
 		return fmt.Errorf("plan %s: unknown target kind %d", p.Label, m.Target.Kind)
@@ -218,32 +276,43 @@ func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
 }
 
 // validateBinding checks a local or output mapping: a named target of a
-// compatible type that takes its outcome by the derived transfer.
-func (p *AssignPlan) validateBinding(m Mapping, slot Slot, compatible func(target, outcome Type) bool) error {
+// compatible type that takes its outcome, from each eval that can supply it,
+// by the derived transfer.
+func (p *AssignPlan) validateBinding(m Mapping, outcome Type, sources []source, compatible func(target, outcome Type) bool) error {
 	if m.Target.Name == "" {
 		return fmt.Errorf("plan %s: binding target has no name", p.Label)
 	}
 	if m.Target.HoldsHeap && m.Target.Fresh {
 		return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
 	}
-	if !compatible(m.Target.Type, slot.Type) {
+	if !compatible(m.Target.Type, outcome) {
 		return fmt.Errorf("plan %s: target %s %s mapped to incompatible outcome %%t%d slot %d of type %s",
-			p.Label, m.Target.Type.String(), m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
+			p.Label, m.Target.Type.String(), m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, outcome.String())
 	}
 
-	return p.validateBindingTransfer(m, slot)
+	for i, src := range sources {
+		if err := p.validateSourceTransfer(m, src, m.Transfers[i], len(sources) == 1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// validateBindingTransfer pins the transfer Elaborate must have derived (plan
-// §8, §14.20-22). A heap transfer into a target declared non-owning is
-// legal: the binding then holds heap state the next statement reads back.
-func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
+// validateSourceTransfer pins the transfer Elaborate must have derived for
+// one eval that can supply m's value (plan §8, §14.20-22); alone says it is
+// the only one. A heap transfer into a target declared non-owning is legal:
+// the binding then holds heap state the next statement reads back.
+func (p *AssignPlan) validateSourceTransfer(m Mapping, src source, transfer Transfer, alone bool) error {
+	slot := src.slot()
 	want := Store
 	switch slot.Ownership {
 	case Owned:
 		want = Move
 	case Borrowed:
-		if m.Transfer == Move {
+		if transfer == Move {
+			if !alone {
+				return fmt.Errorf("plan %s: target %s takes %s's old value from %%t%d, one side of a first, which supplies it on one path only", p.Label, m.Target.Name, slot.Owner, src.ref.Outcome)
+			}
 			replacement, replaced := p.replacement(slot.Owner)
 			if !replaced {
 				return fmt.Errorf("plan %s: target %s takes %s's old value, but %s is not replaced in this group", p.Label, m.Target.Name, slot.Owner, slot.Owner)
@@ -259,9 +328,9 @@ func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 			want = Copy
 		}
 	}
-	if m.Transfer != want {
+	if transfer != want {
 		return fmt.Errorf("plan %s: target %s = %%t%d slot %d uses transfer %s; ownership requires %s",
-			p.Label, m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, m.Transfer, want)
+			p.Label, m.Target.Name, src.ref.Outcome, src.ref.Slot, transfer, want)
 	}
 
 	return nil
@@ -279,25 +348,27 @@ func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 
 // validateReleases checks plan §14.19-21: every owned outcome and every
 // replaced held value is consumed or released exactly once, on each path. An
-// owned outcome a binding takes where it yields is released where it skips.
+// owned outcome a binding takes where it yields is released where it fails.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDrop := make(map[OutcomeRef]bool)
 	needSkipDrop := make(map[OutcomeRef]bool)
 	for _, m := range p.Commit {
-		slot := p.Evals[m.Outcome.Outcome].Slots[m.Outcome.Slot]
-		// Only a moved borrow takes its owner's old value; moving an owned
-		// outcome does not itself take the target's old value.
-		if slot.Ownership == Borrowed && m.Transfer == Move {
-			taken[slot.Owner]++
-		}
-		if slot.Ownership != Owned {
-			continue
-		}
-		if m.Target.Kind == DiscardTarget {
-			needDrop[m.Outcome] = true
-		} else if p.maySkip(m) {
-			needSkipDrop[m.Outcome] = true
+		for i, src := range p.sources(m.Outcome) {
+			slot := src.slot()
+			// Only a moved borrow takes its owner's old value; moving an owned
+			// outcome does not itself take the target's old value.
+			if slot.Ownership == Borrowed && m.Transfers[i] == Move {
+				taken[slot.Owner]++
+			}
+			if slot.Ownership != Owned {
+				continue
+			}
+			if m.Target.Kind == DiscardTarget {
+				needDrop[src.ref] = true
+			} else if src.eval.MayFail() {
+				needSkipDrop[src.ref] = true
+			}
 		}
 	}
 	for owner, n := range taken {
@@ -350,7 +421,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 	for ref := range needSkipDrop {
 		if !droppedSkipped[ref] {
-			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d is never released where it skips", p.Label, ref.Outcome, ref.Slot)
+			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d is never released where it fails", p.Label, ref.Outcome, ref.Slot)
 		}
 	}
 	for name := range replaced {
@@ -362,13 +433,30 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	return nil
 }
 
-func (p *AssignPlan) slot(ref OutcomeRef) (Slot, error) {
-	if ref.Outcome < 0 || int(ref.Outcome) >= len(p.Evals) {
-		return Slot{}, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Label, ref.Outcome)
+// outcomeType returns the type of the outcome slot a mapping takes: a slot of
+// an eval outside a first, or a first's one slot.
+func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
+	for _, ev := range p.Evals {
+		if ev.Result != ref.Outcome {
+			continue
+		}
+		if ref.Slot < 0 || ref.Slot >= len(ev.Slots) {
+			return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+		}
+		return ev.Slots[ref.Slot].Type, nil
 	}
-	slots := p.Evals[ref.Outcome].Slots
-	if ref.Slot < 0 || ref.Slot >= len(slots) {
-		return Slot{}, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+	for _, f := range p.Firsts {
+		if f.Result == ref.Outcome {
+			if ref.Slot != 0 {
+				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+			}
+			return f.Type, nil
+		}
+		for _, side := range f.Sides {
+			if side.Result == ref.Outcome {
+				return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of first %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, f.Result)
+			}
+		}
 	}
-	return slots[ref.Slot], nil
+	return nil, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Label, ref.Outcome)
 }

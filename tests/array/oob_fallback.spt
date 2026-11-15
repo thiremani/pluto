@@ -1,0 +1,109 @@
+# A fallback after an index read (PIR plan §16 Step 5): || takes its next side
+# where the read is out of bounds. It tests whether the read yielded, never
+# the value it gave.
+
+arr = [10 0 30]
+sarr = ["x" "y"]
+
+# a fresh target takes the fallback only where the read is out of bounds
+freshOut = arr[9] || -1
+freshIn = arr[0] || -1
+"Fresh: -freshOut -freshIn"
+
+# an in-bounds zero is a value, so it does not fall back
+zeroIn = arr[1] || -1
+"InBoundsZero: -zeroIn"
+
+# an existing target is written on either path
+kept = 7
+"ExistingSeed: -kept"
+kept = arr[9] || -1
+"ExistingOut: -kept"
+kept = arr[2] || -1
+"ExistingIn: -kept"
+
+# a heap read moves into its target, and the fallback is copied when it is a
+# static string or a binding and moved when it is a temporary
+shared = "heap" ⊕ "!"
+text = "old" ⊕ "!"
+"HeapSeed: -text"
+text = sarr[9] || "static"
+"HeapStatic: -text"
+text = sarr[9] || shared
+"HeapBorrowed: -text -shared"
+text = sarr[9] || (shared ⊕ "?")
+"HeapOwned: -text"
+text = sarr[1] || shared
+"HeapIn: -text"
+
+# a fresh heap target has no value to release
+freshText = sarr[9] || shared
+"HeapFresh: -freshText"
+
+# a chain takes the first read in bounds, and its last side when none is
+chainSecond = arr[9] || arr[2] || -1
+chainLast = arr[9] || arr[8] || -1
+"Chain: -chainSecond -chainLast"
+
+# a last side that reads out of bounds too leaves the target as it was and a
+# fresh one at its zero, and what that side built is released
+both = 5
+both = arr[9] || arr[8]
+freshBoth = sarr[9] || (shared ⊕ sarr[8])
+"BothOut: -both [-freshBoth]"
+
+# a read in bounds commits though a later side could have failed, and the
+# value it replaces is released
+firstIn = "old" ⊕ "!"
+firstIn = sarr[0] || sarr[9]
+"FirstIn: -firstIn"
+
+# the fallback runs only where the read failed
+lazyOut = arr[9] || Loud(4)
+lazyIn = arr[0] || Loud(5)
+"Lazy: -lazyOut -lazyIn"
+
+# a discard releases what either side built
+_ = sarr[9] || (shared ⊕ "?")
+_ = sarr[0] || (shared ⊕ "?")
+
+# each value of a statement falls back alone
+sibA, sibB, sibC = arr[9] || -1, arr[9], arr[2] || -2
+"Siblings: -sibA -sibB -sibC"
+
+# a function output takes either side as a local does
+outNum = ElemElse(arr, 9, -1)
+outStr = ElemElse(sarr, 9, "none")
+outHit = ElemElse(sarr, 0, "none")
+"Output: -outNum -outStr -outHit"
+
+# in a print the fallback resolves the read before the line is judged
+"Print:", arr[9] || -1, arr[2] || -1
+
+# in a cell it resolves the read before the cell zero-fills
+cells = [arr[9] || -1 arr[1] || -1]
+"Cell: -cells"
+
+# in a call argument it lets the call run
+squared = Square(arr[9] || 3)
+"CallArgument: -squared"
+
+# under an operator the statement still commits
+under = (arr[9] || -1) + 100
+"Operator: -under"
+
+# under a gate it is the gated value
+gated = 4
+"GatedSeed: -gated"
+gated = arr[1] > -1 arr[9] || 8
+"Gated: -gated"
+
+# a range elsewhere in the statement repeats the fallback per iteration
+step = 0:3
+stepped = [step + (arr[9] || 100)]
+"Ranged: -stepped"
+
+# a comparison and a read fail over to the same last side
+count = 3
+mixed = count > 5 || arr[9] || -4
+"Mixed: -mixed"
