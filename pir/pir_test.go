@@ -503,6 +503,9 @@ func TestValidateRejects(t *testing.T) {
 		{"FallbackOutsideFirst", func(p *AssignPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), UseFallback
 		}, "eval %t0 falls back, but is no side of a first"},
+		{"UnknownScope", func(p *AssignPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), 9
+		}, "eval %t0 has unknown out-of-bounds scope 9"},
 		{"AccessInLiteralCell", func(p *AssignPlan) {
 			p.Evals[0].Expr = &ast.ArrayLiteral{Rows: [][]ast.Expression{{read("arr", 0)}}}
 		}, "eval %t0 holds a checked access in a literal cell"},
@@ -718,7 +721,10 @@ func TestValidatePrint(t *testing.T) {
 		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
 		{"MaySkip", func(p *PrintPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-		}, "print takes %t0, which may skip"},
+		}, "print takes %t0, which may fail"},
+		{"FallsBack", func(p *PrintPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), UseFallback
+		}, "print takes %t0, which may fail"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

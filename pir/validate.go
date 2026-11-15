@@ -115,8 +115,8 @@ func ValidatePrint(p *PrintPlan) error {
 		if err := validateEval(p.Label, i, ev); err != nil {
 			return err
 		}
-		if ev.MaySkip() {
-			return fmt.Errorf("plan %s: print takes %%t%d, which may skip, and a print resolves no skip yet", p.Label, i)
+		if ev.MayFail() {
+			return fmt.Errorf("plan %s: print takes %%t%d, which may fail, and a print resolves no failed access yet", p.Label, i)
 		}
 	}
 
@@ -179,6 +179,12 @@ func validateEval(plan string, i int, ev *Eval) error {
 // out-of-bounds scope, which its eval records. A literal cell resolves a
 // failed access itself, a scope no plan node records.
 func validateAccesses(plan string, i int, ev *Eval) error {
+	switch ev.OnOOB {
+	case NoChecks, SkipOutcome, UseFallback:
+	default:
+		return fmt.Errorf("plan %s: eval %%t%d has unknown out-of-bounds scope %d", plan, i, ev.OnOOB)
+	}
+
 	outcome, cell := checkedAccesses(ev.Expr, false)
 	if cell > 0 {
 		return fmt.Errorf("plan %s: eval %%t%d holds a checked access in a literal cell, a scope no plan node records", plan, i)

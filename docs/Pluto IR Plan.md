@@ -1494,7 +1494,8 @@ so it never sees that the other side replaces the owner.
 The validator enforces invariant 15 on every eval: an access outside a
 literal cell needs the eval's scope, and a scope needs an access. An access
 in a literal cell is rejected, because the cell resolves it and no plan node
-records that scope yet; so is a print eval that may skip.
+records that scope yet; so is a print eval that may fail, and a scope the
+plan does not define.
 
 The lowerer emits the guard from the plan. An eval with the scope runs under
 a bounds guard of its own, which each read ANDs its in-bounds bit into, and
@@ -1575,7 +1576,9 @@ before it failed, and stages each value and yield bit in memory, since a
 side after the first runs on a path of its own. The mapping then lands on
 the path of the side that yielded, with the release of what each failed side
 built on the way, so its binding sits in memory: an existing one moves
-there, and a fresh one starts unwritten when the `first` always yields.
+there, and a fresh one starts unwritten when the `first` always yields. A
+failed read can hold heap state: a row read past the end of a matrix builds
+a zero row, which `drop %t1 [on-fallback]` releases.
 
 Staying legacy: a `||` after a read anywhere but the whole of an
 assignment's value, which is in a print, a literal cell, a call argument,

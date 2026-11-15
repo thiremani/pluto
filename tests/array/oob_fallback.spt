@@ -58,6 +58,15 @@ firstIn = "old" ⊕ "!"
 firstIn = sarr[0] || sarr[9]
 "FirstIn: -firstIn"
 
+# a row read out of bounds still builds a zero row, which is released where
+# the fallback takes over
+matrix = [
+    1 2
+    3 4
+]
+rowOut = matrix[9] || [7 8]
+"RowOut: -rowOut"
+
 # the fallback runs only where the read failed
 lazyOut = arr[9] || Loud(4)
 lazyIn = arr[0] || Loud(5)
@@ -66,6 +75,9 @@ lazyIn = arr[0] || Loud(5)
 # a discard releases what either side built
 _ = sarr[9] || (shared ⊕ "?")
 _ = sarr[0] || (shared ⊕ "?")
+
+# a discard releases no side that did not run
+_ = matrix[0] || [7 8]
 
 # each value of a statement falls back alone
 sibA, sibB, sibC = arr[9] || -1, arr[9], arr[2] || -2

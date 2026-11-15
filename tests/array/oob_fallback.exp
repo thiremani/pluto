@@ -12,6 +12,7 @@ HeapFresh: heap!
 Chain: 30 -1
 BothOut: 5 []
 FirstIn: x
+RowOut: [7 8]
 called 4
 Lazy: 4 10
 Siblings: -1 0 30
