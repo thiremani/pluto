@@ -646,7 +646,8 @@ access does: `[on-oob=skip]` where it skips the outcome, and
 each
 binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views, so `[on-oob=skip]`
-always pairs with a policy on a mapping; a `first` binds its outcome on a line
+pairs with a policy on each binding the skip reaches, while a mapping to
+`_`, which keeps nothing, carries none; a `first` binds its outcome on a line
 of its own, `%t0 = first I64`, with its sides two levels in and each side
 after the first under a `fallback` label one level in, so every side lines up
 and none carries a `yield` line, a side's value being its last outcome;
@@ -1453,9 +1454,9 @@ assignment whose value holds an index read plans (matrix row 7, and row 5d
 for a `_` target), at the script root and in a body without a range
 parameter. The read stays inside its `eval`, which records the scope every
 access in it has: a failed read skips the eval's outcome, every slot of it
-(`[on-oob=skip]`). Each mapping of that outcome records what its target
-then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the builder
-and checked by the validator against the outcome and the target's
+(`[on-oob=skip]`). Each mapping of that outcome to a binding records what
+its target then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the
+builder and checked by the validator against the outcome and the target's
 freshness.
 
 ```text
