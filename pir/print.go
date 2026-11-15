@@ -235,7 +235,7 @@ func (p *AssignPlan) dropString(d Drop) string {
 	case DropReplaced:
 		return "drop " + d.Target + " [old]"
 	case DropSkipped:
-		return "drop " + outcomeString(p.Evals, d.Outcome) + " [skipped]"
+		return "drop " + outcomeString(p.Evals, d.Outcome) + " [on-skip]"
 	}
 	return "drop " + outcomeString(p.Evals, d.Outcome)
 }

@@ -1165,7 +1165,7 @@ keep, fresh, s, h1, h2, r`)
 
     commit
         Str s <- %t0 [move] [on-skip=keep]
-        drop %t0 [skipped]
+        drop %t0 [on-skip]
         drop s [old]
 `, plans[6].Render(true))
 	// Row 5d: a discard keeps nothing, and its outcome is released either way.
@@ -1204,7 +1204,7 @@ keep, fresh, s, h1, h2, r`)
     commit
         Str h1 <- %t0 [copy]
         Str h2 <- %t1 [move] [on-skip=keep]
-        drop %t1 [skipped]
+        drop %t1 [on-skip]
         drop h1 [old]
         drop h2 [old]
 `, plans[12].Render(true))

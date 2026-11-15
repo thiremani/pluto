@@ -809,8 +809,8 @@ func TestRenderSkip(t *testing.T) {
         Str kept <- %t0 [move] [on-skip=keep]
         Str fresh <- %t1 [move] [on-skip=zero]
         _ <- %t2
-        drop %t0 [skipped]
-        drop %t1 [skipped]
+        drop %t0 [on-skip]
+        drop %t1 [on-skip]
         drop %t2
         drop kept [old]
 `

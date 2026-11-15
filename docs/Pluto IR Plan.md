@@ -649,7 +649,7 @@ copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
 for a plain store — and follows the mappings with the derived releases,
-`drop %t1` for a discarded owned outcome, `drop %t0 [skipped]` for what an
+`drop %t1` for a discarded owned outcome, `drop %t0 [on-skip]` for what an
 owned outcome built before it skipped, and `drop x [old]` for a
 replaced target's old value, in the order they run (§8). Each names the
 value it frees, which exists on one path only: a skipped outcome's target
@@ -1449,7 +1449,7 @@ assign skeep
 
     commit
         Str skeep <- %t0 [move] [on-skip=keep]
-        drop %t0 [skipped]
+        drop %t0 [on-skip]
         drop skeep [old]
 ```
 
@@ -1464,7 +1464,7 @@ fails, and `y = arr[oob] + Loud(1)` does not. Step 6's checks-first order
 both at run time (`PosNotYet`, `PosValueRead`).
 Elaboration derives the releases of both paths. An owned outcome moves into
 its binding where it yielded and is released where it skipped
-(`drop %t0 [skipped]`); one mapped to `_` is released either way; and a
+(`drop %t0 [on-skip]`); one mapped to `_` is released either way; and a
 replaced value is released only where its mapping committed. A borrow takes
 its owner's old value (§8) only when its own mapping and the owner's
 replacement both always commit. In `a, b = b, sarr[9]` the replacement of
