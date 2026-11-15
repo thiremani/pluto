@@ -210,8 +210,8 @@ func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
 		}
 	}
 	if m.OnSkip != want {
-		return fmt.Errorf("plan %s: target %s <- %%t%d slot %d has skip policy %s; its outcome and target require %s",
-			p.Label, targetString(m.Target, false), m.Outcome.Outcome, m.Outcome.Slot, m.OnSkip, want)
+		return fmt.Errorf("plan %s: target %s = %%t%d slot %d has skip policy %s; its outcome and target require %s",
+			p.Label, targetString(m.Target), m.Outcome.Outcome, m.Outcome.Slot, m.OnSkip, want)
 	}
 
 	return nil
@@ -260,7 +260,7 @@ func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 		}
 	}
 	if m.Transfer != want {
-		return fmt.Errorf("plan %s: target %s <- %%t%d slot %d uses transfer %s; ownership requires %s",
+		return fmt.Errorf("plan %s: target %s = %%t%d slot %d uses transfer %s; ownership requires %s",
 			p.Label, m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, m.Transfer, want)
 	}
 

@@ -89,8 +89,8 @@ s`)
         %t1 = eval I64 a
 
     commit
-        a <- %t0
-        b <- %t1
+        a = %t0
+        b = %t1
 `, plans[2].Render(false))
 
 	require.Equal(t, `assign b
@@ -100,7 +100,7 @@ s`)
         %t0 = eval I64 a + (2 * 3)
 
     commit
-        I64 b <- %t0
+        b = %t0
 `, plans[1].Render(true))
 
 	require.Equal(t, `assign _
@@ -110,7 +110,7 @@ s`)
         %t0 = eval I64 7
 
     commit
-        _ <- %t0
+        _ = %t0
 `, plans[3].Render(false))
 
 	require.Equal(t, `assign r
@@ -120,7 +120,7 @@ s`)
         %t0 = eval I64:I64:I64 0:10:2
 
     commit
-        r <- %t0
+        r = %t0
 `, plans[4].Render(false))
 
 	require.Equal(t, `assign s
@@ -130,7 +130,7 @@ s`)
         %t0 = eval I64:I64:I64 r
 
     commit
-        s <- %t0
+        s = %t0
 `, plans[5].Render(false))
 }
 
@@ -329,7 +329,7 @@ func TestPlanGoldenRangeDiscard(t *testing.T) {
         %t0 = eval I64:I64:I64 0:3
 
     commit
-        _ <- %t0
+        _ = %t0
 `, plans[0].Render(false))
 }
 
@@ -347,7 +347,7 @@ func TestPlanGoldenUnicode(t *testing.T) {
         %t0 = eval F64 3.14
 
     commit
-        π <- %t0
+        π = %t0
 `, plans[0].Render(false))
 	require.Equal(t, `assign τ
     source "τ = π"
@@ -356,7 +356,7 @@ func TestPlanGoldenUnicode(t *testing.T) {
         %t0 = eval F64 π
 
     commit
-        τ <- %t0
+        τ = %t0
 `, plans[1].Render(false))
 }
 
@@ -374,7 +374,7 @@ func TestPlanGoldenPrefix(t *testing.T) {
         %t0 = eval I64 -a
 
     commit
-        n <- %t0
+        n = %t0
 `, plans[1].Render(false))
 }
 
@@ -393,7 +393,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
         %t0 = eval I64 t0
 
     commit
-        x <- %t0
+        x = %t0
 `, plans[1].Render(false))
 	require.Equal(t, `assign t0
     source "t0 = 1"
@@ -402,7 +402,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
         %t0 = eval I64 1
 
     commit
-        t0 <- %t0
+        t0 = %t0
 `, plans[0].Render(false))
 	require.Equal(t, `assign discard
     source "discard = 2"
@@ -411,7 +411,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
         %t0 = eval I64 2
 
     commit
-        discard <- %t0
+        discard = %t0
 `, plans[2].Render(false))
 	require.Equal(t, `assign _
     source "_ = 3"
@@ -420,7 +420,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
         %t0 = eval I64 3
 
     commit
-        _ <- %t0
+        _ = %t0
 `, plans[3].Render(false))
 }
 
@@ -439,21 +439,21 @@ h1, h2`)
     source "h1 = (\"foo\" ⊕ \"bar\")"
 
     execute
-        %t0 = eval Str [owned] "foo" ⊕ "bar"
+        %t0 = eval owned Str "foo" ⊕ "bar"
 
     commit
-        Str h1 <- %t0 [move]
+        h1 = %t0 [move]
 `, plans[0].Render(true))
 	require.Equal(t, `assign h1, h2
     source "h1, h2 = h2, h1"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [borrowed=h1] h1
+        %t0 = eval borrowed Str h2
+        %t1 = eval borrowed Str h1
 
     commit
-        Str h1 <- %t0 [move]
-        Str h2 <- %t1 [move]
+        h1 = %t0 [move]
+        h2 = %t1 [move]
 `, plans[2].Render(true))
 }
 
@@ -472,12 +472,12 @@ d1, d2`)
     source "d1, d2 = d1, d1"
 
     execute
-        %t0 = eval Str [borrowed=d1] d1
-        %t1 = eval Str [borrowed=d1] d1
+        %t0 = eval borrowed Str d1
+        %t1 = eval borrowed Str d1
 
     commit
-        Str d1 <- %t0 [move]
-        Str d2 <- %t1 [copy]
+        d1 = %t0 [move]
+        d2 = %t1 [copy]
         drop d2 [old]
 `, plans[2].Render(true))
 }
@@ -502,41 +502,41 @@ x, y`)
     source "x = (x ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [owned] x ⊕ "!"
+        %t0 = eval owned Str x ⊕ "!"
 
     commit
-        Str x <- %t0 [move]
+        x = %t0 [move]
         drop x [old]
 `, plans[1].Render(true))
 	require.Equal(t, `assign _
     source "_ = (x ⊕ \"?\")"
 
     execute
-        %t0 = eval Str [owned] x ⊕ "?"
+        %t0 = eval owned Str x ⊕ "?"
 
     commit
-        _ <- %t0
+        _ = %t0
         drop %t0
 `, plans[2].Render(true))
 	require.Equal(t, `assign _
     source "_ = x"
 
     execute
-        %t0 = eval Str [borrowed=x] x
+        %t0 = eval borrowed Str x
 
     commit
-        _ <- %t0
+        _ = %t0
 `, plans[3].Render(true))
 	require.Equal(t, `assign x, y
     source "x, y = (y ⊕ \"!\"), x"
 
     execute
-        %t0 = eval Str [owned] y ⊕ "!"
-        %t1 = eval Str [borrowed=x] x
+        %t0 = eval owned Str y ⊕ "!"
+        %t1 = eval borrowed Str x
 
     commit
-        Str x <- %t0 [move]
-        Str y <- %t1 [move]
+        x = %t0 [move]
+        y = %t1 [move]
         drop y [old]
 `, plans[5].Render(true))
 }
@@ -562,7 +562,7 @@ s, t`)
         %t0 = eval Str "hi"
 
     commit
-        Str s <- %t0 [copy]
+        s = %t0 [copy]
 `, plans[0].Render(true))
 	require.Equal(t, `assign t
     source "t = g"
@@ -571,7 +571,7 @@ s, t`)
         %t0 = eval Str g
 
     commit
-        Str t <- %t0
+        t = %t0
 `, plans[3].Render(true))
 }
 
@@ -594,38 +594,38 @@ arr1, arr2`)
     source "arr1 = [1 2 3]"
 
     execute
-        %t0 = eval [I64] [owned] [1 2 3]
+        %t0 = eval owned [I64] [1 2 3]
 
     commit
-        [I64] arr1 <- %t0 [move]
+        arr1 = %t0 [move]
 `, plans[0].Render(true))
 	require.Equal(t, `assign arr2
     source "arr2 = arr1"
 
     execute
-        %t0 = eval [I64] [borrowed=arr1] arr1
+        %t0 = eval borrowed [I64] arr1
 
     commit
-        [I64] arr2 <- %t0 [copy]
+        arr2 = %t0 [copy]
 `, plans[1].Render(true))
 	require.Equal(t, `assign arr2
     source "arr2 = [4 5 6]"
 
     execute
-        %t0 = eval [I64] [owned] [4 5 6]
+        %t0 = eval owned [I64] [4 5 6]
 
     commit
-        [I64] arr2 <- %t0 [move]
+        arr2 = %t0 [move]
         drop arr2 [old]
 `, plans[2].Render(true))
 	require.Equal(t, `assign arr1
     source "arr1 = []0"
 
     execute
-        %t0 = eval [I64] [owned] []0
+        %t0 = eval owned [I64] []0
 
     commit
-        [I64] arr1 <- %t0 [move]
+        arr1 = %t0 [move]
         drop arr1 [old]
 `, plans[3].Render(true))
 }
@@ -660,7 +660,7 @@ n, a, s2.age, col, t2`)
         %t0 = eval Str p.name
 
     commit
-        Str n <- %t0
+        n = %t0
 `, plans[0].Render(true))
 	require.Equal(t, `assign s2
     source "s2 = p"
@@ -669,34 +669,34 @@ n, a, s2.age, col, t2`)
         %t0 = eval Person{name:Str age:I64} p
 
     commit
-        Person{name:Str age:I64} s2 <- %t0
+        s2 = %t0
 `, plans[2].Render(true))
 	require.Equal(t, `assign scores
     source "scores = [\n  : Name Score\n    \"Ada\" 10\n]"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] [owned] [\n  : Name Score\n    "Ada" 10\n]
+        %t0 = eval owned Table[Name:Str Score:I64] [\n  : Name Score\n    "Ada" 10\n]
 
     commit
-        Table[Name:Str Score:I64] scores <- %t0 [move]
+        scores = %t0 [move]
 `, plans[3].Render(true))
 	require.Equal(t, `assign col
     source "col = scores.Score"
 
     execute
-        %t0 = eval [I64] [owned] scores.Score
+        %t0 = eval owned [I64] scores.Score
 
     commit
-        [I64] col <- %t0 [move]
+        col = %t0 [move]
 `, plans[4].Render(true))
 	require.Equal(t, `assign t2
     source "t2 = scores"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] [borrowed=scores] scores
+        %t0 = eval borrowed Table[Name:Str Score:I64] scores
 
     commit
-        Table[Name:Str Score:I64] t2 <- %t0 [copy]
+        t2 = %t0 [copy]
 `, plans[5].Render(true))
 }
 
@@ -720,21 +720,21 @@ copy, other, text`)
     source "text, other = (text ⊕ \"!\"), text"
 
     execute
-        %t0 = eval Str [owned] text ⊕ "!"
-        %t1 = eval Str [borrowed=text] text
+        %t0 = eval owned Str text ⊕ "!"
+        %t1 = eval borrowed Str text
 
     commit
-        Str text <- %t0 [move]
-        Str other <- %t1 [move]
+        text = %t0 [move]
+        other = %t1 [move]
 `, plans[1].Render(true))
 	require.Equal(t, `assign copy
     source "copy = other"
 
     execute
-        %t0 = eval Str [borrowed=other] other
+        %t0 = eval borrowed Str other
 
     commit
-        Str copy <- %t0 [copy]
+        copy = %t0 [copy]
 `, plans[2].Render(true))
 	require.Equal(t, `assign other
     source "other = \"new\""
@@ -743,7 +743,7 @@ copy, other, text`)
         %t0 = eval Str "new"
 
     commit
-        Str other <- %t0 [copy]
+        other = %t0 [copy]
         drop other [old]
 `, plans[3].Render(true))
 	require.True(t, plans[3].Commit[0].Target.TypeOwnsHeap)
@@ -764,7 +764,7 @@ func TestPlanGoldenMultilineString(t *testing.T) {
         %t0 = eval Str "line one\nline two"
 
     commit
-        s <- %t0
+        s = %t0
 `, plans[0].Render(false))
 }
 
@@ -791,10 +791,10 @@ col, direct, taken, headerOnly`)
     source "col = taken.Value"
 
     execute
-        %t0 = eval [I64] [owned] taken.Value
+        %t0 = eval owned [I64] taken.Value
 
     commit
-        [I64] col <- %t0 [move]
+        col = %t0 [move]
 `, plans[4].Render(true))
 }
 
@@ -835,29 +835,29 @@ d, l, r, n, copied.age, tag`)
         %t0 = eval I64 Twice(d) + 1
 
     commit
-        I64 d <- %t0
+        d = %t0
 `, plans[1].Render(true))
 	require.Equal(t, `assign l, r
     source "l, r = twoStr(\"a\", \"b\")"
 
     execute
-        %t0 = eval Str [owned], Str [owned] twoStr("a", "b")
+        %t0 = eval owned Str, owned Str twoStr("a", "b")
 
     commit
-        Str l <- %t0#0 [move]
-        Str r <- %t0#1 [move]
+        l = %t0#0 [move]
+        r = %t0#1 [move]
 `, plans[2].Render(true))
 	require.Equal(t, `assign l, _, n
     source "l, _, n = twoStr(l, r), 9"
 
     execute
-        %t0 = eval Str [owned], Str [owned] twoStr(l, r)
+        %t0 = eval owned Str, owned Str twoStr(l, r)
         %t1 = eval I64 9
 
     commit
-        Str l <- %t0#0 [move]
-        _ <- %t0#1
-        I64 n <- %t1
+        l = %t0#0 [move]
+        _ = %t0#1
+        n = %t1
         drop %t0#1
         drop l [old]
 `, plans[3].Render(true))
@@ -868,8 +868,8 @@ d, l, r, n, copied.age, tag`)
         %t0 = eval Person{name:Str age:I64}, Str Copy(p)
 
     commit
-        Person{name:Str age:I64} copied <- %t0#0
-        Str tag <- %t0#1
+        copied = %t0#0
+        tag = %t0#1
 `, plans[4].Render(true))
 }
 
@@ -935,7 +935,7 @@ n, o, k, p, q, one, acc`)
             %t0 = eval I64 a + 1
 
         commit
-            t <- %t0
+            t = %t0
 `, plans[8].Render(false))
 	// Row 14: a direct scalar output is a plain store.
 	require.Equal(t, `    assign res
@@ -945,17 +945,17 @@ n, o, k, p, q, one, acc`)
             %t0 = eval I64 t * 2
 
         commit
-            output I64 res <- %t0
+            output res = %t0
 `, plans[9].Render(true))
 	// Row 14i: a heap output takes an owned outcome and releases what it held.
 	require.Equal(t, `    assign out
         source "out = (s ⊕ \"!\")"
 
         execute
-            %t0 = eval Str [owned] s ⊕ "!"
+            %t0 = eval owned Str s ⊕ "!"
 
         commit
-            output Str out <- %t0 [move]
+            output out = %t0 [move]
             drop out [old]
 `, plans[10].Render(true))
 	// A borrowed input survives the call, so the output gets its own copy.
@@ -963,10 +963,10 @@ n, o, k, p, q, one, acc`)
         source "kept = s"
 
         execute
-            %t0 = eval Str [borrowed=s] s
+            %t0 = eval borrowed Str s
 
         commit
-            output Str kept <- %t0 [copy]
+            output kept = %t0 [copy]
             drop kept [old]
 `, plans[11].Render(true))
 	// A static string entering an output whose type owns heap is copied.
@@ -977,7 +977,7 @@ n, o, k, p, q, one, acc`)
             %t0 = eval Str "none"
 
         commit
-            output Str out <- %t0 [copy]
+            output out = %t0 [copy]
             drop out [old]
 `, plans[12].Render(true))
 }
@@ -1062,8 +1062,8 @@ m`)
     source "h, (h ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [borrowed=h] h
-        %t1 = eval Str [owned] h ⊕ "!"
+        %t0 = eval borrowed Str h
+        %t1 = eval owned Str h ⊕ "!"
         print %t0, %t1 [move]
 `, plans[4].Render(true))
 	// Row 29c: every slot of a multi-output call prints, each owned one taken.
@@ -1071,14 +1071,14 @@ m`)
     source "Echo(h)"
 
     execute
-        %t0 = eval Str [owned], Str [owned] Echo(h)
+        %t0 = eval owned Str, owned Str Echo(h)
         print %t0#0 [move], %t0#1 [move]
 `, plans[5].Render(true))
 	require.Equal(t, `print
     source "([1 2] ⊕ [3])"
 
     execute
-        %t0 = eval [I64] [owned] [1 2] ⊕ [3]
+        %t0 = eval owned [I64] [1 2] ⊕ [3]
         print %t0 [move]
 `, plans[6].Render(true))
 	// A print in a function body sits in that function's block.
@@ -1141,7 +1141,7 @@ keep, fresh, s, h1, h2, r`)
         %t0 = eval I64 keep * arr[5] [on-oob=skip]
 
     commit
-        keep <- %t0 [on-skip=keep]
+        keep = %t0 [on-skip=keep]
 `, plans[3].Render(false))
 	// A target the statement introduces holds zero, and a call beside the read
 	// stays in the read's eval, whose own order decides whether it runs
@@ -1153,7 +1153,7 @@ keep, fresh, s, h1, h2, r`)
         %t0 = eval I64 Loud(1) + arr[9] [on-oob=skip]
 
     commit
-        fresh <- %t0 [on-skip=zero]
+        fresh = %t0 [on-skip=zero]
 `, plans[4].Render(false))
 	// What a skipped outcome built is released, and the old value only where
 	// the mapping replaced it.
@@ -1161,10 +1161,10 @@ keep, fresh, s, h1, h2, r`)
     source "s = (s ⊕ sarr[9])"
 
     execute
-        %t0 = eval Str [owned] s ⊕ sarr[9] [on-oob=skip]
+        %t0 = eval owned Str s ⊕ sarr[9] [on-oob=skip]
 
     commit
-        Str s <- %t0 [move] [on-skip=keep]
+        s = %t0 [move] [on-skip=keep]
         drop %t0 [on-skip]
         drop s [old]
 `, plans[6].Render(true))
@@ -1173,10 +1173,10 @@ keep, fresh, s, h1, h2, r`)
     source "_ = sarr[1]"
 
     execute
-        %t0 = eval Str [owned] sarr[1] [on-oob=skip]
+        %t0 = eval owned Str sarr[1] [on-oob=skip]
 
     commit
-        _ <- %t0
+        _ = %t0
         drop %t0
 `, plans[7].Render(true))
 	// A swap beside a read still moves: both of its mappings always commit.
@@ -1184,26 +1184,26 @@ keep, fresh, s, h1, h2, r`)
     source "h1, h2, keep = h2, h1, arr[arr[9]]"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [borrowed=h1] h1
+        %t0 = eval borrowed Str h2
+        %t1 = eval borrowed Str h1
         %t2 = eval I64 arr[arr[9]] [on-oob=skip]
 
     commit
-        Str h1 <- %t0 [move]
-        Str h2 <- %t1 [move]
-        I64 keep <- %t2 [on-skip=keep]
+        h1 = %t0 [move]
+        h2 = %t1 [move]
+        keep = %t2 [on-skip=keep]
 `, plans[10].Render(true))
 	// h2's replacement may skip, so h1 cannot take the value h2 holds.
 	require.Equal(t, `assign h1, h2
     source "h1, h2 = h2, sarr[9]"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [owned] sarr[9] [on-oob=skip]
+        %t0 = eval borrowed Str h2
+        %t1 = eval owned Str sarr[9] [on-oob=skip]
 
     commit
-        Str h1 <- %t0 [copy]
-        Str h2 <- %t1 [move] [on-skip=keep]
+        h1 = %t0 [copy]
+        h2 = %t1 [move] [on-skip=keep]
         drop %t1 [on-skip]
         drop h1 [old]
         drop h2 [old]
@@ -1216,6 +1216,6 @@ keep, fresh, s, h1, h2, r`)
             %t0 = eval I64 v[0] [on-oob=skip]
 
         commit
-            output res <- %t0 [on-skip=keep]
+            output res = %t0 [on-skip=keep]
 `, plans[17].Render(false))
 }

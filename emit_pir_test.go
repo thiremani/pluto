@@ -122,7 +122,7 @@ func TestEmitPIRConcise(t *testing.T) {
         %t0 = eval I64 5
 
     commit
-        x <- %t0
+        x = %t0
 
 assign y
     source "y = x"
@@ -131,7 +131,7 @@ assign y
         %t0 = eval I64 x
 
     commit
-        y <- %t0
+        y = %t0
 
 `, out.String())
 }
@@ -161,7 +161,7 @@ func TestEmitPIRFunctionBody(t *testing.T) {
         %t0 = eval I64 5
 
     commit
-        x <- %t0
+        x = %t0
 
 function I64 = F(I64)
     assign x
@@ -171,7 +171,7 @@ function I64 = F(I64)
             %t0 = eval I64 5
 
         commit
-            x <- %t0
+            x = %t0
 
     assign y
         source "y = x"
@@ -180,7 +180,7 @@ function I64 = F(I64)
             %t0 = eval I64 x
 
         commit
-            y <- %t0
+            y = %t0
 
     print
         source "\"y:\", y"
@@ -192,19 +192,25 @@ function I64 = F(I64)
 `, out.String())
 }
 
-// Plan §12: expanded view adds target types; an unmanaged slot carries no
-// ownership tag.
+// Plan §12: the expanded view adds a slot's ownership and a mapping's
+// transfer. `y = x` reads a heap string here, so the two views differ.
 func TestEmitPIRExpanded(t *testing.T) {
+	str := pirTestType("Str")
+	plan := emitPIRTestPlans("")[1].(*pir.AssignPlan)
+	plan.Evals[0].Slots[0] = pir.Slot{Type: str, Ownership: pir.Borrowed, Owner: "x"}
+	plan.Commit[0].Target.Type = str
+	plan.Commit[0].Transfer = pir.Copy
+
 	var out bytes.Buffer
-	require.NoError(t, emitPIR(&out, [][]pir.Plan{emitPIRTestPlans("")[:1]}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
-	require.Equal(t, `assign x
-    source "x = 5"
+	require.NoError(t, emitPIR(&out, [][]pir.Plan{{plan}}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
+	require.Equal(t, `assign y
+    source "y = x"
 
     execute
-        %t0 = eval I64 5
+        %t0 = eval borrowed Str x
 
     commit
-        I64 x <- %t0
+        y = %t0 [copy]
 
 `, out.String())
 }

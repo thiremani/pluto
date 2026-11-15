@@ -120,7 +120,7 @@ const (
 	ZeroOnSkip                     // a fresh binding holds its type's zero
 )
 
-// Mapping is one recorded target <- outcome commit pair; the lowerer
+// Mapping is one recorded target = outcome commit pair; the lowerer
 // consumes it as recorded, never rematching by name or position. It commits
 // where its outcome yielded and follows OnSkip elsewhere.
 type Mapping struct {

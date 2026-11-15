@@ -424,7 +424,7 @@ func TestValidateRejects(t *testing.T) {
 		}, "eval %t0 holds a checked access in a literal cell"},
 		{"SkipWithoutPolicy", func(p *AssignPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-		}, "target a <- %t0 slot 0 has skip policy none; its outcome and target require keep"},
+		}, "target a = %t0 slot 0 has skip policy none; its outcome and target require keep"},
 		{"KeepOnFreshTarget", func(p *AssignPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
 			p.Commit[0].Target.Fresh = true
@@ -435,7 +435,7 @@ func TestValidateRejects(t *testing.T) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 			p.Commit[0].OnSkip = KeepOnSkip
-		}, "target _ <- %t0 slot 0 has skip policy keep; its outcome and target require none"},
+		}, "target _ = %t0 slot 0 has skip policy keep; its outcome and target require none"},
 		{"MovedBorrowOfOwnerThatMaySkip", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfer = Move
@@ -545,8 +545,8 @@ func TestRenderPrint(t *testing.T) {
     source "\"x: -x\", s, Pair(n)"
 
     execute
-        %t0 = eval Str [borrowed=s] s
-        %t1 = eval I64, Str [owned] Pair(n)
+        %t0 = eval borrowed Str s
+        %t1 = eval I64, owned Str Pair(n)
         print "x: -x", %t0, %t1#0, %t1#1 [move]
 `
 	if got := p.Render(true); got != wantExpanded {
@@ -575,8 +575,8 @@ func TestRenderConcise(t *testing.T) {
         %t1 = eval I64 7
 
     commit
-        x <- %t0
-        _ <- %t1
+        x = %t0
+        _ = %t1
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -607,8 +607,8 @@ func TestRenderMultiOutput(t *testing.T) {
         %t0 = eval I64, Str Pair(x)
 
     commit
-        a <- %t0#0
-        b <- %t0#1
+        a = %t0#0
+        b = %t0#1
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -617,11 +617,11 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = Pair(x)"
 
     execute
-        %t0 = eval I64, Str [owned] Pair(x)
+        %t0 = eval I64, owned Str Pair(x)
 
     commit
-        I64 a <- %t0#0
-        Str b <- %t0#1 [move]
+        a = %t0#0
+        b = %t0#1 [move]
         drop b [old]
 `
 	if got := p.Render(true); got != wantExpanded {
@@ -630,8 +630,7 @@ func TestRenderMultiOutput(t *testing.T) {
 }
 
 // Plan §6, §12: a function body's plan sits one level in, under the header
-// its body opens with, and an output mapping is spelled `output`, before the
-// type in the expanded view.
+// its body opens with, and an output mapping is spelled `output`.
 func TestRenderFunctionOutput(t *testing.T) {
 	p := joinPlan()
 	Elaborate(p)
@@ -646,7 +645,7 @@ func TestRenderFunctionOutput(t *testing.T) {
             %t0 = eval Str a ⊕ b
 
         commit
-            output res <- %t0
+            output res = %t0
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("function output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -655,10 +654,10 @@ func TestRenderFunctionOutput(t *testing.T) {
         source "res = a ⊕ b"
 
         execute
-            %t0 = eval Str [owned] a ⊕ b
+            %t0 = eval owned Str a ⊕ b
 
         commit
-            output Str res <- %t0 [move]
+            output res = %t0 [move]
             drop res [old]
 `
 	if got := p.Render(true); got != wantExpanded {
@@ -699,8 +698,8 @@ func renderPanic(p *AssignPlan) (v any) {
 	return nil
 }
 
-// Plan §12: expanded view adds target types; an unmanaged slot carries no
-// ownership tag and an unmanaged store no transfer annotation.
+// Plan §12: the expanded view adds nothing to an unmanaged plan: an unmanaged
+// slot carries no ownership word and an unmanaged store no transfer annotation.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
@@ -712,8 +711,8 @@ func TestRenderExpanded(t *testing.T) {
         %t1 = eval I64 a
 
     commit
-        I64 a <- %t0
-        I64 b <- %t1
+        a = %t0
+        b = %t1
 `
 	if got != want {
 		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -728,12 +727,12 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval Str [borrowed=b] b
-        %t1 = eval Str [borrowed=a] a
+        %t0 = eval borrowed Str b
+        %t1 = eval borrowed Str a
 
     commit
-        Str a <- %t0 [move]
-        Str b <- %t1 [move]
+        a = %t0 [move]
+        b = %t1 [move]
 `
 	heapSwap := heapSwapPlan()
 	Elaborate(heapSwap)
@@ -744,12 +743,12 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
-        %t0 = eval Str [owned] x ⊕ "!"
-        %t1 = eval Str [owned] "a" ⊕ "b"
+        %t0 = eval owned Str x ⊕ "!"
+        %t1 = eval owned Str "a" ⊕ "b"
 
     commit
-        Str x <- %t0 [move]
-        _ <- %t1
+        x = %t0 [move]
+        _ = %t1
         drop %t1
         drop x [old]
 `
@@ -767,8 +766,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
         %t1 = eval Str "a" ⊕ "b"
 
     commit
-        x <- %t0
-        _ <- %t1
+        x = %t0
+        _ = %t1
 `
 	if got := replace.Render(false); got != want {
 		t.Fatalf("replace concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -790,9 +789,9 @@ func TestRenderSkip(t *testing.T) {
         %t2 = eval Str sarr[1] [on-oob=skip]
 
     commit
-        kept <- %t0 [on-skip=keep]
-        fresh <- %t1 [on-skip=zero]
-        _ <- %t2
+        kept = %t0 [on-skip=keep]
+        fresh = %t1 [on-skip=zero]
+        _ = %t2
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -801,14 +800,14 @@ func TestRenderSkip(t *testing.T) {
     source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
 
     execute
-        %t0 = eval Str [owned] sarr[9] [on-oob=skip]
-        %t1 = eval Str [owned] sarr[0] [on-oob=skip]
-        %t2 = eval Str [owned] sarr[1] [on-oob=skip]
+        %t0 = eval owned Str sarr[9] [on-oob=skip]
+        %t1 = eval owned Str sarr[0] [on-oob=skip]
+        %t2 = eval owned Str sarr[1] [on-oob=skip]
 
     commit
-        Str kept <- %t0 [move] [on-skip=keep]
-        Str fresh <- %t1 [move] [on-skip=zero]
-        _ <- %t2
+        kept = %t0 [move] [on-skip=keep]
+        fresh = %t1 [move] [on-skip=zero]
+        _ = %t2
         drop %t0 [on-skip]
         drop %t1 [on-skip]
         drop %t2
@@ -845,16 +844,17 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 }
 
-// Plan §12: a slot's ownership prints beside its own type, so two layouts
-// over identical displayed types render differently.
+// Plan §12: a slot's ownership prints before its own type, so two layouts
+// over identical displayed types render differently, and a borrow whose
+// operand is not its owner's name names the owner.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
 	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
 	second := renderDiscardedPair(t, []Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
-	if !strings.Contains(first, "eval Str, Str [borrowed=x] pair\n") {
+	if !strings.Contains(first, "eval Str, borrowed(x) Str pair\n") {
 		t.Fatalf("first layout lost its positions:\n%s", first)
 	}
-	if !strings.Contains(second, "eval Str [borrowed=x], Str pair\n") {
+	if !strings.Contains(second, "eval borrowed(x) Str, Str pair\n") {
 		t.Fatalf("second layout lost its positions:\n%s", second)
 	}
 	if first == second {

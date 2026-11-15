@@ -279,7 +279,7 @@ All RHS expressions in one assignment group are evaluated before `commit`, and
 the mappings then apply simultaneously — preserving swaps, sibling
 self-references, and ownership safety without exposing temporary storage. Every
 target slot and outcome has a stable plan ID; the builder records the exact
-`target <- outcome` mapping, and the lowerer must not reconstruct it from
+`target = outcome` mapping, and the lowerer must not reconstruct it from
 names, result order, or LLVM values.
 
 A commit group follows one transfer contract:
@@ -300,8 +300,8 @@ For example, `a, b = b, a`:
 %to_b = eval I64 a
 
 commit
-    a <- %to_a
-    b <- %to_b
+    a = %to_a
+    b = %to_b
 ```
 
 For owned heap values this may lower to an ownership swap without deep copies.
@@ -352,8 +352,8 @@ assign sum, arr
         %arr_final = finish [I64] %arr_carry
 
     commit
-        sum <- %sum_final
-        arr <- %arr_final
+        sum = %sum_final
+        arr = %arr_final
 ```
 
 A carry is `(value, updated)` state **scoped to the domain that owns it**.
@@ -546,8 +546,8 @@ assign obA, obB
         %t1 = eval I64 5
 
     commit
-        obA <- %t0 [on-skip=zero]
-        obB <- %t1
+        obA = %t0 [on-skip=zero]
+        obB = %t1
 ```
 
 Checked accesses have one canonical representation — `eval` with an explicit
@@ -573,7 +573,7 @@ assign result
         %result_final = finish [I64] %result_collector
 
     commit
-        result <- %result_final
+        result = %result_final
 ```
 
 Closing policies initially: append only yielded cells; zero-fill a missing
@@ -633,17 +633,22 @@ names the bound value — `%t0 = eval I64 b`, `%selected = require I64
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
 no result type, even where, as with `yield`, they produce their region's
-value (§4); a commit mapping reads `target <- value` in the concise view
-and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
-arr <- %t0`; an `output` target (§6) is spelled with that word first,
-`output res <- %t0` and `output Str res <- %t0`; an eval that holds a
+value (§4); a commit mapping reads `target = value` in both views —
+`h1 = %t0`, `_ = %t1` — where the target is a binding's source name or `_`
+and the value an outcome, which the `%` sets apart from a line that binds a
+new result; it prints no type, the outcome's own line naming it; an `output`
+target (§6) is spelled with that word first, `output res = %t0`; an eval that
+holds a
 checked access ends with its out-of-bounds scope, `[on-oob=skip]`, and each
 binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views; square brackets otherwise carry declarative policies, not
-executable code. The expanded view follows each eval slot's type with its
-ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
-which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
-mapping's
+executable code. The expanded view puts each eval slot's ownership before
+its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
+which carries no obligation: `%t0 = eval I64, owned Str Pair(x)`,
+`%t0 = eval borrowed Str h`. The word is a fact about the slot and no part
+of its type. A borrow's owner is its operand when that is the owner's bare
+name; any other borrow names its owner, `borrowed(h)`. The expanded view
+also appends a mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
@@ -656,8 +661,8 @@ value it frees, which exists on one path only: a skipped outcome's target
 kept its old value, and an outcome that yielded was moved into its target.
 Read the two
 kinds of annotation differently: an eval's states an outcome's ownership
-obligation, not how it was produced — an `[owned]` column read and an
-`[owned]` concatenation both allocated and copied, and the annotation says
+obligation, not how it was produced — an `owned` column read and an
+`owned` concatenation both allocated and copied, and the annotation says
 neither — and a mapping's states
 how the destination acquires the value. Assignment always has value
 semantics; a bare store of an unmanaged struct, a `[copy]`, and a `[move]`
@@ -724,7 +729,7 @@ assign x
                 yield %default
 
     commit
-        x <- %result
+        x = %result
 ```
 
 A plan's header is its kind followed by its targets (`assign a, b` — targets
@@ -739,7 +744,7 @@ the specialization's display signature, `function I64 = AddOne(I64)`; a body
 without a plan prints nothing. The script's plans print first, then each
 specialization's block, in the order the specializations were first lowered.
 Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
-ownership annotations, target types, derived transfers, and derived release
+ownership annotations, derived transfers, and derived release
 points, and — as the node kinds that vary them arrive — result domains and
 yield shapes (§5), target mappings, access IDs, affine forms, and collector
 and carry details. An annotation that every admitted node would print
@@ -1341,8 +1346,8 @@ print
     source "\"n: -n\", h, (h ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [borrowed=h] h
-        %t1 = eval Str [owned] h ⊕ "!"
+        %t0 = eval borrowed Str h
+        %t1 = eval owned Str h ⊕ "!"
         print "n: -n", %t0, %t1 [move]
 ```
 
@@ -1381,7 +1386,7 @@ assign scores
         %t0 = eval Table[Name:Str Score:I64] [\n  : Name Score\n    "Ada" 10\n]
 
     commit
-        scores <- %t0
+        scores = %t0
 ```
 
 A literal printed directly plans too, as an owned outcome the invocation
@@ -1445,10 +1450,10 @@ assign skeep
     source "skeep = (skeep ⊕ sarr[9])"
 
     execute
-        %t0 = eval Str [owned] skeep ⊕ sarr[9] [on-oob=skip]
+        %t0 = eval owned Str skeep ⊕ sarr[9] [on-oob=skip]
 
     commit
-        Str skeep <- %t0 [move] [on-skip=keep]
+        skeep = %t0 [move] [on-skip=keep]
         drop %t0 [on-skip]
         drop skeep [old]
 ```
