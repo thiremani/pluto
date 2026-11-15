@@ -371,6 +371,7 @@ PosMultiSlot: 9 9 9 9
 PosPrintOr: 6
 PosPrintCell: [0]
 PosCellRead: [0]
+PosValueRead: 9
 PosFirstFailure: 9 9 9 9
 called 1
 called 2

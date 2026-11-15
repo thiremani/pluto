@@ -129,3 +129,10 @@ strFixed = [strRows (rowsDiv[0] != 0) && strRows]
 outerRows = [[1 1]]
 outerRows = (rowsDiv[9] + 1) + [rowsArr [1 2 3]]
 "OuterCheckKeepsRows: -outerRows"
+
+# an output keeps what its body wrote first when a later read fails
+outHit = ElemOr(arr, 1, -1)
+outMiss = ElemOr(arr, 9, -1)
+strHit = ElemOr(sarr, 1, "none")
+strMiss = ElemOr(sarr, 9, "none")
+"OutputKeepsOnOob: -outHit -outMiss -strHit -strMiss"

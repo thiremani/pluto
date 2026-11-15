@@ -1385,6 +1385,11 @@ pgArr = [1 2]
 phA = [Loud(pgArr[5])]
 "PosCellRead: -phA"
 
+# In a plain value, a read past the end skips a call written after it.
+pqA = 9
+pqA = pgArr[5] + Loud(1)
+"PosValueRead: -pqA"
+
 # A slot stops at its first failed check, so a later check's call doesn't run.
 piA, piB = 9, 9
 piA, piB = Pair(1 > 2, Loud(1) > 0)

@@ -50,3 +50,19 @@ dcM2 = "old" ⊕ "2"
 "MixOkBefore: -dcM2"
 dcM2, dcN3 = PairH(arr[0], "z")
 "MixOk: -dcM2 -dcN3"
+
+# A swap beside a failed read still moves: each string takes the other's
+# value, and the read's target keeps its own.
+swapLeft = "left" ⊕ ""
+swapRight = "right" ⊕ ""
+swapKept = 4
+swapLeft, swapRight, swapKept = swapRight, swapLeft, nums[9]
+"LeakSwapBesideOob: -swapLeft -swapRight -swapKept"
+
+# A string does not take the value of a binding whose own replacement may
+# skip: it copies, so the two never share one buffer.
+copyTo = "first" ⊕ ""
+copyFrom = "second" ⊕ ""
+"LeakCopyBesideOobBefore: -copyTo -copyFrom"
+copyTo, copyFrom = copyFrom, arr[9]
+"LeakCopyBesideOob: -copyTo -copyFrom"
