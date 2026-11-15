@@ -18,7 +18,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 	writeExecute(&b, p.Head, p.Evals, expanded)
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
-		fmt.Fprintf(&b, "        %s <- %s", targetString(m.Target, expanded), outcomeString(p.Evals, m.Outcome))
+		fmt.Fprintf(&b, "        %s = %s", targetString(m.Target), outcomeString(p.Evals, m.Outcome))
 		if expanded && m.Transfer != Store {
 			fmt.Fprintf(&b, " [%s]", m.Transfer)
 		}
@@ -193,20 +193,15 @@ func (t Transfer) String() string {
 }
 
 // targetString spells a mapping's target: `_` for a discard, the name for a
-// local, and the name after `output` for a function output; the expanded
-// view puts the target's type before the name.
-func targetString(t Target, expanded bool) string {
-	if t.Kind == DiscardTarget {
+// local, and the name after `output` for a function output.
+func targetString(t Target) string {
+	switch t.Kind {
+	case DiscardTarget:
 		return "_"
+	case OutputTarget:
+		return "output " + t.Name
 	}
-	name := t.Name
-	if expanded && t.Type != nil {
-		name = t.Type.String() + " " + name
-	}
-	if t.Kind == OutputTarget {
-		return "output " + name
-	}
-	return name
+	return t.Name
 }
 
 func outcomeString(evals []*Eval, ref OutcomeRef) string {
