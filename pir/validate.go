@@ -203,7 +203,7 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 // policy.
 func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
 	want := NoSkipPolicy
-	if m.Target.binds() && !p.certain(m) {
+	if m.Target.binds() && p.maySkip(m) {
 		want = KeepOnSkip
 		if m.Target.Fresh {
 			want = ZeroOnSkip
@@ -248,7 +248,7 @@ func (p *AssignPlan) validateBindingTransfer(m Mapping, slot Slot) error {
 			if !replaced {
 				return fmt.Errorf("plan %s: target %s takes %s's old value, but %s is not replaced in this group", p.Label, m.Target.Name, slot.Owner, slot.Owner)
 			}
-			if !p.certain(m) || !p.certain(replacement) {
+			if p.maySkip(m) || p.maySkip(replacement) {
 				return fmt.Errorf("plan %s: target %s takes %s's old value, but one of the two mappings may skip without the other", p.Label, m.Target.Name, slot.Owner)
 			}
 			return nil
@@ -296,7 +296,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 		}
 		if m.Target.Kind == DiscardTarget {
 			needDrop[m.Outcome] = true
-		} else if !p.certain(m) {
+		} else if p.maySkip(m) {
 			needSkipDrop[m.Outcome] = true
 		}
 	}

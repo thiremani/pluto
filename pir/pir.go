@@ -174,9 +174,9 @@ type AssignPlan struct {
 	Drops  []Drop // derived by Elaborate, in the order they run
 }
 
-// certain reports a mapping that always commits: its outcome cannot skip.
-func (p *AssignPlan) certain(m Mapping) bool {
-	return !p.Evals[m.Outcome.Outcome].MaySkip()
+// maySkip reports a mapping that may not commit: its outcome may skip.
+func (p *AssignPlan) maySkip(m Mapping) bool {
+	return p.Evals[m.Outcome.Outcome].MaySkip()
 }
 
 // PrintArg is one argument of a print invocation: a string literal, or an

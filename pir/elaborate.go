@@ -16,7 +16,7 @@ func Elaborate(p *AssignPlan) {
 	for _, m := range p.Commit {
 		if m.Target.binds() && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
-			takeable[m.Target.Name] = p.certain(m)
+			takeable[m.Target.Name] = !p.maySkip(m)
 		}
 	}
 
@@ -34,7 +34,7 @@ func Elaborate(p *AssignPlan) {
 		}
 
 		mayTake := takeable
-		if !p.certain(*m) {
+		if p.maySkip(*m) {
 			mayTake = nil
 			if slot.Ownership == Owned {
 				skipped = append(skipped, Drop{Kind: DropSkipped, Outcome: m.Outcome})
