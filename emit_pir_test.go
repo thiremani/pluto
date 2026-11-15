@@ -207,7 +207,7 @@ func TestEmitPIRExpanded(t *testing.T) {
     source "y = x"
 
     execute
-        %t0 = eval Str [borrowed=x] x
+        %t0 = eval borrowed Str x
 
     commit
         y = %t0 [copy]

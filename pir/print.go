@@ -71,7 +71,8 @@ func writeExecute(b *strings.Builder, head Head, evals []*Eval, expanded bool) {
 	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
 	b.WriteString("\n    execute\n")
 	for _, ev := range evals {
-		fmt.Fprintf(b, "        %%t%d = eval %s %s", ev.Result, slotsString(ev.Slots, expanded), renderPayload(ev.Expr))
+		operand := renderPayload(ev.Expr)
+		fmt.Fprintf(b, "        %%t%d = eval %s %s", ev.Result, slotsString(ev.Slots, operand, expanded), operand)
 		if ev.MaySkip() {
 			b.WriteString(" [on-oob=skip]")
 		}
@@ -156,26 +157,32 @@ func checkRenderable(expr ast.Expression) {
 	}
 }
 
-// slotsString lists each slot's type. The expanded view follows a type with
-// its slot's ownership, so a tag sits beside the slot it describes; an
-// unmanaged slot carries no obligation and prints its type alone.
-func slotsString(slots []Slot, expanded bool) string {
+// slotsString lists each slot's type. The expanded view puts a slot's
+// ownership before its type, so the word sits beside the slot it describes;
+// an unmanaged slot carries no obligation and prints its type alone.
+func slotsString(slots []Slot, operand string, expanded bool) string {
 	parts := make([]string, len(slots))
 	for i, slot := range slots {
 		parts[i] = slot.Type.String()
 		if expanded {
-			parts[i] += ownershipTag(slot)
+			parts[i] = ownershipWord(slot, operand) + parts[i]
 		}
 	}
 	return strings.Join(parts, ", ")
 }
 
-func ownershipTag(slot Slot) string {
+// ownershipWord spells a slot's ownership, a fact about the slot and no part
+// of its type. A borrow names its owner unless the operand already is that
+// name.
+func ownershipWord(slot Slot, operand string) string {
 	switch slot.Ownership {
 	case Owned:
-		return " [owned]"
+		return "owned "
 	case Borrowed:
-		return " [borrowed=" + slot.Owner + "]"
+		if operand == slot.Owner {
+			return "borrowed "
+		}
+		return "borrowed(" + slot.Owner + ") "
 	}
 	return ""
 }

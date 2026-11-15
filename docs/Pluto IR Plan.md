@@ -642,10 +642,13 @@ holds a
 checked access ends with its out-of-bounds scope, `[on-oob=skip]`, and each
 binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views; square brackets otherwise carry declarative policies, not
-executable code. The expanded view follows each eval slot's type with its
-ownership — `[owned]` or `[borrowed=h]`, and nothing for an unmanaged slot,
-which carries no obligation: `%t0 = eval I64, Str [owned] Pair(x)` — appends a
-mapping's
+executable code. The expanded view puts each eval slot's ownership before
+its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
+which carries no obligation: `%t0 = eval I64, owned Str Pair(x)`,
+`%t0 = eval borrowed Str h`. The word is a fact about the slot and no part
+of its type. A borrow's owner is its operand when that is the owner's bare
+name; any other borrow names its owner, `borrowed(h)`. The expanded view
+also appends a mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
@@ -658,8 +661,8 @@ value it frees, which exists on one path only: a skipped outcome's target
 kept its old value, and an outcome that yielded was moved into its target.
 Read the two
 kinds of annotation differently: an eval's states an outcome's ownership
-obligation, not how it was produced — an `[owned]` column read and an
-`[owned]` concatenation both allocated and copied, and the annotation says
+obligation, not how it was produced — an `owned` column read and an
+`owned` concatenation both allocated and copied, and the annotation says
 neither — and a mapping's states
 how the destination acquires the value. Assignment always has value
 semantics; a bare store of an unmanaged struct, a `[copy]`, and a `[move]`
@@ -1343,8 +1346,8 @@ print
     source "\"n: -n\", h, (h ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [borrowed=h] h
-        %t1 = eval Str [owned] h ⊕ "!"
+        %t0 = eval borrowed Str h
+        %t1 = eval owned Str h ⊕ "!"
         print "n: -n", %t0, %t1 [move]
 ```
 
@@ -1447,7 +1450,7 @@ assign skeep
     source "skeep = (skeep ⊕ sarr[9])"
 
     execute
-        %t0 = eval Str [owned] skeep ⊕ sarr[9] [on-oob=skip]
+        %t0 = eval owned Str skeep ⊕ sarr[9] [on-oob=skip]
 
     commit
         skeep = %t0 [move] [on-skip=keep]

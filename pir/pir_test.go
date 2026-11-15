@@ -545,8 +545,8 @@ func TestRenderPrint(t *testing.T) {
     source "\"x: -x\", s, Pair(n)"
 
     execute
-        %t0 = eval Str [borrowed=s] s
-        %t1 = eval I64, Str [owned] Pair(n)
+        %t0 = eval borrowed Str s
+        %t1 = eval I64, owned Str Pair(n)
         print "x: -x", %t0, %t1#0, %t1#1 [move]
 `
 	if got := p.Render(true); got != wantExpanded {
@@ -617,7 +617,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = Pair(x)"
 
     execute
-        %t0 = eval I64, Str [owned] Pair(x)
+        %t0 = eval I64, owned Str Pair(x)
 
     commit
         a = %t0#0
@@ -654,7 +654,7 @@ func TestRenderFunctionOutput(t *testing.T) {
         source "res = a ⊕ b"
 
         execute
-            %t0 = eval Str [owned] a ⊕ b
+            %t0 = eval owned Str a ⊕ b
 
         commit
             output res = %t0 [move]
@@ -699,7 +699,7 @@ func renderPanic(p *AssignPlan) (v any) {
 }
 
 // Plan §12: the expanded view adds nothing to an unmanaged plan: an unmanaged
-// slot carries no ownership tag and an unmanaged store no transfer annotation.
+// slot carries no ownership word and an unmanaged store no transfer annotation.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
@@ -727,8 +727,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval Str [borrowed=b] b
-        %t1 = eval Str [borrowed=a] a
+        %t0 = eval borrowed Str b
+        %t1 = eval borrowed Str a
 
     commit
         a = %t0 [move]
@@ -743,8 +743,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
-        %t0 = eval Str [owned] x ⊕ "!"
-        %t1 = eval Str [owned] "a" ⊕ "b"
+        %t0 = eval owned Str x ⊕ "!"
+        %t1 = eval owned Str "a" ⊕ "b"
 
     commit
         x = %t0 [move]
@@ -800,9 +800,9 @@ func TestRenderSkip(t *testing.T) {
     source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
 
     execute
-        %t0 = eval Str [owned] sarr[9] [on-oob=skip]
-        %t1 = eval Str [owned] sarr[0] [on-oob=skip]
-        %t2 = eval Str [owned] sarr[1] [on-oob=skip]
+        %t0 = eval owned Str sarr[9] [on-oob=skip]
+        %t1 = eval owned Str sarr[0] [on-oob=skip]
+        %t2 = eval owned Str sarr[1] [on-oob=skip]
 
     commit
         kept = %t0 [move] [on-skip=keep]
@@ -844,16 +844,17 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 }
 
-// Plan §12: a slot's ownership prints beside its own type, so two layouts
-// over identical displayed types render differently.
+// Plan §12: a slot's ownership prints before its own type, so two layouts
+// over identical displayed types render differently, and a borrow whose
+// operand is not its owner's name names the owner.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
 	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
 	second := renderDiscardedPair(t, []Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
-	if !strings.Contains(first, "eval Str, Str [borrowed=x] pair\n") {
+	if !strings.Contains(first, "eval Str, borrowed(x) Str pair\n") {
 		t.Fatalf("first layout lost its positions:\n%s", first)
 	}
-	if !strings.Contains(second, "eval Str [borrowed=x], Str pair\n") {
+	if !strings.Contains(second, "eval borrowed(x) Str, Str pair\n") {
 		t.Fatalf("second layout lost its positions:\n%s", second)
 	}
 	if first == second {

@@ -439,7 +439,7 @@ h1, h2`)
     source "h1 = (\"foo\" ⊕ \"bar\")"
 
     execute
-        %t0 = eval Str [owned] "foo" ⊕ "bar"
+        %t0 = eval owned Str "foo" ⊕ "bar"
 
     commit
         h1 = %t0 [move]
@@ -448,8 +448,8 @@ h1, h2`)
     source "h1, h2 = h2, h1"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [borrowed=h1] h1
+        %t0 = eval borrowed Str h2
+        %t1 = eval borrowed Str h1
 
     commit
         h1 = %t0 [move]
@@ -472,8 +472,8 @@ d1, d2`)
     source "d1, d2 = d1, d1"
 
     execute
-        %t0 = eval Str [borrowed=d1] d1
-        %t1 = eval Str [borrowed=d1] d1
+        %t0 = eval borrowed Str d1
+        %t1 = eval borrowed Str d1
 
     commit
         d1 = %t0 [move]
@@ -502,7 +502,7 @@ x, y`)
     source "x = (x ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [owned] x ⊕ "!"
+        %t0 = eval owned Str x ⊕ "!"
 
     commit
         x = %t0 [move]
@@ -512,7 +512,7 @@ x, y`)
     source "_ = (x ⊕ \"?\")"
 
     execute
-        %t0 = eval Str [owned] x ⊕ "?"
+        %t0 = eval owned Str x ⊕ "?"
 
     commit
         _ = %t0
@@ -522,7 +522,7 @@ x, y`)
     source "_ = x"
 
     execute
-        %t0 = eval Str [borrowed=x] x
+        %t0 = eval borrowed Str x
 
     commit
         _ = %t0
@@ -531,8 +531,8 @@ x, y`)
     source "x, y = (y ⊕ \"!\"), x"
 
     execute
-        %t0 = eval Str [owned] y ⊕ "!"
-        %t1 = eval Str [borrowed=x] x
+        %t0 = eval owned Str y ⊕ "!"
+        %t1 = eval borrowed Str x
 
     commit
         x = %t0 [move]
@@ -594,7 +594,7 @@ arr1, arr2`)
     source "arr1 = [1 2 3]"
 
     execute
-        %t0 = eval [I64] [owned] [1 2 3]
+        %t0 = eval owned [I64] [1 2 3]
 
     commit
         arr1 = %t0 [move]
@@ -603,7 +603,7 @@ arr1, arr2`)
     source "arr2 = arr1"
 
     execute
-        %t0 = eval [I64] [borrowed=arr1] arr1
+        %t0 = eval borrowed [I64] arr1
 
     commit
         arr2 = %t0 [copy]
@@ -612,7 +612,7 @@ arr1, arr2`)
     source "arr2 = [4 5 6]"
 
     execute
-        %t0 = eval [I64] [owned] [4 5 6]
+        %t0 = eval owned [I64] [4 5 6]
 
     commit
         arr2 = %t0 [move]
@@ -622,7 +622,7 @@ arr1, arr2`)
     source "arr1 = []0"
 
     execute
-        %t0 = eval [I64] [owned] []0
+        %t0 = eval owned [I64] []0
 
     commit
         arr1 = %t0 [move]
@@ -675,7 +675,7 @@ n, a, s2.age, col, t2`)
     source "scores = [\n  : Name Score\n    \"Ada\" 10\n]"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] [owned] [\n  : Name Score\n    "Ada" 10\n]
+        %t0 = eval owned Table[Name:Str Score:I64] [\n  : Name Score\n    "Ada" 10\n]
 
     commit
         scores = %t0 [move]
@@ -684,7 +684,7 @@ n, a, s2.age, col, t2`)
     source "col = scores.Score"
 
     execute
-        %t0 = eval [I64] [owned] scores.Score
+        %t0 = eval owned [I64] scores.Score
 
     commit
         col = %t0 [move]
@@ -693,7 +693,7 @@ n, a, s2.age, col, t2`)
     source "t2 = scores"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] [borrowed=scores] scores
+        %t0 = eval borrowed Table[Name:Str Score:I64] scores
 
     commit
         t2 = %t0 [copy]
@@ -720,8 +720,8 @@ copy, other, text`)
     source "text, other = (text ⊕ \"!\"), text"
 
     execute
-        %t0 = eval Str [owned] text ⊕ "!"
-        %t1 = eval Str [borrowed=text] text
+        %t0 = eval owned Str text ⊕ "!"
+        %t1 = eval borrowed Str text
 
     commit
         text = %t0 [move]
@@ -731,7 +731,7 @@ copy, other, text`)
     source "copy = other"
 
     execute
-        %t0 = eval Str [borrowed=other] other
+        %t0 = eval borrowed Str other
 
     commit
         copy = %t0 [copy]
@@ -791,7 +791,7 @@ col, direct, taken, headerOnly`)
     source "col = taken.Value"
 
     execute
-        %t0 = eval [I64] [owned] taken.Value
+        %t0 = eval owned [I64] taken.Value
 
     commit
         col = %t0 [move]
@@ -841,7 +841,7 @@ d, l, r, n, copied.age, tag`)
     source "l, r = twoStr(\"a\", \"b\")"
 
     execute
-        %t0 = eval Str [owned], Str [owned] twoStr("a", "b")
+        %t0 = eval owned Str, owned Str twoStr("a", "b")
 
     commit
         l = %t0#0 [move]
@@ -851,7 +851,7 @@ d, l, r, n, copied.age, tag`)
     source "l, _, n = twoStr(l, r), 9"
 
     execute
-        %t0 = eval Str [owned], Str [owned] twoStr(l, r)
+        %t0 = eval owned Str, owned Str twoStr(l, r)
         %t1 = eval I64 9
 
     commit
@@ -952,7 +952,7 @@ n, o, k, p, q, one, acc`)
         source "out = (s ⊕ \"!\")"
 
         execute
-            %t0 = eval Str [owned] s ⊕ "!"
+            %t0 = eval owned Str s ⊕ "!"
 
         commit
             output out = %t0 [move]
@@ -963,7 +963,7 @@ n, o, k, p, q, one, acc`)
         source "kept = s"
 
         execute
-            %t0 = eval Str [borrowed=s] s
+            %t0 = eval borrowed Str s
 
         commit
             output kept = %t0 [copy]
@@ -1062,8 +1062,8 @@ m`)
     source "h, (h ⊕ \"!\")"
 
     execute
-        %t0 = eval Str [borrowed=h] h
-        %t1 = eval Str [owned] h ⊕ "!"
+        %t0 = eval borrowed Str h
+        %t1 = eval owned Str h ⊕ "!"
         print %t0, %t1 [move]
 `, plans[4].Render(true))
 	// Row 29c: every slot of a multi-output call prints, each owned one taken.
@@ -1071,14 +1071,14 @@ m`)
     source "Echo(h)"
 
     execute
-        %t0 = eval Str [owned], Str [owned] Echo(h)
+        %t0 = eval owned Str, owned Str Echo(h)
         print %t0#0 [move], %t0#1 [move]
 `, plans[5].Render(true))
 	require.Equal(t, `print
     source "([1 2] ⊕ [3])"
 
     execute
-        %t0 = eval [I64] [owned] [1 2] ⊕ [3]
+        %t0 = eval owned [I64] [1 2] ⊕ [3]
         print %t0 [move]
 `, plans[6].Render(true))
 	// A print in a function body sits in that function's block.
@@ -1161,7 +1161,7 @@ keep, fresh, s, h1, h2, r`)
     source "s = (s ⊕ sarr[9])"
 
     execute
-        %t0 = eval Str [owned] s ⊕ sarr[9] [on-oob=skip]
+        %t0 = eval owned Str s ⊕ sarr[9] [on-oob=skip]
 
     commit
         s = %t0 [move] [on-skip=keep]
@@ -1173,7 +1173,7 @@ keep, fresh, s, h1, h2, r`)
     source "_ = sarr[1]"
 
     execute
-        %t0 = eval Str [owned] sarr[1] [on-oob=skip]
+        %t0 = eval owned Str sarr[1] [on-oob=skip]
 
     commit
         _ = %t0
@@ -1184,8 +1184,8 @@ keep, fresh, s, h1, h2, r`)
     source "h1, h2, keep = h2, h1, arr[arr[9]]"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [borrowed=h1] h1
+        %t0 = eval borrowed Str h2
+        %t1 = eval borrowed Str h1
         %t2 = eval I64 arr[arr[9]] [on-oob=skip]
 
     commit
@@ -1198,8 +1198,8 @@ keep, fresh, s, h1, h2, r`)
     source "h1, h2 = h2, sarr[9]"
 
     execute
-        %t0 = eval Str [borrowed=h2] h2
-        %t1 = eval Str [owned] sarr[9] [on-oob=skip]
+        %t0 = eval borrowed Str h2
+        %t1 = eval owned Str sarr[9] [on-oob=skip]
 
     commit
         h1 = %t0 [copy]
