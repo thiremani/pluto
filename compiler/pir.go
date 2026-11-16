@@ -293,14 +293,14 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	for _, expr := range stmt.Value {
 		if _, isOr := ast.IsLogicalOr(expr); isOr {
 			first := c.buildFirst(expr, next)
-			plan.Firsts = append(plan.Firsts, first)
+			plan.Execute = append(plan.Execute, first)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, first.MaySkip())
 			next += pir.OutcomeID(1 + len(first.Sides))
 			continue
 		}
 
 		ev := c.buildEval(expr, next, false)
-		plan.Evals = append(plan.Evals, ev)
+		plan.Execute = append(plan.Execute, ev)
 		for slot := range ev.Slots {
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, ev.MaySkip())
 		}
@@ -403,7 +403,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	}
 
 	var nodes []loweredNode
-	for _, node := range plan.Nodes() {
+	for _, node := range plan.Execute {
 		switch n := node.(type) {
 		case *pir.Eval:
 			out, yielded := c.lowerEval(n)

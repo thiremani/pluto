@@ -199,32 +199,13 @@ type Plan interface {
 }
 
 // AssignPlan is the execution plan for one assignment statement; prepare and
-// finish phases are absent until carries and collectors land. Evals holds the
-// evals outside a first and Firsts the firsts, each in execution order;
-// outcome IDs, dense in the order the plan prints, order the two.
+// finish phases are absent until carries and collectors land. Execute holds
+// the execute region's nodes in execution order.
 type AssignPlan struct {
 	Head
-	Evals  []*Eval
-	Firsts []*First
-	Commit []Mapping
-	Drops  []Drop // derived by Elaborate, in the order they run
-}
-
-// Nodes returns the execute region in execution order.
-func (p *AssignPlan) Nodes() []Node {
-	nodes := make([]Node, 0, len(p.Evals)+len(p.Firsts))
-	firsts := p.Firsts
-	for _, ev := range p.Evals {
-		for len(firsts) > 0 && firsts[0].Result < ev.Result {
-			nodes = append(nodes, firsts[0])
-			firsts = firsts[1:]
-		}
-		nodes = append(nodes, ev)
-	}
-	for _, f := range firsts {
-		nodes = append(nodes, f)
-	}
-	return nodes
+	Execute []Node
+	Commit  []Mapping
+	Drops   []Drop // derived by Elaborate, in the order they run
 }
 
 // source is one eval a mapping can take its value from, and the slot it
@@ -240,20 +221,20 @@ func (s source) slot() Slot { return s.eval.Slots[s.ref.Slot] }
 // run: the outcome's own eval, or each side of a first. It is empty when ref
 // names neither.
 func (p *AssignPlan) sources(ref OutcomeRef) []source {
-	for _, ev := range p.Evals {
-		if ev.Result == ref.Outcome {
-			return []source{{ref: ref, eval: ev}}
-		}
-	}
-	for _, f := range p.Firsts {
-		if f.Result != ref.Outcome {
+	for _, node := range p.Execute {
+		if node.ID() != ref.Outcome {
 			continue
 		}
-		sides := make([]source, len(f.Sides))
-		for i, side := range f.Sides {
-			sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, eval: side}
+		switch n := node.(type) {
+		case *Eval:
+			return []source{{ref: ref, eval: n}}
+		case *First:
+			sides := make([]source, len(n.Sides))
+			for i, side := range n.Sides {
+				sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, eval: side}
+			}
+			return sides
 		}
-		return sides
 	}
 	return nil
 }

@@ -15,12 +15,12 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	if err := validateHead(p.Head); err != nil {
 		return err
 	}
-	if len(p.Evals) == 0 && len(p.Firsts) == 0 {
+	if len(p.Execute) == 0 {
 		return fmt.Errorf("plan %s has no evals", p.Label)
 	}
 
 	next, slots := 0, 0
-	for _, node := range p.Nodes() {
+	for _, node := range p.Execute {
 		switch n := node.(type) {
 		case *Eval:
 			if err := validateEval(p.Label, next, n); err != nil {
@@ -442,25 +442,27 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
 // an eval outside a first, or a first's one slot.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
-	for _, ev := range p.Evals {
-		if ev.Result != ref.Outcome {
-			continue
-		}
-		if ref.Slot < 0 || ref.Slot >= len(ev.Slots) {
-			return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
-		}
-		return ev.Slots[ref.Slot].Type, nil
-	}
-	for _, f := range p.Firsts {
-		if f.Result == ref.Outcome {
-			if ref.Slot != 0 {
+	for _, node := range p.Execute {
+		switch n := node.(type) {
+		case *Eval:
+			if n.Result != ref.Outcome {
+				continue
+			}
+			if ref.Slot < 0 || ref.Slot >= len(n.Slots) {
 				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
 			}
-			return f.Type, nil
-		}
-		for _, side := range f.Sides {
-			if side.Result == ref.Outcome {
-				return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of first %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, f.Result)
+			return n.Slots[ref.Slot].Type, nil
+		case *First:
+			if n.Result == ref.Outcome {
+				if ref.Slot != 0 {
+					return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+				}
+				return n.Type, nil
+			}
+			for _, side := range n.Sides {
+				if side.Result == ref.Outcome {
+					return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of first %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, n.Result)
+				}
 			}
 		}
 	}

@@ -323,7 +323,7 @@ func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	plans := assignPlans(sc.Compiler.Plans[0])
 	require.Len(t, plans, 1)
 	stmt := program.Statements[0].(*ast.LetStatement)
-	require.Same(t, stmt.Value[0], plans[0].Evals[0].Expr)
+	require.Same(t, stmt.Value[0], plans[0].Execute[0].(*pir.Eval).Expr)
 	require.Equal(t, I64, plans[0].Commit[0].Target.Type)
 }
 

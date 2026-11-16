@@ -17,7 +17,7 @@ import (
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	writeHead(&b, p.Head)
-	for _, node := range p.Nodes() {
+	for _, node := range p.Execute {
 		switch n := node.(type) {
 		case *Eval:
 			writeEval(&b, executeIndent, n, expanded)
@@ -252,10 +252,8 @@ func outcomeString(ev *Eval, i int) string {
 // refString names what ref refers to: a slot of an eval outside a first,
 // a first, or one of its sides, which like a first has one slot.
 func (p *AssignPlan) refString(ref OutcomeRef) string {
-	for _, ev := range p.Evals {
-		if ev.Result == ref.Outcome {
-			return outcomeString(ev, ref.Slot)
-		}
+	if ev := p.eval(ref.Outcome); ev != nil {
+		return outcomeString(ev, ref.Slot)
 	}
 	return fmt.Sprintf("%%t%d", ref.Outcome)
 }
@@ -315,17 +313,20 @@ func (p *AssignPlan) dropString(d Drop) string {
 	return "drop " + p.refString(d.Outcome)
 }
 
-// eval finds the eval whose outcome is id, a first's side included.
+// eval finds the eval whose outcome is id, a first's side included; it is
+// nil when id names a first.
 func (p *AssignPlan) eval(id OutcomeID) *Eval {
-	for _, ev := range p.Evals {
-		if ev.Result == id {
-			return ev
-		}
-	}
-	for _, f := range p.Firsts {
-		for _, side := range f.Sides {
-			if side.Result == id {
-				return side
+	for _, node := range p.Execute {
+		switch n := node.(type) {
+		case *Eval:
+			if n.Result == id {
+				return n
+			}
+		case *First:
+			for _, side := range n.Sides {
+				if side.Result == id {
+					return side
+				}
 			}
 		}
 	}

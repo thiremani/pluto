@@ -50,7 +50,7 @@ func emitPIRTestPlans(fn string) []pir.Plan {
 	return []pir.Plan{
 		&pir.AssignPlan{
 			Head: pir.Head{Label: "assign x", Func: fn, Source: "x = 5"},
-			Evals: []*pir.Eval{{
+			Execute: []pir.Node{&pir.Eval{
 				Result: 0,
 				Expr:   &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5},
 				Slots:  []pir.Slot{{Type: i64}},
@@ -61,7 +61,7 @@ func emitPIRTestPlans(fn string) []pir.Plan {
 		},
 		&pir.AssignPlan{
 			Head: pir.Head{Label: "assign y", Func: fn, Source: "y = x"},
-			Evals: []*pir.Eval{{
+			Execute: []pir.Node{&pir.Eval{
 				Result: 0,
 				Expr:   &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
 				Slots:  []pir.Slot{{Type: i64}},
@@ -197,7 +197,7 @@ function I64 = F(I64)
 func TestEmitPIRExpanded(t *testing.T) {
 	str := pirTestType("Str")
 	plan := emitPIRTestPlans("")[1].(*pir.AssignPlan)
-	plan.Evals[0].Slots[0] = pir.Slot{Type: str, Ownership: pir.Borrowed, Owner: "x"}
+	plan.Execute[0].(*pir.Eval).Slots[0] = pir.Slot{Type: str, Ownership: pir.Borrowed, Owner: "x"}
 	plan.Commit[0].Target.Type = str
 	plan.Commit[0].Transfers = []pir.Transfer{pir.Copy}
 
