@@ -648,15 +648,19 @@ binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views, so `[on-oob=skip]`
 pairs with a policy on each binding the skip reaches, while a mapping to
 `_`, which keeps nothing, carries none; a `first` binds its outcome on a line
-of its own, `%t0 = first I64`, with its sides two levels in and each side
-after the first under a `fallback` label one level in, so every side lines up
-and none carries a `yield` line, a side's value being its last outcome;
+of its own, `%t0 =`, and the selection follows one level in: a `first I64`
+line, which names the whole selection and its type, then a `fallback` label
+for each side after the first, with every side one level further in, so the
+labels line up, the sides line up, and no column depends on a name's width;
+no side carries a `yield` line, a side's value being its last outcome;
 square brackets otherwise carry declarative policies, not
 executable code. The expanded view puts each eval slot's ownership before
 its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
 which carries no obligation: `%t0 = eval I64, owned Str Pair(x)`,
 `%t0 = eval borrowed Str h`. The word is a fact about the slot and no part
-of its type. A borrow's owner is its operand when that is the owner's bare
+of its type. A `first` line carries none: the selection has no slot of its
+own, and each side's eval carries its own. A borrow's owner is its operand
+when that is the owner's bare
 name; any other borrow names its owner, `borrowed(h)`. The expanded view
 also appends a mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
@@ -730,7 +734,8 @@ assign x
     source "x = ((data[i] || other[j]) || (-1))"
 
     execute
-        %t0 = first I64
+        %t0 =
+            first I64
                 %t1 = eval I64 data[i] [on-oob=fallback]
             fallback
                 %t2 = eval I64 other[j] [on-oob=fallback]
@@ -1548,7 +1553,8 @@ assign s
     source "s = (sarr[9] || h)"
 
     execute
-        %t0 = first Str
+        %t0 =
+            first Str
                 %t1 = eval owned Str sarr[9] [on-oob=fallback]
             fallback
                 %t2 = eval borrowed Str h

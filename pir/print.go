@@ -100,7 +100,8 @@ func writeEval(b *strings.Builder, indent string, ev *Eval, expanded bool) {
 }
 
 func writeFirst(b *strings.Builder, f *First, expanded bool) {
-	fmt.Fprintf(b, "%s%%t%d = first %s\n", executeIndent, f.Result, f.Type.String())
+	fmt.Fprintf(b, "%s%%t%d =\n", executeIndent, f.Result)
+	fmt.Fprintf(b, "%s    first %s\n", executeIndent, f.Type.String())
 	for i, side := range f.Sides {
 		if i > 0 {
 			fmt.Fprintf(b, "%s    fallback\n", executeIndent)

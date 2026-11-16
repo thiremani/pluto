@@ -1273,7 +1273,8 @@ a, s, c, g, p, q, r`)
     source "a = (arr[9] || (-1))"
 
     execute
-        %t0 = first I64
+        %t0 =
+            first I64
                 %t1 = eval I64 arr[9] [on-oob=fallback]
             fallback
                 %t2 = eval I64 -1
@@ -1287,7 +1288,8 @@ a, s, c, g, p, q, r`)
     source "s = (sarr[9] || h)"
 
     execute
-        %t0 = first Str
+        %t0 =
+            first Str
                 %t1 = eval owned Str sarr[9] [on-oob=fallback]
             fallback
                 %t2 = eval borrowed Str h
@@ -1302,7 +1304,8 @@ a, s, c, g, p, q, r`)
     source "c = ((arr[9] || arr[8]) || (-3))"
 
     execute
-        %t0 = first I64
+        %t0 =
+            first I64
                 %t1 = eval I64 arr[9] [on-oob=fallback]
             fallback
                 %t2 = eval I64 arr[8] [on-oob=fallback]
@@ -1318,7 +1321,8 @@ a, s, c, g, p, q, r`)
     source "g = (arr[9] || arr[8])"
 
     execute
-        %t0 = first I64
+        %t0 =
+            first I64
                 %t1 = eval I64 arr[9] [on-oob=fallback]
             fallback
                 %t2 = eval I64 arr[8] [on-oob=skip]
@@ -1331,7 +1335,8 @@ a, s, c, g, p, q, r`)
     source "_ = (sarr[9] || (h ⊕ \"?\"))"
 
     execute
-        %t0 = first Str
+        %t0 =
+            first Str
                 %t1 = eval owned Str sarr[9] [on-oob=fallback]
             fallback
                 %t2 = eval owned Str h ⊕ "?"
@@ -1346,7 +1351,8 @@ a, s, c, g, p, q, r`)
     source "p, q = (arr[9] || (-1)), 5"
 
     execute
-        %t0 = first I64
+        %t0 =
+            first I64
                 %t1 = eval I64 arr[9] [on-oob=fallback]
             fallback
                 %t2 = eval I64 -1
@@ -1360,7 +1366,8 @@ a, s, c, g, p, q, r`)
         source "res = (v[i] || (-1))"
 
         execute
-            %t0 = first I64
+            %t0 =
+                first I64
                     %t1 = eval I64 v[i] [on-oob=fallback]
                 fallback
                     %t2 = eval I64 -1

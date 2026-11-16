@@ -623,10 +623,10 @@ func TestValidateFirstRejects(t *testing.T) {
 	}
 }
 
-// Plan §12: a first prints its sides two levels in, each after the first
-// under a fallback label, and a failed read names what its failure does. A
-// mapping names a transfer per side where the sides differ, and a release of
-// what a failed side built carries that side's word.
+// Plan §12: a first binds its outcome on a line of its own, with each side
+// under a label beneath it, first and then fallback, and a failed read names
+// what its failure does. A mapping names a transfer per side where the sides
+// differ, and a release of what a failed side built carries that side's word.
 func TestRenderFirst(t *testing.T) {
 	p := firstPlan()
 	Elaborate(p)
@@ -634,7 +634,8 @@ func TestRenderFirst(t *testing.T) {
     source "s = sarr[9] || h"
 
     execute
-        %t0 = first Str
+        %t0 =
+            first Str
                 %t1 = eval Str sarr[9] [on-oob=fallback]
             fallback
                 %t2 = eval Str h
@@ -649,7 +650,8 @@ func TestRenderFirst(t *testing.T) {
     source "s = sarr[9] || h"
 
     execute
-        %t0 = first Str
+        %t0 =
+            first Str
                 %t1 = eval owned Str sarr[9] [on-oob=fallback]
             fallback
                 %t2 = eval borrowed Str h
@@ -673,7 +675,8 @@ func TestRenderFirst(t *testing.T) {
 
     execute
         %t0 = eval I64 5
-        %t1 = first Str
+        %t1 =
+            first Str
                 %t2 = eval owned Str sarr[9] [on-oob=fallback]
             fallback
                 %t3 = eval owned Str sarr[8] [on-oob=fallback]
