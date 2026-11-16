@@ -368,13 +368,12 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 
 // loweredSource is one eval that can supply a node's outcome, after it ran:
 // its slots, and the bit that says whether it yielded, nil when it always
-// does. staged marks a first's side, which runs on a path of its own, so its
-// slots sit in memory for the commit to load.
+// does. A first's side runs on a path of its own, so its slots point to
+// memory and are loaded where they are read.
 type loweredSource struct {
 	eval    *pir.Eval
 	out     []*Symbol
 	yielded llvm.Value
-	staged  bool
 }
 
 // loweredNode is one node of a plan's execute region after it ran: the evals
@@ -454,7 +453,7 @@ func (c *Compiler) lowerFirst(f *pir.First) loweredNode {
 	sides := make([]loweredSource, len(f.Sides))
 	flags := make([]llvm.Value, len(f.Sides))
 	for i, side := range f.Sides {
-		sides[i] = loweredSource{eval: side, staged: true}
+		sides[i] = loweredSource{eval: side}
 		if side.MayFail() {
 			flags[i] = c.createEntryBlockAlloca(c.mapToLLVMType(i1), "first_yielded.mem")
 			c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 0, false), flags[i], i1)
@@ -475,10 +474,9 @@ func (c *Compiler) lowerFirst(f *pir.First) loweredNode {
 // sides after it only where it failed.
 func (c *Compiler) lowerSides(sides []loweredSource, flags []llvm.Value, i int) {
 	out, yielded := c.lowerEval(sides[i].eval)
-	value := c.derefIfPointer(out[0], "first_side")
-	slot := c.createEntryBlockAlloca(c.mapToLLVMType(value.Type), "first_side.mem")
-	c.createStore(value.Val, slot, value.Type)
-	sides[i].out = []*Symbol{{Val: slot, Type: Ptr{Elem: value.Type}}}
+	slot := c.createEntryBlockAlloca(c.mapToLLVMType(out[0].Type), "first_side.mem")
+	c.createStore(out[0].Val, slot, out[0].Type)
+	sides[i].out = []*Symbol{{Val: slot, Type: Ptr{Elem: out[0].Type}}}
 	if yielded.IsNil() {
 		return
 	}
@@ -490,14 +488,6 @@ func (c *Compiler) lowerSides(sides []loweredSource, flags []llvm.Value, i int) 
 	c.withCondBranch(c.builder.CreateNot(yielded, "first_failed"), "first_fallback", func() {
 		c.lowerSides(sides, flags, i+1)
 	}, nil)
-}
-
-// sourceValue returns a slot of src's outcome, loading a staged one.
-func (c *Compiler) sourceValue(src loweredSource, slot int) *Symbol {
-	if !src.staged {
-		return src.out[slot]
-	}
-	return c.derefIfPointer(src.out[slot], "first_side")
 }
 
 // nodeYielded is the bit that says whether a node's outcome yielded: some
@@ -551,13 +541,14 @@ func (c *Compiler) landSources(plan *pir.AssignPlan, n loweredNode, i int) {
 }
 
 // commitSource lands the mappings of n's outcome with the value source i
-// supplies.
+// supplies, loaded where it sits in memory.
 func (c *Compiler) commitSource(plan *pir.AssignPlan, n loweredNode, i int) {
 	for _, m := range plan.Commit {
 		if m.Outcome.Outcome != n.id || m.Target.Kind == pir.DiscardTarget {
 			continue
 		}
-		c.storeValue(m.Target.Name, c.sourceValue(n.sources[i], m.Outcome.Slot), m.Transfers[i] == pir.Copy)
+		value := c.derefIfPointer(n.sources[i].out[m.Outcome.Slot], "first_side")
+		c.storeValue(m.Target.Name, value, m.Transfers[i] == pir.Copy)
 	}
 }
 
