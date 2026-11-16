@@ -37,6 +37,8 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 			}
 			next += 1 + len(n.Sides)
 			slots++
+		default:
+			return fmt.Errorf("plan %s: unknown execute node %T", p.Label, node)
 		}
 	}
 

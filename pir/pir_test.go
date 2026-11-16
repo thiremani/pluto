@@ -14,6 +14,10 @@ type testType string
 
 func (t testType) String() string { return string(t) }
 
+type unknownNode OutcomeID
+
+func (n unknownNode) ID() OutcomeID { return OutcomeID(n) }
+
 // sameSpelling stands in for the compiler's binding-compatibility relation;
 // these tests exercise the plan invariants, not the type system.
 func sameSpelling(target, outcome Type) bool { return target.String() == outcome.String() }
@@ -406,6 +410,7 @@ func TestValidateRejects(t *testing.T) {
 		{"NoLabel", func(p *AssignPlan) { p.Label = "" }, "no label"},
 		{"NoSource", func(p *AssignPlan) { p.Source = "" }, "no source"},
 		{"NoEvals", func(p *AssignPlan) { p.Execute = nil }, "no evals"},
+		{"UnknownNode", func(p *AssignPlan) { p.Execute = append(p.Execute, unknownNode(2)) }, "unknown execute node pir.unknownNode"},
 		{"SparseResultID", func(p *AssignPlan) { evalAt(p, 1).Result = 2 }, "dense"},
 		{"NoSlots", func(p *AssignPlan) { evalAt(p, 0).Slots = nil }, "no output slots"},
 		{"NilDiscardedType", func(p *AssignPlan) {
