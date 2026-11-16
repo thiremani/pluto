@@ -368,8 +368,9 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 
 // loweredSource is one eval that can supply a node's outcome, after it ran:
 // its slots, and the bit that says whether it yielded, nil when it always
-// does. A first's side runs on a path of its own, so its slots point to
-// memory and are loaded where they are read.
+// does. The bit covers every slot: an eval yields or fails as a whole.
+// A first's side runs on a path of its own, so its slots point to memory and
+// are loaded where they are read.
 type loweredSource struct {
 	eval    *pir.Eval
 	out     []*Symbol
