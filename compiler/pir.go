@@ -521,6 +521,10 @@ func (c *Compiler) nodeYielded(n loweredNode) llvm.Value {
 // side that yielded, so it sits in memory too.
 func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
 	for _, m := range plan.Commit {
+		if m.Target.Kind == pir.DiscardTarget {
+			continue
+		}
+
 		branched := len(m.Transfers) > 1
 		switch {
 		case m.OnSkip == pir.ZeroOnSkip:
