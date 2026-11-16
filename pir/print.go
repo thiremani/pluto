@@ -78,8 +78,7 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 }
 
 // executeIndent is the level of an execute region's own lines. A first's
-// fallback labels sit one level further in and every side two, so the first
-// side lines up with the ones that follow it.
+// labels, first and fallback, sit one level further in and its sides two.
 const executeIndent = "        "
 
 // writeHead writes what every plan opens with: its header, its source, and
