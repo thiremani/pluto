@@ -85,15 +85,14 @@ func (c *Compiler) planValuesEligible(exprs []ast.Expression, reads bool) bool {
 // holds, in an assignment, and the solver has left it a side that can fail
 // before every fallback.
 func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
-	sides := fallbackSides(expr)
-	if len(sides) == 1 {
+	if _, isOr := ast.IsLogicalOr(expr); !isOr {
 		return c.planExprEligible(expr, reads)
 	}
 	if !reads {
 		return false
 	}
 
-	for _, side := range sides {
+	for _, side := range fallbackSides(expr) {
 		if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) != 1 || !c.planExprEligible(side, true) {
 			return false
 		}
@@ -292,12 +291,11 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 
 	next := pir.OutcomeID(0)
 	for _, expr := range stmt.Value {
-		sides := fallbackSides(expr)
-		if len(sides) > 1 {
-			first := c.buildFirst(expr, sides, next)
+		if _, isOr := ast.IsLogicalOr(expr); isOr {
+			first := c.buildFirst(expr, next)
 			plan.Firsts = append(plan.Firsts, first)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, first.MaySkip())
-			next += pir.OutcomeID(1 + len(sides))
+			next += pir.OutcomeID(1 + len(first.Sides))
 			continue
 		}
 
@@ -325,7 +323,8 @@ func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID, fallbackFoll
 
 // buildFirst plans the value-position || expr, whose outcome is id; its sides
 // take the IDs after it.
-func (c *Compiler) buildFirst(expr ast.Expression, sides []ast.Expression, id pir.OutcomeID) *pir.First {
+func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First {
+	sides := fallbackSides(expr)
 	first := &pir.First{
 		Result: id,
 		Type:   c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0],
