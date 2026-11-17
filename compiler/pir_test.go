@@ -1256,15 +1256,16 @@ g = arr[9] || arr[8]
 _ = sarr[9] || (h ⊕ "?")
 p, q = arr[9] || -1, 5
 r = At(arr, 9)
+w = (arr[9] + 1) || -1
 arr[9] || -1
-a, s, c, g, p, q, r`)
+a, s, c, g, p, q, r, w`)
 
 	plans := slices.Concat(sc.Compiler.Plans...)
 	require.Equal(t, []planOwner{
 		{Label: "assign arr"}, {Label: "assign sarr"}, {Label: "assign h"}, {Label: "assign a"},
 		{Label: "assign s"}, {Label: "print"}, {Label: "assign s"}, {Label: "assign c"},
 		{Label: "assign g"}, {Label: "assign g"}, {Label: "assign _"}, {Label: "assign p, q"},
-		{Label: "assign r"}, {Label: "print"},
+		{Label: "assign r"}, {Label: "assign w"}, {Label: "print"},
 		{Func: "I64 = At([I64], I64)", Label: "assign res"},
 	}, planOwners(plans))
 
@@ -1362,6 +1363,20 @@ a, s, c, g, p, q, r`)
         p = %t0
         q = %t3
 `, plans[11].Render(false))
+	// A side may wrap its read, and fails where the read does.
+	require.Equal(t, `assign w
+    source "w = ((arr[9] + 1) || (-1))"
+
+    execute
+        %t0 =
+            first I64
+                %t1 = eval I64 arr[9] + 1 [on-oob=fallback]
+            fallback
+                %t2 = eval I64 -1
+
+    commit
+        w = %t0
+`, plans[13].Render(false))
 	require.Equal(t, `    assign res
         source "res = (v[i] || (-1))"
 
@@ -1374,5 +1389,5 @@ a, s, c, g, p, q, r`)
 
         commit
             output res = %t0
-`, plans[14].Render(false))
+`, plans[15].Render(false))
 }

@@ -204,12 +204,13 @@ parentheses:
 ((a > 2) + (b > 3)) || -1   # a + b when both hold (conditions AND), else -1
 ```
 
-Only a left operand with **no** condition anywhere in its tree is rejected
-(`(5 + 3) || -1`, `a || -1`) — there is nothing that can fail for `||` to
-catch. An index read is the one left operand that needs no condition: it
-fails where its index is out of bounds, so `arr[i] || -1` is the element or
-`-1`, and `a[i] || b[j] || -1` tries each read in turn ("Checked-access
-fallback" under Status).
+Only a left operand with **no** condition and no index read anywhere in its
+tree is rejected (`(5 + 3) || -1`, `a || -1`) — there is nothing that can
+fail for `||` to catch. An index read fails where its index is out of bounds,
+so `arr[i] || -1` is the element or `-1`, `(arr[i] + 1) || -1` is the element
+plus one or `-1`, and `a[i] || b[j] || -1` tries each read in turn. A read
+driven by a range does not count yet ("Checked-access fallback" under
+Status).
 
 ## Precedence: conditions bind first
 
@@ -599,15 +600,17 @@ follow when they migrate in Steps 7 and 8.
   nearest resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print
   position `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
   yielded/in-bounds bit, never the value: an in-bounds zero yields `0`. The
-  read stands immediately left of `||`, alone or as the last alternative of
-  the `||` before it, so `a[i] || b[j] || -1` tries each in turn; where the
-  last side is a read that fails too, nothing yields and the target keeps
-  its value. The rule is the fallback's own: a read is still no statement
-  gate and no `&&` left side. Not yet legal, and rejected with "logical OR
-  in value position requires a conditional left operand": a read driven by a
-  range left of `||` (`arr[i] || -1` with `i` a range), and a read wrapped
-  in an operator or passed through a call there (`(arr[i] + 1) || -1`,
-  `Id(arr[i]) || -1`), planned with the PIR migration's Steps 6 and 7.
+  read may sit anywhere in the left side a condition may: alone, wrapped in
+  an operator or passed through a call (`(arr[i] + 1) || -1`,
+  `Id(arr[i]) || -1`), or as the last alternative of the `||` before it, so
+  `a[i] || b[j] || -1` tries each in turn; where the last side is a read
+  that fails too, nothing yields and the target keeps its value. The rule is
+  the fallback's own: a read is still no statement gate and no `&&` left
+  side. Not yet legal, and rejected with "logical OR in value position
+  requires a conditional left operand": a left side whose only read is
+  driven by a range (`arr[i] || -1` or `(arr[i] + 1) || -1` with `i` a
+  range), planned with the PIR migration's Step 7. Beside a read without a
+  range or a condition, a ranged read already falls back per iteration.
   `tests/array/oob_fallback` pins the behavior.
 - **Gated print (planned with PIR Step 6; not current syntax):** a no-comma
   prefix form, `c > 5 a, b`, rejects the whole line without evaluating its

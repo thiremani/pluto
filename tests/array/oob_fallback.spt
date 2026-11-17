@@ -67,6 +67,12 @@ matrix = [
 rowOut = matrix[9] || [7 8]
 "RowOut: -rowOut"
 
+# a read wrapped in an operator or a call fails the value around it, and
+# what the failed side built is released where the fallback takes over
+wrapped = (sarr[9] ⊕ "!") || shared
+wrappedCall = Square(arr[9]) || -1
+"Wrapped: -wrapped -wrappedCall", (arr[9] + 1) || -2
+
 # the fallback runs only where the read failed
 lazyOut = arr[9] || Loud(4)
 lazyIn = arr[0] || Loud(5)
@@ -114,6 +120,11 @@ gated = arr[1] > -1 arr[9] || 8
 step = 0:3
 stepped = [step + (arr[9] || 100)]
 "Ranged: -stepped"
+
+# a ranged read beside one without a range falls back per iteration
+wide = 0:5
+beside = [(arr[0] + arr[wide]) || -1]
+"RangedBeside: -beside"
 
 # a comparison and a read fail over to the same last side
 count = 3

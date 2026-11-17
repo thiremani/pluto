@@ -1485,9 +1485,10 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 }
 
 // TestFallbackAfterRead pins the fallback's own rule: an index read without a
-// range may stand left of ||, alone or as the last alternative of the ||
-// before it. Nothing else widens: a ranged or wrapped read, a read before &&
-// and a read as a gate stay errors.
+// range fails the left side of || wherever a condition would, alone, wrapped,
+// or as the last alternative of the || before it. Nothing else widens: a left
+// side only a ranged read can fail, a read in a literal's cell, which
+// zero-fills, a read before && and a read as a gate stay errors.
 func TestFallbackAfterRead(t *testing.T) {
 	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
 	cases := []struct {
@@ -1499,9 +1500,11 @@ func TestFallbackAfterRead(t *testing.T) {
 		{"Chain", "arr = [1 2]\nx = arr[9] || arr[8] || -1\nx", ""},
 		{"ChainGroupedRight", "arr = [1 2]\nx = arr[9] || (arr[8] || -1)\nx", ""},
 		{"ChainAfterComparison", "arr = [1 2]\nn = 3\nx = n > 5 || arr[9] || -1\nx", ""},
+		{"WrappedRead", "arr = [1 2]\nx = (arr[9] + 1) || -1\nx", ""},
 		{"RangedRead", "arr = [1 2]\ni = 0:5\nx = arr[i] || -1\nx", orMsg + "arr[i]"},
-		{"WrappedRead", "arr = [1 2]\nx = (arr[9] + 1) || -1\nx", orMsg + "(arr[9] + 1)"},
+		{"WrappedRangedRead", "arr = [1 2]\ni = 0:5\nx = (arr[i] + 1) || -1\nx", orMsg + "(arr[i] + 1)"},
 		{"ChainPastValue", "arr = [1 2]\nx = (arr[9] || 5) || 7\nx", orMsg + "(arr[9] || 5)"},
+		{"ReadInCell", "arr = [1 2]\nx = [arr[9]] || [7]\nx", orMsg + "[arr[9]]"},
 		{"ReadBeforeAnd", "arr = [1 2]\nx = arr[9] && 5\nx", "logical AND in value position requires a conditional left operand"},
 		{"ReadAsGate", "arr = [1 2]\nx = 4\nx = arr[9] 7\nx", "statement condition must be a comparison or bare range/array-selection driver"},
 	}

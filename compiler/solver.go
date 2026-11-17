@@ -2018,13 +2018,18 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 
 // fallsBackFromRead is the fallback's own rule for a left side no condition
 // fails: an index read without a range may be out of bounds, and || tests
-// whether it yielded, never its value. A || passes on the failure of its last
-// alternative. conditionPropagates stays as it is, since statement gates and
-// && share it and a read gates neither.
+// whether it yielded, never its value. A failed read fails the value around
+// it as a condition does, so it counts wherever one would. conditionPropagates
+// stays as it is, since statement gates and && share it and a read gates
+// neither.
 func (ts *TypeSolver) fallsBackFromRead(expr ast.Expression) bool {
-	if or, ok := ast.IsLogicalOr(expr); ok {
-		return ts.fallsBackFromRead(or.Right)
-	}
+	return treeCanFail(expr, ts.unrangedRead)
+}
+
+// unrangedRead reports an index read without a range. A ranged read alone
+// gives legacy lowering no condition to fold, so it waits for the ranged
+// fallback (matrix row 7e, planned for Step 7).
+func (ts *TypeSolver) unrangedRead(expr ast.Expression) bool {
 	if _, ok := expr.(*ast.ArrayRangeExpression); !ok {
 		return false
 	}
