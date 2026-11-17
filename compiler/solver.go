@@ -1989,7 +1989,8 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1. Naming the
 	// left operand shows when arithmetic took the rest: in b > 2 && 10 + 2 || 7
 	// it is 2.
-	if !ts.expressionCanFail(expr.Left) && !ts.fallsBackFromRead(expr.Left) {
+	leftCanFail := ts.expressionCanFail(expr.Left) || ts.fallsBackFromRead(expr.Left)
+	if !leftCanFail {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   fmt.Sprintf("logical OR in value position requires a conditional left operand, but its left operand is %s (|| binds tighter than arithmetic)", expr.Left),
@@ -2030,10 +2031,8 @@ func (ts *TypeSolver) fallsBackFromRead(expr ast.Expression) bool {
 // gives legacy lowering no condition to fold, so it waits for the ranged
 // fallback (matrix row 7e, planned for Step 7).
 func (ts *TypeSolver) unrangedRead(expr ast.Expression) bool {
-	if _, ok := expr.(*ast.ArrayRangeExpression); !ok {
-		return false
-	}
-	return !ts.ExprCache[key(ts.FuncNameMangled, expr)].HasRanges
+	_, isRead := expr.(*ast.ArrayRangeExpression)
+	return isRead && !ts.ExprCache[key(ts.FuncNameMangled, expr)].HasRanges
 }
 
 // typeLogicalAndExpression types a value-position && as a gating AND: slot i
