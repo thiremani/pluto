@@ -395,11 +395,9 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 
 	// What each commit replaces, by target.
 	replaced := make(map[string]*Symbol)
-	for _, d := range plan.Drops {
-		if d.Kind == pir.DropReplaced {
-			sym, _ := Get(c.Scopes, d.Target)
-			replaced[d.Target] = c.derefIfPointer(sym, d.Target+"_old_load")
-		}
+	for _, name := range plan.Replaced {
+		sym, _ := Get(c.Scopes, name)
+		replaced[name] = c.derefIfPointer(sym, name+"_old_load")
 	}
 
 	var nodes []loweredNode
@@ -534,7 +532,7 @@ func (c *Compiler) landSources(plan *pir.AssignPlan, n loweredNode, i int) {
 	c.withCondBranch(n.sources[i].yielded, "assign_write", func() {
 		c.commitSource(plan, n, i)
 	}, func() {
-		c.dropSourceSlots(plan, pir.DropSkipped, n.sources[i], "temp_free")
+		c.dropSourceSlots(plan.Skipped, n.sources[i], "temp_free")
 		if i+1 < len(n.sources) {
 			c.landSources(plan, n, i+1)
 		}
@@ -553,12 +551,12 @@ func (c *Compiler) commitSource(plan *pir.AssignPlan, n loweredNode, i int) {
 	}
 }
 
-// dropDiscarded releases the slots of n's sources that no target took, from
-// index i on, each where it ran: a source after the first only where the one
-// before it failed.
+// dropDiscarded releases what n's sources built for `_`, from index i on,
+// each where it ran: a source after the first only where the one before it
+// failed.
 func (c *Compiler) dropDiscarded(plan *pir.AssignPlan, n loweredNode, i int) {
-	c.dropSourceSlots(plan, pir.DropOutcome, n.sources[i], "discard")
-	if !planDropsAny(plan, pir.DropOutcome, n.sources[i+1:]) {
+	c.dropSourceSlots(plan.Discarded, n.sources[i], "discard")
+	if !discardsAny(plan, n.sources[i+1:]) {
 		return
 	}
 	c.withCondBranch(c.builder.CreateNot(n.sources[i].yielded, "discard_failed"), "discard_fallback", func() {
@@ -566,11 +564,12 @@ func (c *Compiler) dropDiscarded(plan *pir.AssignPlan, n loweredNode, i int) {
 	}, nil)
 }
 
-// planDropsAny reports a release of the given kind for one of the sources.
-func planDropsAny(plan *pir.AssignPlan, kind pir.DropKind, sources []loweredSource) bool {
-	for _, d := range plan.Drops {
+// discardsAny reports whether the plan discards an owned slot of one of the
+// sources.
+func discardsAny(plan *pir.AssignPlan, sources []loweredSource) bool {
+	for _, ref := range plan.Discarded {
 		for _, src := range sources {
-			if d.Kind == kind && d.Outcome.Outcome == src.eval.Result {
+			if ref.Outcome == src.eval.Result {
 				return true
 			}
 		}
@@ -578,11 +577,11 @@ func planDropsAny(plan *pir.AssignPlan, kind pir.DropKind, sources []loweredSour
 	return false
 }
 
-// dropSourceSlots runs the plan's releases of the given kind for src.
-func (c *Compiler) dropSourceSlots(plan *pir.AssignPlan, kind pir.DropKind, src loweredSource, loadName string) {
-	for _, d := range plan.Drops {
-		if d.Kind == kind && d.Outcome.Outcome == src.eval.Result {
-			c.freeSymbolValue(src.out[d.Outcome.Slot], loadName)
+// dropSourceSlots releases the slots of src that refs names.
+func (c *Compiler) dropSourceSlots(refs []pir.OutcomeRef, src loweredSource, loadName string) {
+	for _, ref := range refs {
+		if ref.Outcome == src.eval.Result {
+			c.freeSymbolValue(src.out[ref.Slot], loadName)
 		}
 	}
 }

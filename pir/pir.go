@@ -162,23 +162,14 @@ type Mapping struct {
 	OnSkip    SkipPolicy
 }
 
-type DropKind int
-
-const (
-	DropOutcome  DropKind = iota // an owned outcome no target took
-	DropReplaced                 // a local target's old value, after every mapping
-	DropSkipped                  // what an eval built before it failed, which its binding never took
-)
-
-// Drop is one derived release (plan §8), never authored by the builder. A
-// DropOutcome runs where its eval ran, whether or not it yielded, a
-// DropSkipped only where it failed, and a DropReplaced only where the mapping
-// that replaces Target committed. Outcome names an eval, a first's side
-// included.
-type Drop struct {
-	Kind    DropKind
-	Outcome OutcomeRef // DropOutcome, DropSkipped
-	Target  string     // DropReplaced
+// Releases are what a plan frees, derived by Elaborate (plan §8) and never
+// authored by the builder, in the order they run: what a failed eval built is
+// released where its mapping would have landed, so before the releases that
+// follow every mapping. An OutcomeRef names an eval, a first's side included.
+type Releases struct {
+	Skipped   []OutcomeRef // what an eval built before it failed, which its binding never took, released only where it failed
+	Discarded []OutcomeRef // an owned outcome mapped to `_`, released where its eval ran, whether or not it yielded
+	Replaced  []string     // a binding whose old value is released after every mapping, where the mapping that replaces it committed
 }
 
 // Head is what every plan carries.
@@ -205,7 +196,7 @@ type AssignPlan struct {
 	Head
 	Execute []Node
 	Commit  []Mapping
-	Drops   []Drop // derived by Elaborate, in the order they run
+	Releases
 }
 
 // source is one eval a mapping can take its value from, and the slot it

@@ -21,7 +21,7 @@ func Elaborate(p *AssignPlan) {
 	}
 
 	taken := make(map[string]bool)
-	var skipped, discarded []Drop
+	var releases Releases
 	for i := range p.Commit {
 		m := &p.Commit[i]
 		sources := p.sources(m.Outcome)
@@ -30,7 +30,7 @@ func Elaborate(p *AssignPlan) {
 			owned := src.slot().Ownership == Owned
 			if m.Target.Kind == DiscardTarget {
 				if owned {
-					discarded = append(discarded, Drop{Kind: DropOutcome, Outcome: src.ref})
+					releases.Discarded = append(releases.Discarded, src.ref)
 				}
 				continue
 			}
@@ -42,20 +42,18 @@ func Elaborate(p *AssignPlan) {
 				mayTake = nil
 			}
 			if owned && src.eval.MayFail() {
-				skipped = append(skipped, Drop{Kind: DropSkipped, Outcome: src.ref})
+				releases.Skipped = append(releases.Skipped, src.ref)
 			}
 			m.Transfers[j] = bindingTransfer(src.slot(), m.Target, mayTake, taken)
 		}
 	}
 
-	// What a failed eval built is released where its mapping would have
-	// landed, so before the releases that follow every mapping.
-	p.Drops = append(skipped, discarded...)
 	for _, m := range p.Commit {
 		if replaced[m.Target.Name] && !taken[m.Target.Name] {
-			p.Drops = append(p.Drops, Drop{Kind: DropReplaced, Target: m.Target.Name})
+			releases.Replaced = append(releases.Replaced, m.Target.Name)
 		}
 	}
+	p.Releases = releases
 }
 
 // bindingTransfer picks how a binding acquires its outcome; takeable holds

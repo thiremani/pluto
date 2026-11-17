@@ -233,12 +233,12 @@ func TestElaborate(t *testing.T) {
 		name      string
 		plan      *AssignPlan
 		transfers [][]Transfer
-		drops     []Drop
+		releases  Releases
 	}{
-		{"scalar swap stores", swapPlan(), [][]Transfer{{Store}, {Store}}, nil},
-		{"heap swap moves both old values, copies nothing", heapSwapPlan(), [][]Transfer{{Move}, {Move}}, nil},
+		{"scalar swap stores", swapPlan(), [][]Transfer{{Store}, {Store}}, Releases{}},
+		{"heap swap moves both old values, copies nothing", heapSwapPlan(), [][]Transfer{{Move}, {Move}}, Releases{}},
 		{"owned replacement moves and releases the old value", replacePlan(), [][]Transfer{{Move}, {Store}},
-			[]Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 1}}, {Kind: DropReplaced, Target: "x"}}},
+			Releases{Discarded: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"x"}}},
 		{"duplicate source: first takes, second copies", &AssignPlan{
 			Head: Head{Label: "assign d1, d2", Source: "d1, d2 = d1, d1"},
 			Execute: []Node{
@@ -249,27 +249,27 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("d1", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("d2", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, [][]Transfer{{Move}, {Copy}}, []Drop{{Kind: DropReplaced, Target: "d2"}}},
+		}, [][]Transfer{{Move}, {Copy}}, Releases{Replaced: []string{"d2"}}},
 		{"borrow of a surviving owner copies", &AssignPlan{
 			Head:    Head{Label: "assign t", Source: "t = s"},
 			Execute: []Node{&Eval{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
 			Commit:  []Mapping{{Target: Target{Kind: LocalTarget, Name: "t", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Copy}}, nil},
+		}, [][]Transfer{{Copy}}, Releases{}},
 		{"unmanaged into an owning target is copied", &AssignPlan{
 			Head:    Head{Label: "assign s", Source: `s = "hi"`},
 			Execute: []Node{&Eval{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit:  []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Copy}}, []Drop{{Kind: DropReplaced, Target: "s"}}},
+		}, [][]Transfer{{Copy}}, Releases{Replaced: []string{"s"}}},
 		{"heap transfer into a non-owning fresh target is legal", &AssignPlan{
 			Head:    Head{Label: "assign other", Source: "other = text"},
 			Execute: []Node{&Eval{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
 			Commit:  []Mapping{{Target: Target{Kind: LocalTarget, Name: "other", Type: str, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Copy}}, nil},
+		}, [][]Transfer{{Copy}}, Releases{}},
 		{"widened binding releases its held value on a plain store", &AssignPlan{
 			Head:    Head{Label: "assign other", Source: `other = "new"`},
 			Execute: []Node{&Eval{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit:  []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Store}}, []Drop{{Kind: DropReplaced, Target: "other"}}},
+		}, [][]Transfer{{Store}}, Releases{Replaced: []string{"other"}}},
 		{"widened owner is taken by a moved borrow", &AssignPlan{
 			Head: Head{Label: "assign a, other", Source: "a, other = other, a"},
 			Execute: []Node{
@@ -280,14 +280,14 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, [][]Transfer{{Move}, {Move}}, nil},
+		}, [][]Transfer{{Move}, {Move}}, Releases{}},
 		{"discarded borrow releases nothing", &AssignPlan{
 			Head:    Head{Label: "assign _", Source: "_ = h"},
 			Execute: []Node{&Eval{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
 			Commit:  []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Store}}, nil},
+		}, [][]Transfer{{Store}}, Releases{}},
 		{"output releases the value it held, as a local does", joinPlan(), [][]Transfer{{Move}},
-			[]Drop{{Kind: DropReplaced, Target: "res"}}},
+			Releases{Replaced: []string{"res"}}},
 		{"swapped outputs take each other's old values", &AssignPlan{
 			Head: Head{Label: "assign a, b", Func: "Str, Str = Swap(Str, Str)", Source: "a, b = b, a"},
 			Execute: []Node{
@@ -298,13 +298,12 @@ func TestElaborate(t *testing.T) {
 				{Target: heapOutput("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapOutput("b", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, [][]Transfer{{Move}, {Move}}, nil},
+		}, [][]Transfer{{Move}, {Move}}, Releases{}},
 		{"a skipped owned outcome is released, a discarded one either way, an old value where replaced", skipPlan(),
-			[][]Transfer{{Move}, {Move}, {Store}}, []Drop{
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}},
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-				{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 2}},
-				{Kind: DropReplaced, Target: "kept"},
+			[][]Transfer{{Move}, {Move}, {Store}}, Releases{
+				Skipped:   []OutcomeRef{{Outcome: 0}, {Outcome: 1}},
+				Discarded: []OutcomeRef{{Outcome: 2}},
+				Replaced:  []string{"kept"},
 			}},
 		{"a borrow copies when its owner's replacement may skip", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: "a, b = b, sarr[9]"},
@@ -316,11 +315,7 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip},
 			},
-		}, [][]Transfer{{Copy}, {Move}}, []Drop{
-			{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-			{Kind: DropReplaced, Target: "a"},
-			{Kind: DropReplaced, Target: "b"},
-		}},
+		}, [][]Transfer{{Copy}, {Move}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"a", "b"}}},
 		// No source statement builds a borrowed outcome that may skip yet.
 		{"a borrow that may skip copies though its owner is replaced", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: `a, b = views[9], "new"`},
@@ -332,15 +327,9 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, [][]Transfer{{Copy}, {Copy}}, []Drop{
-			{Kind: DropReplaced, Target: "a"},
-			{Kind: DropReplaced, Target: "b"},
-		}},
+		}, [][]Transfer{{Copy}, {Copy}}, Releases{Replaced: []string{"a", "b"}}},
 		{"a first moves its owned side, copies its borrowed one, and releases what the failed read built", firstPlan(),
-			[][]Transfer{{Move, Copy}}, []Drop{
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-				{Kind: DropReplaced, Target: "s"},
-			}},
+			[][]Transfer{{Move, Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"s"}}},
 		{"a side of a first copies though its owner is replaced", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: `a, b = sarr[9] || b, "new"`},
 			Execute: []Node{
@@ -354,11 +343,7 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 3}},
 			},
-		}, [][]Transfer{{Move, Copy}, {Copy}}, []Drop{
-			{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-			{Kind: DropReplaced, Target: "a"},
-			{Kind: DropReplaced, Target: "b"},
-		}},
+		}, [][]Transfer{{Move, Copy}, {Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"a", "b"}}},
 		{"a discarded first releases each owned side where it ran", &AssignPlan{
 			Head: Head{Label: "assign _", Source: `_ = sarr[9] || h ⊕ "?"`},
 			Execute: []Node{&First{Result: 0, Type: str, Sides: []*Eval{
@@ -366,16 +351,9 @@ func TestElaborate(t *testing.T) {
 				{Result: 2, Expr: concat(ident("h"), strLit("?")), Slots: []Slot{ownedSlot(str)}},
 			}}},
 			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, [][]Transfer{{Store, Store}}, []Drop{
-			{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 1}},
-			{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 2}},
-		}},
+		}, [][]Transfer{{Store, Store}}, Releases{Discarded: []OutcomeRef{{Outcome: 1}, {Outcome: 2}}}},
 		{"a first whose last side may skip releases each side where it failed", chainPlan(),
-			[][]Transfer{{Store}, {Move, Move, Move}, {Store}}, []Drop{
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 2}},
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 3}},
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 4}},
-			}},
+			[][]Transfer{{Store}, {Move, Move, Move}, {Store}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}, {Outcome: 4}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -385,13 +363,10 @@ func TestElaborate(t *testing.T) {
 					t.Errorf("mapping %d transfers = %v, want %v", i, m.Transfers, tc.transfers[i])
 				}
 			}
-			if len(tc.plan.Drops) != len(tc.drops) {
-				t.Fatalf("drops = %v, want %v", tc.plan.Drops, tc.drops)
-			}
-			for i, d := range tc.plan.Drops {
-				if d != tc.drops[i] {
-					t.Errorf("drop %d = %v, want %v", i, d, tc.drops[i])
-				}
+			if !slices.Equal(tc.plan.Skipped, tc.releases.Skipped) ||
+				!slices.Equal(tc.plan.Discarded, tc.releases.Discarded) ||
+				!slices.Equal(tc.plan.Replaced, tc.releases.Replaced) {
+				t.Errorf("releases = %+v, want %+v", tc.plan.Releases, tc.releases)
 			}
 			if err := Validate(tc.plan, sameSpelling); err != nil {
 				t.Fatalf("elaborated plan rejected: %v", err)
@@ -480,24 +455,24 @@ func TestValidateRejects(t *testing.T) {
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[1].Target.HoldsHeap = true
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "b"}}
+			p.Replaced = []string{"b"}
 		}, "b's old value is both taken and dropped"},
-		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}} }, "a holds no replaced value"},
+		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Replaced = []string{"a"} }, "a holds no replaced value"},
 		{"DropOfFreshTarget", func(p *AssignPlan) {
 			p.Commit[0].Target.TypeOwnsHeap = true
 			p.Commit[0].Target.Fresh = true
 			p.Commit[0].Transfers = []Transfer{Copy}
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}}
+			p.Replaced = []string{"a"}
 		}, "a holds no replaced value"},
 		{"ReplacedDroppedTwice", func(p *AssignPlan) {
 			p.Commit[0].Target.HoldsHeap = true
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}, {Kind: DropReplaced, Target: "a"}}
+			p.Replaced = []string{"a", "a"}
 		}, "a's old value dropped twice"},
-		{"DropOfMappedOutcome", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}} }, "not a discarded owned outcome"},
+		{"DropOfMappedOutcome", func(p *AssignPlan) { p.Discarded = []OutcomeRef{{Outcome: 0}} }, "not a discarded owned outcome"},
 		{"DropOfDiscardedBorrow", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "z")
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Discarded = []OutcomeRef{{Outcome: 0}}
 		}, "not a discarded owned outcome"},
 		{"DiscardedOwnedNeverReleased", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0].Ownership = Owned
@@ -506,9 +481,8 @@ func TestValidateRejects(t *testing.T) {
 		{"DiscardedOwnedDroppedTwice", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Discarded = []OutcomeRef{{Outcome: 0}, {Outcome: 0}}
 		}, "%t0 slot 0 dropped twice"},
-		{"UnknownDropKind", func(p *AssignPlan) { p.Drops = []Drop{{Kind: 4}} }, "unknown drop kind"},
 		{"AccessWithoutScope", func(p *AssignPlan) { evalAt(p, 0).Expr = read("arr", 0) }, "eval %t0 holds a checked access with no out-of-bounds scope"},
 		{"ScopeWithoutAccess", func(p *AssignPlan) { evalAt(p, 0).OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
 		{"FallbackOutsideFirst", func(p *AssignPlan) {
@@ -557,14 +531,14 @@ func TestValidateRejects(t *testing.T) {
 		{"SkipDropOfCertainOutcome", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Transfers = []Transfer{Move}
-			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Skipped = []OutcomeRef{{Outcome: 0}}
 		}, "skip-path drop of %t0 slot 0"},
 		{"SkippedDroppedTwice", func(p *AssignPlan) {
 			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
 			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
-			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Skipped = []OutcomeRef{{Outcome: 0}, {Outcome: 0}}
 		}, "skipped %t0 slot 0 dropped twice"},
 	}
 	for _, tc := range cases {
@@ -612,7 +586,7 @@ func TestValidateFirstRejects(t *testing.T) {
 		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 evals that can supply it"},
 		{"BorrowedSideMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move, Move} }, "target s takes h's old value from %t2, one side of a first"},
 		{"OwnedSideNotMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Copy, Copy} }, "target s = %t1 slot 0 uses transfer copy; ownership requires move"},
-		{"FailedSideNeverReleased", func(p *AssignPlan) { p.Drops = p.Drops[1:] }, "owned outcome %t1 slot 0 is never released where it fails"},
+		{"FailedSideNeverReleased", func(p *AssignPlan) { p.Skipped = nil }, "owned outcome %t1 slot 0 is never released where it fails"},
 		{"PolicyOnFirstThatAlwaysYields", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "target s = %t0 slot 0 has skip policy keep; its outcome and target require none"},
 		{"NoPolicyOnFirstThatMaySkip", func(p *AssignPlan) {
 			firstAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome}

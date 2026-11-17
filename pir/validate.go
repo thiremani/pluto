@@ -359,7 +359,7 @@ func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 // owned outcome a binding takes where it yields is released where it fails.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
-	needDrop := make(map[OutcomeRef]bool)
+	needDiscardDrop := make(map[OutcomeRef]bool)
 	needSkipDrop := make(map[OutcomeRef]bool)
 	for _, m := range p.Commit {
 		for i, src := range p.sources(m.Outcome) {
@@ -373,7 +373,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 				continue
 			}
 			if m.Target.Kind == DiscardTarget {
-				needDrop[src.ref] = true
+				needDiscardDrop[src.ref] = true
 			} else if src.eval.MayFail() {
 				needSkipDrop[src.ref] = true
 			}
@@ -385,45 +385,42 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 		}
 	}
 
-	droppedOutcome := make(map[OutcomeRef]bool)
 	droppedSkipped := make(map[OutcomeRef]bool)
-	droppedTarget := make(map[string]bool)
-	for _, d := range p.Drops {
-		switch d.Kind {
-		case DropSkipped:
-			if !needSkipDrop[d.Outcome] {
-				return fmt.Errorf("plan %s: skip-path drop of %%t%d slot %d, which is not an owned outcome a binding takes only where it yields", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
-			}
-			if droppedSkipped[d.Outcome] {
-				return fmt.Errorf("plan %s: skipped %%t%d slot %d dropped twice", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
-			}
-			droppedSkipped[d.Outcome] = true
-		case DropOutcome:
-			if !needDrop[d.Outcome] {
-				return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not a discarded owned outcome", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
-			}
-			if droppedOutcome[d.Outcome] {
-				return fmt.Errorf("plan %s: %%t%d slot %d dropped twice", p.Label, d.Outcome.Outcome, d.Outcome.Slot)
-			}
-			droppedOutcome[d.Outcome] = true
-		case DropReplaced:
-			if !replaced[d.Target] {
-				return fmt.Errorf("plan %s: drop of %s's old value, but %s holds no replaced value", p.Label, d.Target, d.Target)
-			}
-			if taken[d.Target] > 0 {
-				return fmt.Errorf("plan %s: %s's old value is both taken and dropped", p.Label, d.Target)
-			}
-			if droppedTarget[d.Target] {
-				return fmt.Errorf("plan %s: %s's old value dropped twice", p.Label, d.Target)
-			}
-			droppedTarget[d.Target] = true
-		default:
-			return fmt.Errorf("plan %s: unknown drop kind %d", p.Label, d.Kind)
+	for _, ref := range p.Skipped {
+		if !needSkipDrop[ref] {
+			return fmt.Errorf("plan %s: skip-path drop of %%t%d slot %d, which is not an owned outcome a binding takes only where it yields", p.Label, ref.Outcome, ref.Slot)
 		}
+		if droppedSkipped[ref] {
+			return fmt.Errorf("plan %s: skipped %%t%d slot %d dropped twice", p.Label, ref.Outcome, ref.Slot)
+		}
+		droppedSkipped[ref] = true
+	}
+	droppedDiscarded := make(map[OutcomeRef]bool)
+	for _, ref := range p.Discarded {
+		if !needDiscardDrop[ref] {
+			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not a discarded owned outcome", p.Label, ref.Outcome, ref.Slot)
+		}
+		if droppedDiscarded[ref] {
+			return fmt.Errorf("plan %s: %%t%d slot %d dropped twice", p.Label, ref.Outcome, ref.Slot)
+		}
+		droppedDiscarded[ref] = true
+	}
+	droppedTarget := make(map[string]bool)
+	for _, name := range p.Replaced {
+		if !replaced[name] {
+			return fmt.Errorf("plan %s: drop of %s's old value, but %s holds no replaced value", p.Label, name, name)
+		}
+		if taken[name] > 0 {
+			return fmt.Errorf("plan %s: %s's old value is both taken and dropped", p.Label, name)
+		}
+		if droppedTarget[name] {
+			return fmt.Errorf("plan %s: %s's old value dropped twice", p.Label, name)
+		}
+		droppedTarget[name] = true
 	}
 
-	for ref := range needDrop {
-		if !droppedOutcome[ref] {
+	for ref := range needDiscardDrop {
+		if !droppedDiscarded[ref] {
 			return fmt.Errorf("plan %s: discarded owned outcome %%t%d slot %d is never released", p.Label, ref.Outcome, ref.Slot)
 		}
 	}

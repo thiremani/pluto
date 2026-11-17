@@ -38,9 +38,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 		b.WriteString("\n")
 	}
 	if expanded {
-		for _, d := range p.Drops {
-			fmt.Fprintf(&b, "        %s\n", p.dropString(d))
-		}
+		p.writeReleases(&b)
 	}
 
 	return placed(b.String(), p.Func)
@@ -300,17 +298,19 @@ func (policy SkipPolicy) String() string {
 	return fmt.Sprintf("skip-policy(%d)", int(policy))
 }
 
-// dropString names a release by the value it frees: a target's old value,
-// what a failed eval built, tagged with what its failure does, or an outcome
-// no target took.
-func (p *AssignPlan) dropString(d Drop) string {
-	switch d.Kind {
-	case DropReplaced:
-		return "drop " + d.Target + " [old]"
-	case DropSkipped:
-		return fmt.Sprintf("drop %s [on-%s]", p.refString(d.Outcome), p.eval(d.Outcome.Outcome).OnOOB)
+// writeReleases names each release by the value it frees: what a failed eval
+// built, tagged with what its failure does, an outcome mapped to `_`, or a
+// target's old value.
+func (p *AssignPlan) writeReleases(b *strings.Builder) {
+	for _, ref := range p.Skipped {
+		fmt.Fprintf(b, "        drop %s [on-%s]\n", p.refString(ref), p.eval(ref.Outcome).OnOOB)
 	}
-	return "drop " + p.refString(d.Outcome)
+	for _, ref := range p.Discarded {
+		fmt.Fprintf(b, "        drop %s\n", p.refString(ref))
+	}
+	for _, name := range p.Replaced {
+		fmt.Fprintf(b, "        drop %s [old]\n", name)
+	}
 }
 
 // eval finds the eval whose outcome is id, a first's side included; it is
