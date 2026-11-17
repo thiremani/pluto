@@ -27,8 +27,11 @@ checks.
 
 `&`, `|`, `⊻`, `~`, `!` and comparisons have a result for every input. Array
 cells use these same operators, one cell at a time. An array operation can still
-abort, on a shape mismatch or when `⊕` would overflow a dimension. The abort keeps
-the output printed so far, as the zero-divisor stop below does.
+abort, on a shape mismatch or when `⊕` would overflow a dimension, but not once a
+check earlier in the same value has failed: the value fails with that check, as
+it does past a zero divisor, so `x = cube[9] ⊕ [[7 8]]` keeps `x` when `cube[9]`
+is out of bounds. The abort keeps the output printed so far, as the zero-divisor
+stop below does.
 
 ## Dividing I64 by zero
 

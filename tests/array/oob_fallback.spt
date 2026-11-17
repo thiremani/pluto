@@ -73,6 +73,16 @@ wrapped = (sarr[9] ⊕ "!") || shared
 wrappedCall = Square(arr[9]) || -1
 "Wrapped: -wrapped -wrappedCall", (arr[9] + 1) || -2
 
+# a concatenation after a failed read cannot stop the program: the literal
+# after the read never fills in, so the side falls back, and an operation on
+# the concatenation reads none of its data
+cube = [[[1 2] [3 4]]]
+stacked = (cube[9] ⊕ [[7 8]]) || [[42]]
+wideCube = [[[0:4096] [0:4096]]]
+wideRows = [[0:4096] [0:4096] [0:4096]]
+summed = ((wideCube[9] ⊕ [[7 8]]) + wideRows) || [[42]]
+"Stacked: -stacked -summed"
+
 # the fallback runs only where the read failed
 lazyOut = arr[9] || Loud(4)
 lazyIn = arr[0] || Loud(5)
