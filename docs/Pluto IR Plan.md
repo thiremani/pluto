@@ -1724,9 +1724,10 @@ machine code changes with this slice while what it does stays.
 
 Staying legacy: a gate that is not one comparison of one scalar slot over
 operands an eval admits. That is an `&&` of comparisons, planned for the next
-slice as a `last` (§12); an `||` of them, a chain, a mask and a comparison of
-several slots, each planned with the node that carries it; a gate over a
-value that does not plan; and a ranged gate (planned for Step 7).
+slice as a `last` (§12); an `||` of them, a chain and a comparison of several
+slots, each planned with the node that carries it; a gate over a value that
+does not plan; and a ranged gate (planned for Step 7). A mask is no gate at
+all: the solver rejects an array as a statement condition.
 
 Over the fixtures as they stood before this slice, 79 more assignments plan,
 as 84 plans over the specializations of their bodies, and the machine code
