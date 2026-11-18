@@ -235,12 +235,14 @@ func planOOBScope(expr ast.Expression, fallbackFollows bool) pir.OOBScope {
 // discard keeps nothing.
 func planSkipPolicy(mayNotCommit bool, target pir.Target) pir.SkipPolicy {
 	switch {
-	case !mayNotCommit || target.Kind == pir.DiscardTarget:
+	case target.Kind == pir.DiscardTarget:
 		return pir.NoSkipPolicy
-	case target.Fresh:
+	case mayNotCommit && target.Fresh:
 		return pir.ZeroOnSkip
-	default:
+	case mayNotCommit:
 		return pir.KeepOnSkip
+	default:
+		return pir.NoSkipPolicy
 	}
 }
 
