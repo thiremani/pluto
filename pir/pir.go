@@ -81,14 +81,35 @@ type First struct {
 // MaySkip reports a first whose last side may skip, when no side yields.
 func (f *First) MaySkip() bool { return f.Sides[len(f.Sides)-1].MaySkip() }
 
-// Node is one operation of an assignment's execute region: an *Eval or a
-// *First.
-type Node interface {
-	ID() OutcomeID
+// Check evaluates one comparison (plan §4): its outcome is the left operand,
+// and it yields where the comparison holds. A failed access in an operand
+// skips it as a failed comparison does. It has one slot.
+type Check struct {
+	Result OutcomeID
+	Expr   *ast.InfixExpression
+	Slots  []Slot
+	OnOOB  OOBScope
 }
 
-func (ev *Eval) ID() OutcomeID { return ev.Result }
-func (f *First) ID() OutcomeID { return f.Result }
+// Gate admits or rejects the statement for its whole region (plan §4, §9):
+// Body runs where the outcome Cond names yielded, and no mapping commits where
+// it did not. A gate binds no outcome, takes no value, and closes the region
+// it sits in.
+type Gate struct {
+	Cond OutcomeID
+	Body []Node
+}
+
+// Node is one operation of an assignment's execute region: an *Eval, a
+// *First, a *Check or a *Gate.
+type Node interface {
+	node()
+}
+
+func (*Eval) node()  {}
+func (*First) node() {}
+func (*Check) node() {}
+func (*Gate) node()  {}
 
 type TargetKind int
 
@@ -140,21 +161,21 @@ const (
 	Copy                  // the target gets its own owned copy: of a borrowed outcome, or of an unmanaged value entering a TypeOwnsHeap target
 )
 
-// SkipPolicy is what a binding holds where its mapping's outcome skipped
-// (plan §9).
+// SkipPolicy is what a binding holds where its mapping did not commit: its
+// outcome skipped, or a gate rejected the statement (plan §9).
 type SkipPolicy int
 
 const (
-	NoSkipPolicy SkipPolicy = iota // the outcome always yields, or the target is a discard, which keeps nothing
+	NoSkipPolicy SkipPolicy = iota // the mapping always commits, or the target is a discard, which keeps nothing
 	KeepOnSkip                     // the binding keeps the value it holds
 	ZeroOnSkip                     // a fresh binding holds its type's zero
 )
 
 // Mapping is one recorded target = outcome commit pair; the lowerer
 // consumes it as recorded, never rematching by name or position. It commits
-// where its outcome yielded and follows OnSkip elsewhere. Transfers holds one
-// entry per eval that can supply the value: the outcome's own, or each side
-// of a first in order.
+// where its outcome yielded, under a gate only where the gate admitted, and
+// follows OnSkip elsewhere. Transfers holds one entry per eval that can
+// supply the value: the outcome's own, or each side of a first in order.
 type Mapping struct {
 	Target    Target
 	Outcome   OutcomeRef
@@ -165,8 +186,10 @@ type Mapping struct {
 // Releases are what a plan frees, derived by Elaborate (plan §8) and never
 // authored by the builder, in the order they run: what a failed eval built is
 // released where its mapping would have landed, so before the releases that
-// follow every mapping. An OutcomeRef names an eval, a first's side included.
+// follow every mapping. An OutcomeRef names an eval, a first's side included,
+// or a check.
 type Releases struct {
+	Tested    []OutcomeRef // an owned outcome a gate only tested, released once the gate has read it, before its region runs
 	Skipped   []OutcomeRef // what an eval built before it failed, which its binding never took, released only where it failed
 	Discarded []OutcomeRef // an owned outcome mapped to `_`, released where its eval ran, whether or not it yielded
 	Replaced  []string     // a binding whose old value is released after every mapping, where the mapping that replaces it committed
@@ -191,12 +214,39 @@ type Plan interface {
 
 // AssignPlan is the execution plan for one assignment statement; prepare and
 // finish phases are absent until carries and collectors land. Execute holds
-// the execute region's nodes in execution order.
+// the execute region's nodes in execution order: the values the commit maps,
+// or a gate's check and then the gate, whose region holds them.
 type AssignPlan struct {
 	Head
 	Execute []Node
 	Commit  []Mapping
 	Releases
+}
+
+// Gate returns the gate that closes the execute region, nil for a statement
+// without one.
+func (p *AssignPlan) Gate() *Gate {
+	gate, _ := p.Execute[len(p.Execute)-1].(*Gate)
+	return gate
+}
+
+// Condition returns the check a gate takes, the node before the gate; nil for
+// a statement without a gate.
+func (p *AssignPlan) Condition() *Check {
+	if p.Gate() == nil {
+		return nil
+	}
+	ch, _ := p.Execute[len(p.Execute)-2].(*Check)
+	return ch
+}
+
+// Values returns the nodes whose outcomes the commit maps: a gate's region,
+// or the whole execute region of a statement without a gate.
+func (p *AssignPlan) Values() []Node {
+	if gate := p.Gate(); gate != nil {
+		return gate.Body
+	}
+	return p.Execute
 }
 
 // source is one eval a mapping can take its value from, and the slot it
@@ -212,14 +262,17 @@ func (s source) slot() Slot { return s.eval.Slots[s.ref.Slot] }
 // run: the outcome's own eval, or each side of a first. It is empty when ref
 // names neither.
 func (p *AssignPlan) sources(ref OutcomeRef) []source {
-	for _, node := range p.Execute {
-		if node.ID() != ref.Outcome {
-			continue
-		}
+	for _, node := range p.Values() {
 		switch n := node.(type) {
 		case *Eval:
+			if n.Result != ref.Outcome {
+				continue
+			}
 			return []source{{ref: ref, eval: n}}
 		case *First:
+			if n.Result != ref.Outcome {
+				continue
+			}
 			sides := make([]source, len(n.Sides))
 			for i, side := range n.Sides {
 				sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, eval: side}
@@ -230,11 +283,19 @@ func (p *AssignPlan) sources(ref OutcomeRef) []source {
 	return nil
 }
 
-// maySkip reports a mapping that may not commit: the last eval that can
-// supply its value may skip.
+// maySkip reports a mapping whose own outcome may skip: the last eval that
+// can supply its value may. A gate's rejection is no skip of one mapping: it
+// leaves every mapping of the statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
 	sources := p.sources(m.Outcome)
 	return sources[len(sources)-1].eval.MaySkip()
+}
+
+// mayNotCommit reports a mapping that some path leaves unapplied, so that its
+// binding needs a skip policy: its outcome may skip, or a gate may reject the
+// statement.
+func (p *AssignPlan) mayNotCommit(m Mapping) bool {
+	return p.Gate() != nil || p.maySkip(m)
 }
 
 // PrintArg is one argument of a print invocation: a string literal, or an

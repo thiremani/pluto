@@ -19,8 +19,13 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		return fmt.Errorf("plan %s has no evals", p.Label)
 	}
 
-	next, slots := 0, 0
-	for _, node := range p.Execute {
+	next, err := p.validateGate()
+	if err != nil {
+		return err
+	}
+
+	slots := 0
+	for _, node := range p.Values() {
 		switch n := node.(type) {
 		case *Eval:
 			if err := validateEval(p.Label, next, n); err != nil {
@@ -62,6 +67,57 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	}
 
 	return p.validateReleases(replaced)
+}
+
+// validateGate checks what a gated plan's execute region holds beside its
+// values: one check, then the gate that takes it and admits a region. It
+// returns the outcome ID the values start at. A check or a gate anywhere else
+// is no value, and the values' own validation rejects it.
+func (p *AssignPlan) validateGate() (int, error) {
+	gate := p.Gate()
+	if gate == nil {
+		return 0, nil
+	}
+
+	before := p.Execute[:len(p.Execute)-1]
+	if len(before) != 1 {
+		return 0, fmt.Errorf("plan %s: gate follows %d nodes and takes one check", p.Label, len(before))
+	}
+	ch, isCheck := before[0].(*Check)
+	if !isCheck {
+		return 0, fmt.Errorf("plan %s: gate follows %T, which is no check", p.Label, before[0])
+	}
+	if err := validateCheck(p.Label, 0, ch); err != nil {
+		return 0, err
+	}
+
+	if gate.Cond != ch.Result {
+		return 0, fmt.Errorf("plan %s: gate takes %%t%d where check %%t%d precedes it", p.Label, gate.Cond, ch.Result)
+	}
+	if len(gate.Body) == 0 {
+		return 0, fmt.Errorf("plan %s: gate admits an empty region", p.Label)
+	}
+	return 1, nil
+}
+
+// validateCheck checks a check whose outcome is id: one well-formed slot, and
+// a scope for its accesses that skips, since no fallback follows a check.
+func validateCheck(plan string, id int, ch *Check) error {
+	if ch.Result != OutcomeID(id) {
+		return fmt.Errorf("plan %s: check has result ID %d where %d is next; IDs must be dense in execution order", plan, ch.Result, id)
+	}
+	if len(ch.Slots) != 1 {
+		return fmt.Errorf("plan %s: check %%t%d has %d slots", plan, id, len(ch.Slots))
+	}
+	if ch.OnOOB == UseFallback {
+		return fmt.Errorf("plan %s: check %%t%d falls back, but is no side of a first", plan, id)
+	}
+
+	node := fmt.Sprintf("check %%t%d", id)
+	if err := validateSlots(plan, node, ch.Slots); err != nil {
+		return err
+	}
+	return validateAccesses(plan, node, ch.Expr, ch.OnOOB)
 }
 
 // validateFirst checks a first whose outcome is id: at least two sides of one
@@ -156,46 +212,56 @@ func validateEval(plan string, i int, ev *Eval) error {
 	if len(ev.Slots) == 0 {
 		return fmt.Errorf("plan %s: eval %%t%d has no output slots", plan, i)
 	}
-	for s, slot := range ev.Slots {
+
+	node := fmt.Sprintf("eval %%t%d", i)
+	if err := validateSlots(plan, node, ev.Slots); err != nil {
+		return err
+	}
+	return validateAccesses(plan, node, ev.Expr, ev.OnOOB)
+}
+
+// validateSlots checks the slots of node, an eval or a check named as an
+// error names it: each has a type, and names an owner exactly when borrowed.
+func validateSlots(plan, node string, slots []Slot) error {
+	for s, slot := range slots {
 		if slot.Type == nil {
-			return fmt.Errorf("plan %s: eval %%t%d slot %d has no type", plan, i, s)
+			return fmt.Errorf("plan %s: %s slot %d has no type", plan, node, s)
 		}
 		switch slot.Ownership {
 		case Unmanaged, Owned:
 			if slot.Owner != "" {
-				return fmt.Errorf("plan %s: eval %%t%d slot %d names owner %s but is not borrowed", plan, i, s, slot.Owner)
+				return fmt.Errorf("plan %s: %s slot %d names owner %s but is not borrowed", plan, node, s, slot.Owner)
 			}
 		case Borrowed:
 			if slot.Owner == "" {
-				return fmt.Errorf("plan %s: eval %%t%d slot %d is borrowed from no owner", plan, i, s)
+				return fmt.Errorf("plan %s: %s slot %d is borrowed from no owner", plan, node, s)
 			}
 		default:
-			return fmt.Errorf("plan %s: eval %%t%d slot %d has unknown ownership %d", plan, i, s, slot.Ownership)
+			return fmt.Errorf("plan %s: %s slot %d has unknown ownership %d", plan, node, s, slot.Ownership)
 		}
 	}
-
-	return validateAccesses(plan, i, ev)
+	return nil
 }
 
 // validateAccesses checks plan §14.15: every checked access has an explicit
-// out-of-bounds scope, which its eval records. A literal cell resolves a
-// failed access itself, a scope no plan node records.
-func validateAccesses(plan string, i int, ev *Eval) error {
-	switch ev.OnOOB {
+// out-of-bounds scope, which its node, an eval or a check, records. A literal
+// cell resolves a failed access itself, a scope no plan node records.
+func validateAccesses(plan, node string, expr ast.Expression, scope OOBScope) error {
+	switch scope {
 	case NoChecks, SkipOutcome, UseFallback:
 	default:
-		return fmt.Errorf("plan %s: eval %%t%d has unknown out-of-bounds scope %d", plan, i, ev.OnOOB)
+		return fmt.Errorf("plan %s: %s has unknown out-of-bounds scope %d", plan, node, scope)
 	}
 
-	outcome, cell := checkedAccesses(ev.Expr, false)
+	outcome, cell := checkedAccesses(expr, false)
 	if cell > 0 {
-		return fmt.Errorf("plan %s: eval %%t%d holds a checked access in a literal cell, a scope no plan node records", plan, i)
+		return fmt.Errorf("plan %s: %s holds a checked access in a literal cell, a scope no plan node records", plan, node)
 	}
-	if outcome > 0 && !ev.MayFail() {
-		return fmt.Errorf("plan %s: eval %%t%d holds a checked access with no out-of-bounds scope", plan, i)
+	if outcome > 0 && scope == NoChecks {
+		return fmt.Errorf("plan %s: %s holds a checked access with no out-of-bounds scope", plan, node)
 	}
-	if outcome == 0 && ev.MayFail() {
-		return fmt.Errorf("plan %s: eval %%t%d has an out-of-bounds scope and no checked access", plan, i)
+	if outcome == 0 && scope != NoChecks {
+		return fmt.Errorf("plan %s: %s has an out-of-bounds scope and no checked access", plan, node)
 	}
 
 	return nil
@@ -264,12 +330,12 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 	return nil
 }
 
-// validateSkipPolicy checks plan §9: a binding whose outcome may skip keeps
-// its value, or holds zero when it is fresh, and no other mapping carries a
-// policy.
+// validateSkipPolicy checks plan §9: a binding whose mapping may not commit
+// keeps its value, or holds zero when it is fresh, and no other mapping
+// carries a policy.
 func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
 	want := NoSkipPolicy
-	if m.Target.binds() && p.maySkip(m) {
+	if m.Target.binds() && p.mayNotCommit(m) {
 		want = KeepOnSkip
 		if m.Target.Fresh {
 			want = ZeroOnSkip
@@ -356,7 +422,8 @@ func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 
 // validateReleases checks plan §14.19-21: every owned outcome and every
 // replaced held value is consumed or released exactly once, on each path. An
-// owned outcome a binding takes where it yields is released where it fails.
+// owned outcome a binding takes where it yields is released where it fails,
+// and one a gate tested is released whether or not it yielded.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDiscardDrop := make(map[OutcomeRef]bool)
@@ -382,6 +449,30 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	for owner, n := range taken {
 		if n > 1 {
 			return fmt.Errorf("plan %s: %s's old value is taken by %d targets", p.Label, owner, n)
+		}
+	}
+
+	needTestDrop := make(map[OutcomeRef]bool)
+	if ch := p.Condition(); ch != nil {
+		for i, slot := range ch.Slots {
+			if slot.Ownership == Owned {
+				needTestDrop[OutcomeRef{Outcome: ch.Result, Slot: i}] = true
+			}
+		}
+	}
+	droppedTested := make(map[OutcomeRef]bool)
+	for _, ref := range p.Tested {
+		if !needTestDrop[ref] {
+			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not an owned outcome a gate tested", p.Label, ref.Outcome, ref.Slot)
+		}
+		if droppedTested[ref] {
+			return fmt.Errorf("plan %s: tested %%t%d slot %d dropped twice", p.Label, ref.Outcome, ref.Slot)
+		}
+		droppedTested[ref] = true
+	}
+	for ref := range needTestDrop {
+		if !droppedTested[ref] {
+			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d, which a gate tested, is never released", p.Label, ref.Outcome, ref.Slot)
 		}
 	}
 
@@ -441,7 +532,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
 // an eval outside a first, or a first's one slot.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
-	for _, node := range p.Execute {
+	for _, node := range p.Values() {
 		switch n := node.(type) {
 		case *Eval:
 			if n.Result != ref.Outcome {

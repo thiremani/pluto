@@ -53,6 +53,16 @@ func Elaborate(p *AssignPlan) {
 			releases.Replaced = append(releases.Replaced, m.Target.Name)
 		}
 	}
+
+	// A gate reads whether its check yielded and takes nothing, so what the
+	// check built is released.
+	if ch := p.Condition(); ch != nil {
+		for i, slot := range ch.Slots {
+			if slot.Ownership == Owned {
+				releases.Tested = append(releases.Tested, OutcomeRef{Outcome: ch.Result, Slot: i})
+			}
+		}
+	}
 	p.Releases = releases
 }
 

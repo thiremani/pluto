@@ -23,7 +23,7 @@ tupleScalar, tupleArr = 3, [1 2 arr[9] 5]
 tupleArr
 
 cond = 5
-cond = arr[5] > 0 99
+cond = arr[5] > -1 99
 "CondOOBSkips: -cond"
 
 multi = 100

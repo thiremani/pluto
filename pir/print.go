@@ -17,14 +17,7 @@ import (
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	writeHead(&b, p.Head)
-	for _, node := range p.Execute {
-		switch n := node.(type) {
-		case *Eval:
-			writeEval(&b, executeIndent, n, expanded)
-		case *First:
-			writeFirst(&b, n, expanded)
-		}
-	}
+	writeNodes(&b, executeIndent, p.Execute, expanded)
 
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
@@ -76,8 +69,29 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 }
 
 // executeIndent is the level of an execute region's own lines. A first's
-// labels, first and fallback, sit one level further in and its sides two.
+// labels, first and fallback, sit one level further in and its sides two; a
+// gate's region sits one level in from the gate.
 const executeIndent = "        "
+
+// level is one step of indentation.
+const level = "    "
+
+// writeNodes writes a region's nodes at indent.
+func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) {
+	for _, node := range nodes {
+		switch n := node.(type) {
+		case *Eval:
+			writeEval(b, indent, n, expanded)
+		case *First:
+			writeFirst(b, indent, n, expanded)
+		case *Check:
+			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.OnOOB, expanded))
+		case *Gate:
+			fmt.Fprintf(b, "%sgate %%t%d\n", indent, n.Cond)
+			writeNodes(b, indent+level, n.Body, expanded)
+		}
+	}
+}
 
 // writeHead writes what every plan opens with: its header, its source, and
 // the line that opens its execute region.
@@ -88,22 +102,29 @@ func writeHead(b *strings.Builder, head Head) {
 }
 
 func writeEval(b *strings.Builder, indent string, ev *Eval, expanded bool) {
-	operand := renderPayload(ev.Expr)
-	fmt.Fprintf(b, "%s%%t%d = eval %s %s", indent, ev.Result, slotsString(ev.Slots, operand, expanded), operand)
-	if ev.MayFail() {
-		fmt.Fprintf(b, " [on-oob=%s]", ev.OnOOB)
-	}
-	b.WriteString("\n")
+	fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(ev.Result, "eval", ev.Slots, ev.Expr, ev.OnOOB, expanded))
 }
 
-func writeFirst(b *strings.Builder, f *First, expanded bool) {
-	fmt.Fprintf(b, "%s%%t%d =\n", executeIndent, f.Result)
-	fmt.Fprintf(b, "%s    first %s\n", executeIndent, f.Type.String())
+// outcomeLine is the line that binds the outcome of an eval or a check: the
+// operation's word, each slot's type, the operand, and the scope of the
+// operand's checked accesses where it has any.
+func outcomeLine(id OutcomeID, word string, slots []Slot, expr ast.Expression, scope OOBScope, expanded bool) string {
+	operand := renderPayload(expr)
+	line := fmt.Sprintf("%%t%d = %s %s %s", id, word, slotsString(slots, operand, expanded), operand)
+	if scope != NoChecks {
+		line += fmt.Sprintf(" [on-oob=%s]", scope)
+	}
+	return line
+}
+
+func writeFirst(b *strings.Builder, indent string, f *First, expanded bool) {
+	fmt.Fprintf(b, "%s%%t%d =\n", indent, f.Result)
+	fmt.Fprintf(b, "%s%sfirst %s\n", indent, level, f.Type.String())
 	for i, side := range f.Sides {
 		if i > 0 {
-			fmt.Fprintf(b, "%s    fallback\n", executeIndent)
+			fmt.Fprintf(b, "%s%sfallback\n", indent, level)
 		}
-		writeEval(b, executeIndent+"        ", side, expanded)
+		writeEval(b, indent+level+level, side, expanded)
 	}
 }
 
@@ -298,10 +319,13 @@ func (policy SkipPolicy) String() string {
 	return fmt.Sprintf("skip-policy(%d)", int(policy))
 }
 
-// writeReleases names each release by the value it frees: what a failed eval
-// built, tagged with what its failure does, an outcome mapped to `_`, or a
-// target's old value.
+// writeReleases names each release by the value it frees: what a gate's check
+// built, what a failed eval built, tagged with what its failure does, an
+// outcome mapped to `_`, or a target's old value.
 func (p *AssignPlan) writeReleases(b *strings.Builder) {
+	for _, ref := range p.Tested {
+		fmt.Fprintf(b, "        drop %s\n", p.refString(ref))
+	}
 	for _, ref := range p.Skipped {
 		fmt.Fprintf(b, "        drop %s [on-%s]\n", p.refString(ref), p.eval(ref.Outcome).OnOOB)
 	}
@@ -314,9 +338,9 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 }
 
 // eval finds the eval whose outcome is id, a first's side included; it is
-// nil when id names a first.
+// nil when id names a first or a check.
 func (p *AssignPlan) eval(id OutcomeID) *Eval {
-	for _, node := range p.Execute {
+	for _, node := range p.Values() {
 		switch n := node.(type) {
 		case *Eval:
 			if n.Result == id {
