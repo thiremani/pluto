@@ -29,6 +29,7 @@ CallArgument: 9
 Operator: 99
 GatedSeed: 4
 Gated: 8
+ClosedGate: 4 0 []
 Ranged: [100 101 102]
 RangedBeside: [20 10 40 -1 -1]
 Mixed: -4

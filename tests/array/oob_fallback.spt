@@ -126,6 +126,13 @@ gated = 4
 gated = arr[1] > -1 arr[9] || 8
 "Gated: -gated"
 
+# a closed gate runs neither side: a held target keeps its value, a fresh one is zero or empty
+closed = 4
+closed = arr[1] > 99 Loud(arr[0]) || Loud(8)
+closedFresh = arr[1] > 99 arr[9] || Loud(8)
+closedStr = arr[1] > 99 sarr[9] || "z"
+"ClosedGate: -closed -closedFresh [-closedStr]"
+
 # a range elsewhere in the statement repeats the fallback per iteration
 step = 0:3
 stepped = [step + (arr[9] || 100)]
