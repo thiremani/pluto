@@ -1714,7 +1714,10 @@ fallback scope; and that every binding under a gate carries its policy.
 
 The lowerer compares the operands, releases what the gate only tested, and
 gives each binding storage that both paths reach before they part. The values
-then run and commit only where the check yielded. Legacy lowering instead
+then run and commit only where the check yielded. A target the statement
+introduces gets its storage before the paths part and its name only after
+the values have run, so in `fresh, text = n > 0 5, "-fresh"` the marker stays
+text, as it does without a gate. Legacy lowering instead
 seeds a slot for each target with a copy of the value it holds, on both
 paths, and commits the slot where the paths meet, so a gated statement's
 machine code changes with this slice while what it does stays.
@@ -1736,8 +1739,8 @@ Pinned by `TestPlanGoldenGates`, `TestPlanGoldenFunctionOutputs`,
 `TestPlanRouterRejections` and `TestPlanGateReleasesCheckFirst`, on
 hand-built plans by `pir`'s `TestElaborate`, `TestValidateGateRejects` and
 `TestRenderGate`, and at run time by `mem/mem_cmp_lhs` (`BuiltLeft`,
-`BuiltRight`), `array/oob_skip` (`CondOOBSkips`) and the gated statements
-the fixtures already held.
+`BuiltRight`), `array/oob_skip` (`CondOOBSkips`), `str` (`own markers`)
+and the gated statements the fixtures already held.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

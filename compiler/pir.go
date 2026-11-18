@@ -445,6 +445,8 @@ type loweredNode struct {
 // values run after every mapping has landed, so a swap never reads a freed
 // payload. Under a gate the values run and commit only where its check
 // yielded, so every binding has storage both paths reach before they part.
+// A target the statement introduces is no name until the values have run: a
+// string's marker that spells it stays text.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
@@ -459,7 +461,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	check := plan.Condition()
 	if check == nil {
 		nodes := c.lowerValues(plan.Values())
-		c.backBranchedTargets(plan, replaced)
+		c.nameFreshTargets(c.backBranchedTargets(plan), replaced)
 		c.commitValues(plan, nodes, replaced)
 		return
 	}
@@ -469,9 +471,11 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 		c.freeSymbolValue(tested[ref.Slot], "check_free")
 	}
 
-	c.backBranchedTargets(plan, replaced)
+	fresh := c.backBranchedTargets(plan)
 	c.withCondBranch(admitted, "gate", func() {
-		c.commitValues(plan, c.lowerValues(plan.Values()), replaced)
+		nodes := c.lowerValues(plan.Values())
+		c.nameFreshTargets(fresh, replaced)
+		c.commitValues(plan, nodes, replaced)
 	}, nil)
 }
 
@@ -610,13 +614,24 @@ func (c *Compiler) nodeYielded(n loweredNode) llvm.Value {
 	return yielded
 }
 
+// freshSlot is the memory of a target the statement introduces, before the
+// statement names it, and the zero it holds where a mapping may leave it
+// unwritten.
+type freshSlot struct {
+	name string
+	t    Type
+	mem  llvm.Value
+	zero *Symbol
+}
+
 // backBranchedTargets gives every binding whose mapping lands on one path of
 // several storage that all of them reach. A binding a skip can leave alone
 // moves to memory when it exists, and a fresh one starts at its zero, the
-// value it holds where its outcome skipped; a commit replaces that zero, so
-// it joins replaced. A first's binding takes its value on the path of the
-// side that yielded, so it sits in memory too.
-func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
+// value it holds where its mapping did not commit. A first's binding takes its
+// value on the path of the side that yielded, so it sits in memory too. The
+// fresh bindings' memory is returned unnamed, for nameFreshTargets.
+func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan) []freshSlot {
+	var fresh []freshSlot
 	for _, m := range plan.Commit {
 		if m.Target.Kind == pir.DiscardTarget {
 			continue
@@ -625,11 +640,33 @@ func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string
 		branched := len(m.Transfers) > 1
 		switch {
 		case m.OnSkip == pir.ZeroOnSkip:
-			replaced[m.Target.Name] = c.seedFreshDest(m.Target.Name, m.Target.Type.(Type))
+			slot := c.newFreshSlot(m.Target)
+			slot.zero = c.makeZeroValue(slot.t)
+			c.createStore(slot.zero.Val, slot.mem, slot.t)
+			fresh = append(fresh, slot)
 		case branched && m.Target.Fresh:
-			c.bindFreshDest(m.Target.Name, m.Target.Type.(Type))
+			fresh = append(fresh, c.newFreshSlot(m.Target))
 		case m.OnSkip == pir.KeepOnSkip || branched:
 			c.promoteExistingSym(m.Target.Name)
+		}
+	}
+	return fresh
+}
+
+// newFreshSlot allocates memory nothing has written yet for a fresh target.
+func (c *Compiler) newFreshSlot(target pir.Target) freshSlot {
+	t := target.Type.(Type)
+	return freshSlot{name: target.Name, t: t, mem: c.createEntryBlockAlloca(c.mapToLLVMType(t), target.Name+".mem")}
+}
+
+// nameFreshTargets binds each fresh target's name to its memory, once the
+// statement's values have run. A commit replaces the zero a slot holds, so
+// the zero joins replaced.
+func (c *Compiler) nameFreshTargets(fresh []freshSlot, replaced map[string]*Symbol) {
+	for _, slot := range fresh {
+		Put(c.Scopes, slot.name, &Symbol{Val: slot.mem, Type: Ptr{Elem: slot.t}})
+		if slot.zero != nil {
+			replaced[slot.name] = slot.zero
 		}
 	}
 }
