@@ -765,26 +765,7 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	arrayType := Array{ElemType: resElem, Rank: left.Type.(Array).Rank}
 	var dimensions []llvm.Value
 	if arrayType.Rank > 1 {
-		leftDims := c.arrayDimensions(left)
-		rightDims := c.arrayDimensions(right)
-		zero := c.ConstI64(0)
-		leftNonEmpty := c.builder.CreateICmp(llvm.IntNE, leftDims[0], zero, "concat_left_nonempty")
-		rightNonEmpty := c.builder.CreateICmp(llvm.IntNE, rightDims[0], zero, "concat_right_nonempty")
-		c.requireSameArrayShapeWhen(
-			c.builder.CreateAnd(leftNonEmpty, rightNonEmpty, "concat_both_nonempty"),
-			leftDims[1:],
-			rightDims[1:],
-			"concat_inner_shape",
-		)
-
-		useRightShape := c.builder.CreateAnd(c.builder.CreateNot(leftNonEmpty, "concat_left_empty"), rightNonEmpty, "concat_use_right_shape")
-		outerLen := c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")
-		outerFits := c.builder.CreateICmp(llvm.IntSGE, outerLen, zero, "concat_outer_fits")
-		c.abortOnFalse(outerFits, ARRAY_DIM_OVERFLOW, leftDims[0], rightDims[0], "concat_outer")
-		dimensions = []llvm.Value{outerLen}
-		for i := 1; i < len(leftDims); i++ {
-			dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
-		}
+		dimensions = c.concatDimensions(left, right)
 	}
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(left, leftElem)
@@ -803,6 +784,40 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 
 	return c.arrayValueSymbol(resVec, arrayType, dimensions)
+}
+
+// concatDimensions returns the shape of left ⊕ right: the outer lengths add, and
+// the inner shape is a nonempty side's, which both nonempty sides must share. A
+// failed guard around the concatenation means its result won't be used and a
+// side may be a placeholder, so then, like a divide's zero check, the shape
+// check stops nothing, and the outer length is 0 so later operations read none
+// of the data.
+func (c *Compiler) concatDimensions(left, right *Symbol) []llvm.Value {
+	leftDims := c.arrayDimensions(left)
+	rightDims := c.arrayDimensions(right)
+	zero := c.ConstI64(0)
+	leftNonEmpty := c.builder.CreateICmp(llvm.IntNE, leftDims[0], zero, "concat_left_nonempty")
+	rightNonEmpty := c.builder.CreateICmp(llvm.IntNE, rightDims[0], zero, "concat_right_nonempty")
+	checked := c.builder.CreateAnd(leftNonEmpty, rightNonEmpty, "concat_both_nonempty")
+	passed, canFail := c.activeBoundsGuardValue("concat_guard")
+	if canFail {
+		checked = c.builder.CreateAnd(checked, passed, "concat_checked")
+	}
+	c.requireSameArrayShapeWhen(checked, leftDims[1:], rightDims[1:], "concat_inner_shape")
+
+	useRightShape := c.builder.CreateAnd(c.builder.CreateNot(leftNonEmpty, "concat_left_empty"), rightNonEmpty, "concat_use_right_shape")
+	outerLen := c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")
+	if canFail {
+		outerLen = c.builder.CreateSelect(passed, outerLen, zero, "concat_outer_used")
+	}
+	outerFits := c.builder.CreateICmp(llvm.IntSGE, outerLen, zero, "concat_outer_fits")
+	c.abortOnFalse(outerFits, ARRAY_DIM_OVERFLOW, leftDims[0], rightDims[0], "concat_outer")
+
+	dimensions := []llvm.Value{outerLen}
+	for i := 1; i < len(leftDims); i++ {
+		dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
+	}
+	return dimensions
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {

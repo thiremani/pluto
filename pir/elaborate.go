@@ -1,6 +1,6 @@
 package pir
 
-// Elaborate derives each mapping's transfer and the statement's releases
+// Elaborate derives each mapping's transfers and the statement's releases
 // (plan §6, §8) from the plan's own annotations; Validate re-checks them.
 // The first mapping in commit order takes a replaced owner's value and later
 // borrows of it copy, so one source feeding several targets is never moved
@@ -21,36 +21,39 @@ func Elaborate(p *AssignPlan) {
 	}
 
 	taken := make(map[string]bool)
-	var skipped, discarded []Drop
+	var releases Releases
 	for i := range p.Commit {
 		m := &p.Commit[i]
-		slot := p.Evals[m.Outcome.Outcome].Slots[m.Outcome.Slot]
-		if m.Target.Kind == DiscardTarget {
-			m.Transfer = Store
-			if slot.Ownership == Owned {
-				discarded = append(discarded, Drop{Kind: DropOutcome, Outcome: m.Outcome})
+		sources := p.sources(m.Outcome)
+		m.Transfers = make([]Transfer, len(sources))
+		for j, src := range sources {
+			owned := src.slot().Ownership == Owned
+			if m.Target.Kind == DiscardTarget {
+				if owned {
+					releases.Discarded = append(releases.Discarded, src.ref)
+				}
+				continue
 			}
-			continue
-		}
 
-		mayTake := takeable
-		if p.maySkip(*m) {
-			mayTake = nil
-			if slot.Ownership == Owned {
-				skipped = append(skipped, Drop{Kind: DropSkipped, Outcome: m.Outcome})
+			// A side of a first supplies the value on one path only, so its
+			// borrow takes nothing either.
+			mayTake := takeable
+			if len(sources) > 1 || src.eval.MayFail() {
+				mayTake = nil
 			}
+			if owned && src.eval.MayFail() {
+				releases.Skipped = append(releases.Skipped, src.ref)
+			}
+			m.Transfers[j] = bindingTransfer(src.slot(), m.Target, mayTake, taken)
 		}
-		m.Transfer = bindingTransfer(slot, m.Target, mayTake, taken)
 	}
 
-	// A skipped outcome is released where its mappings would have landed, so
-	// before the releases that follow every mapping.
-	p.Drops = append(skipped, discarded...)
 	for _, m := range p.Commit {
 		if replaced[m.Target.Name] && !taken[m.Target.Name] {
-			p.Drops = append(p.Drops, Drop{Kind: DropReplaced, Target: m.Target.Name})
+			releases.Replaced = append(releases.Replaced, m.Target.Name)
 		}
 	}
+	p.Releases = releases
 }
 
 // bindingTransfer picks how a binding acquires its outcome; takeable holds

@@ -1,6 +1,7 @@
 package pir
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,10 @@ import (
 type testType string
 
 func (t testType) String() string { return string(t) }
+
+type unknownNode OutcomeID
+
+func (n unknownNode) ID() OutcomeID { return OutcomeID(n) }
 
 // sameSpelling stands in for the compiler's binding-compatibility relation;
 // these tests exercise the plan invariants, not the type system.
@@ -72,9 +77,9 @@ func heapOutput(name string, t Type) Target {
 func joinPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
-		Head:   Head{Label: "assign res", Func: "Str = Join(Str, Str)", Source: "res = a ⊕ b"},
-		Evals:  []*Eval{{Result: 0, Expr: concat(ident("a"), ident("b")), Slots: []Slot{ownedSlot(str)}}},
-		Commit: []Mapping{{Target: heapOutput("res", str), Outcome: OutcomeRef{Outcome: 0}}},
+		Head:    Head{Label: "assign res", Func: "Str = Join(Str, Str)", Source: "res = a ⊕ b"},
+		Execute: []Node{&Eval{Result: 0, Expr: concat(ident("a"), ident("b")), Slots: []Slot{ownedSlot(str)}}},
+		Commit:  []Mapping{{Target: heapOutput("res", str), Outcome: OutcomeRef{Outcome: 0}}},
 	}
 }
 
@@ -95,9 +100,9 @@ func printPlan() *PrintPlan {
 func swapPlan() *AssignPlan {
 	return &AssignPlan{
 		Head: Head{Label: "assign a, b", Source: "a, b = b, a"},
-		Evals: []*Eval{
-			{Result: 0, Expr: ident("b"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
-			{Result: 1, Expr: ident("a"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: ident("b"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
+			&Eval{Result: 1, Expr: ident("a"), Slots: []Slot{unmanagedSlot(testType("I64"))}},
 		},
 		Commit: []Mapping{
 			{Target: local("a", testType("I64")), Outcome: OutcomeRef{Outcome: 0}},
@@ -111,9 +116,9 @@ func heapSwapPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
 		Head: Head{Label: "assign a, b", Source: "a, b = b, a"},
-		Evals: []*Eval{
-			{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
-			{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+			&Eval{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
 		},
 		Commit: []Mapping{
 			{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
@@ -128,9 +133,9 @@ func replacePlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
 		Head: Head{Label: "assign x, _", Source: `x, _ = x ⊕ "!", "a" ⊕ "b"`},
-		Evals: []*Eval{
-			{Result: 0, Expr: concat(ident("x"), strLit("!")), Slots: []Slot{ownedSlot(str)}},
-			{Result: 1, Expr: concat(strLit("a"), strLit("b")), Slots: []Slot{ownedSlot(str)}},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: concat(ident("x"), strLit("!")), Slots: []Slot{ownedSlot(str)}},
+			&Eval{Result: 1, Expr: concat(strLit("a"), strLit("b")), Slots: []Slot{ownedSlot(str)}},
 		},
 		Commit: []Mapping{
 			{Target: heapLocal("x", str), Outcome: OutcomeRef{Outcome: 0}},
@@ -146,10 +151,10 @@ func skipPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
 		Head: Head{Label: "assign kept, fresh, _", Source: "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"},
-		Evals: []*Eval{
-			{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
-			{Result: 1, Expr: read("sarr", 0), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
-			{Result: 2, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&Eval{Result: 1, Expr: read("sarr", 0), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&Eval{Result: 2, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
 		},
 		Commit: []Mapping{
 			{Target: heapLocal("kept", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
@@ -159,13 +164,59 @@ func skipPlan() *AssignPlan {
 	}
 }
 
+// firstPlan is `s = sarr[9] || h` over heap strings, before elaboration: an
+// owned read that falls back to a borrow.
+func firstPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: "s = sarr[9] || h"},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []*Eval{
+			{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+			{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+		}}},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
+	}
+}
+
+// chainPlan is `n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7`, before
+// elaboration: a first between two evals, whose last side may skip too, into
+// a fresh binding.
+func chainPlan() *AssignPlan {
+	i64, str := testType("I64"), testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign n, z, m", Source: "n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7"},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(i64)}},
+			&First{Result: 1, Type: str, Sides: []*Eval{
+				{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				{Result: 3, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				{Result: 4, Expr: read("sarr", 7), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			}},
+			&Eval{Result: 5, Expr: intLit(7), Slots: []Slot{unmanagedSlot(i64)}},
+		},
+		Commit: []Mapping{
+			{Target: local("n", i64), Outcome: OutcomeRef{Outcome: 0}},
+			{Target: Target{Kind: LocalTarget, Name: "z", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 1}, OnSkip: ZeroOnSkip},
+			{Target: local("m", i64), Outcome: OutcomeRef{Outcome: 5}},
+		},
+	}
+}
+
+// evalAt is node i of p's execute region, an eval.
+func evalAt(p *AssignPlan, i int) *Eval { return p.Execute[i].(*Eval) }
+
+// firstAt is node i of p's execute region, a first.
+func firstAt(p *AssignPlan, i int) *First { return p.Execute[i].(*First) }
+
 func TestValidateAccepts(t *testing.T) {
+	scalarSwap := swapPlan()
+	Elaborate(scalarSwap)
 	heapSwap := heapSwapPlan()
 	Elaborate(heapSwap)
 	replace := replacePlan()
 	Elaborate(replace)
 	for name, p := range map[string]*AssignPlan{
-		"scalar swap":    swapPlan(),
+		"scalar swap":    scalarSwap,
 		"heap swap":      heapSwap,
 		"replace + drop": replace,
 	} {
@@ -181,126 +232,141 @@ func TestElaborate(t *testing.T) {
 	cases := []struct {
 		name      string
 		plan      *AssignPlan
-		transfers []Transfer
-		drops     []Drop
+		transfers [][]Transfer
+		releases  Releases
 	}{
-		{"scalar swap stores", swapPlan(), []Transfer{Store, Store}, nil},
-		{"heap swap moves both old values, copies nothing", heapSwapPlan(), []Transfer{Move, Move}, nil},
-		{"owned replacement moves and releases the old value", replacePlan(), []Transfer{Move, Store},
-			[]Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 1}}, {Kind: DropReplaced, Target: "x"}}},
+		{"scalar swap stores", swapPlan(), [][]Transfer{{Store}, {Store}}, Releases{}},
+		{"heap swap moves both old values, copies nothing", heapSwapPlan(), [][]Transfer{{Move}, {Move}}, Releases{}},
+		{"owned replacement moves and releases the old value", replacePlan(), [][]Transfer{{Move}, {Store}},
+			Releases{Discarded: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"x"}}},
 		{"duplicate source: first takes, second copies", &AssignPlan{
 			Head: Head{Label: "assign d1, d2", Source: "d1, d2 = d1, d1"},
-			Evals: []*Eval{
-				{Result: 0, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
-				{Result: 1, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
+			Execute: []Node{
+				&Eval{Result: 0, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
+				&Eval{Result: 1, Expr: ident("d1"), Slots: []Slot{borrowedSlot(str, "d1")}},
 			},
 			Commit: []Mapping{
 				{Target: heapLocal("d1", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("d2", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Move, Copy}, []Drop{{Kind: DropReplaced, Target: "d2"}}},
+		}, [][]Transfer{{Move}, {Copy}}, Releases{Replaced: []string{"d2"}}},
 		{"borrow of a surviving owner copies", &AssignPlan{
-			Head:   Head{Label: "assign t", Source: "t = s"},
-			Evals:  []*Eval{{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
-			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "t", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Copy}, nil},
+			Head:    Head{Label: "assign t", Source: "t = s"},
+			Execute: []Node{&Eval{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
+			Commit:  []Mapping{{Target: Target{Kind: LocalTarget, Name: "t", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Copy}}, Releases{}},
 		{"unmanaged into an owning target is copied", &AssignPlan{
-			Head:   Head{Label: "assign s", Source: `s = "hi"`},
-			Evals:  []*Eval{{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
-			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Copy}, []Drop{{Kind: DropReplaced, Target: "s"}}},
+			Head:    Head{Label: "assign s", Source: `s = "hi"`},
+			Execute: []Node{&Eval{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
+			Commit:  []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Copy}}, Releases{Replaced: []string{"s"}}},
 		{"heap transfer into a non-owning fresh target is legal", &AssignPlan{
-			Head:   Head{Label: "assign other", Source: "other = text"},
-			Evals:  []*Eval{{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
-			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "other", Type: str, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Copy}, nil},
+			Head:    Head{Label: "assign other", Source: "other = text"},
+			Execute: []Node{&Eval{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
+			Commit:  []Mapping{{Target: Target{Kind: LocalTarget, Name: "other", Type: str, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Copy}}, Releases{}},
 		{"widened binding releases its held value on a plain store", &AssignPlan{
-			Head:   Head{Label: "assign other", Source: `other = "new"`},
-			Evals:  []*Eval{{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
-			Commit: []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Store}, []Drop{{Kind: DropReplaced, Target: "other"}}},
+			Head:    Head{Label: "assign other", Source: `other = "new"`},
+			Execute: []Node{&Eval{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
+			Commit:  []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Store}}, Releases{Replaced: []string{"other"}}},
 		{"widened owner is taken by a moved borrow", &AssignPlan{
 			Head: Head{Label: "assign a, other", Source: "a, other = other, a"},
-			Evals: []*Eval{
-				{Result: 0, Expr: ident("other"), Slots: []Slot{borrowedSlot(str, "other")}},
-				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+			Execute: []Node{
+				&Eval{Result: 0, Expr: ident("other"), Slots: []Slot{borrowedSlot(str, "other")}},
+				&Eval{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
 			},
 			Commit: []Mapping{
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Move, Move}, nil},
+		}, [][]Transfer{{Move}, {Move}}, Releases{}},
 		{"discarded borrow releases nothing", &AssignPlan{
-			Head:   Head{Label: "assign _", Source: "_ = h"},
-			Evals:  []*Eval{{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
-			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Store}, nil},
-		{"output releases the value it held, as a local does", joinPlan(), []Transfer{Move},
-			[]Drop{{Kind: DropReplaced, Target: "res"}}},
+			Head:    Head{Label: "assign _", Source: "_ = h"},
+			Execute: []Node{&Eval{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
+			Commit:  []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Store}}, Releases{}},
+		{"output releases the value it held, as a local does", joinPlan(), [][]Transfer{{Move}},
+			Releases{Replaced: []string{"res"}}},
 		{"swapped outputs take each other's old values", &AssignPlan{
 			Head: Head{Label: "assign a, b", Func: "Str, Str = Swap(Str, Str)", Source: "a, b = b, a"},
-			Evals: []*Eval{
-				{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
-				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+			Execute: []Node{
+				&Eval{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				&Eval{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
 			},
 			Commit: []Mapping{
 				{Target: heapOutput("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapOutput("b", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Move, Move}, nil},
+		}, [][]Transfer{{Move}, {Move}}, Releases{}},
 		{"a skipped owned outcome is released, a discarded one either way, an old value where replaced", skipPlan(),
-			[]Transfer{Move, Move, Store}, []Drop{
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}},
-				{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-				{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 2}},
-				{Kind: DropReplaced, Target: "kept"},
+			[][]Transfer{{Move}, {Move}, {Store}}, Releases{
+				Skipped:   []OutcomeRef{{Outcome: 0}, {Outcome: 1}},
+				Discarded: []OutcomeRef{{Outcome: 2}},
+				Replaced:  []string{"kept"},
 			}},
 		{"a borrow copies when its owner's replacement may skip", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: "a, b = b, sarr[9]"},
-			Evals: []*Eval{
-				{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
-				{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			Execute: []Node{
+				&Eval{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
 			},
 			Commit: []Mapping{
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip},
 			},
-		}, []Transfer{Copy, Move}, []Drop{
-			{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 1}},
-			{Kind: DropReplaced, Target: "a"},
-			{Kind: DropReplaced, Target: "b"},
-		}},
+		}, [][]Transfer{{Copy}, {Move}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"a", "b"}}},
 		// No source statement builds a borrowed outcome that may skip yet.
 		{"a borrow that may skip copies though its owner is replaced", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: `a, b = views[9], "new"`},
-			Evals: []*Eval{
-				{Result: 0, Expr: read("views", 9), Slots: []Slot{borrowedSlot(str, "b")}, OnOOB: SkipOutcome},
-				{Result: 1, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
+			Execute: []Node{
+				&Eval{Result: 0, Expr: read("views", 9), Slots: []Slot{borrowedSlot(str, "b")}, OnOOB: SkipOutcome},
+				&Eval{Result: 1, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
 			},
 			Commit: []Mapping{
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Copy, Copy}, []Drop{
-			{Kind: DropReplaced, Target: "a"},
-			{Kind: DropReplaced, Target: "b"},
-		}},
+		}, [][]Transfer{{Copy}, {Copy}}, Releases{Replaced: []string{"a", "b"}}},
+		{"a first moves its owned side, copies its borrowed one, and releases what the failed read built", firstPlan(),
+			[][]Transfer{{Move, Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"s"}}},
+		{"a side of a first copies though its owner is replaced", &AssignPlan{
+			Head: Head{Label: "assign a, b", Source: `a, b = sarr[9] || b, "new"`},
+			Execute: []Node{
+				&First{Result: 0, Type: str, Sides: []*Eval{
+					{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+					{Result: 2, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				}},
+				&Eval{Result: 3, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
+			},
+			Commit: []Mapping{
+				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
+				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 3}},
+			},
+		}, [][]Transfer{{Move, Copy}, {Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"a", "b"}}},
+		{"a discarded first releases each owned side where it ran", &AssignPlan{
+			Head: Head{Label: "assign _", Source: `_ = sarr[9] || h ⊕ "?"`},
+			Execute: []Node{&First{Result: 0, Type: str, Sides: []*Eval{
+				{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				{Result: 2, Expr: concat(ident("h"), strLit("?")), Slots: []Slot{ownedSlot(str)}},
+			}}},
+			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
+		}, [][]Transfer{{Store, Store}}, Releases{Discarded: []OutcomeRef{{Outcome: 1}, {Outcome: 2}}}},
+		{"a first whose last side may skip releases each side where it failed", chainPlan(),
+			[][]Transfer{{Store}, {Move, Move, Move}, {Store}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}, {Outcome: 4}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			Elaborate(tc.plan)
 			for i, m := range tc.plan.Commit {
-				if m.Transfer != tc.transfers[i] {
-					t.Errorf("mapping %d transfer = %s, want %s", i, m.Transfer, tc.transfers[i])
+				if !slices.Equal(m.Transfers, tc.transfers[i]) {
+					t.Errorf("mapping %d transfers = %v, want %v", i, m.Transfers, tc.transfers[i])
 				}
 			}
-			if len(tc.plan.Drops) != len(tc.drops) {
-				t.Fatalf("drops = %v, want %v", tc.plan.Drops, tc.drops)
-			}
-			for i, d := range tc.plan.Drops {
-				if d != tc.drops[i] {
-					t.Errorf("drop %d = %v, want %v", i, d, tc.drops[i])
-				}
+			if !slices.Equal(tc.plan.Skipped, tc.releases.Skipped) ||
+				!slices.Equal(tc.plan.Discarded, tc.releases.Discarded) ||
+				!slices.Equal(tc.plan.Replaced, tc.releases.Replaced) {
+				t.Errorf("releases = %+v, want %+v", tc.plan.Releases, tc.releases)
 			}
 			if err := Validate(tc.plan, sameSpelling); err != nil {
 				t.Fatalf("elaborated plan rejected: %v", err)
@@ -318,16 +384,17 @@ func TestValidateRejects(t *testing.T) {
 	}{
 		{"NoLabel", func(p *AssignPlan) { p.Label = "" }, "no label"},
 		{"NoSource", func(p *AssignPlan) { p.Source = "" }, "no source"},
-		{"NoEvals", func(p *AssignPlan) { p.Evals = nil }, "no evals"},
-		{"SparseResultID", func(p *AssignPlan) { p.Evals[1].Result = 2 }, "dense"},
-		{"NoSlots", func(p *AssignPlan) { p.Evals[0].Slots = nil }, "no output slots"},
+		{"NoEvals", func(p *AssignPlan) { p.Execute = nil }, "no evals"},
+		{"UnknownNode", func(p *AssignPlan) { p.Execute = append(p.Execute, unknownNode(2)) }, "unknown execute node pir.unknownNode"},
+		{"SparseResultID", func(p *AssignPlan) { evalAt(p, 1).Result = 2 }, "dense"},
+		{"NoSlots", func(p *AssignPlan) { evalAt(p, 0).Slots = nil }, "no output slots"},
 		{"NilDiscardedType", func(p *AssignPlan) {
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Evals[0].Slots = []Slot{{}}
+			evalAt(p, 0).Slots = []Slot{{}}
 		}, "slot 0 has no type"},
-		{"OwnerWithoutBorrow", func(p *AssignPlan) { p.Evals[0].Slots[0].Owner = "b" }, "names owner b but is not borrowed"},
-		{"BorrowWithoutOwner", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = Borrowed }, "borrowed from no owner"},
-		{"UnknownOwnership", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = 9 }, "unknown ownership"},
+		{"OwnerWithoutBorrow", func(p *AssignPlan) { evalAt(p, 0).Slots[0].Owner = "b" }, "names owner b but is not borrowed"},
+		{"BorrowWithoutOwner", func(p *AssignPlan) { evalAt(p, 0).Slots[0].Ownership = Borrowed }, "borrowed from no owner"},
+		{"UnknownOwnership", func(p *AssignPlan) { evalAt(p, 0).Slots[0].Ownership = 9 }, "unknown ownership"},
 		{"MissingMapping", func(p *AssignPlan) { p.Commit = p.Commit[:1] }, "1 mappings for 2 outcome slots"},
 		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "binding target has no name"},
 		{"OutputOutsideFunction", func(p *AssignPlan) { p.Commit[0].Target.Kind = OutputTarget }, "output target a outside a function body"},
@@ -336,7 +403,7 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[0].Target.Kind = OutputTarget
 			p.Commit[0].Target.Fresh = true
 		}, "output target a is fresh"},
-		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Slots[0].Type = testType("F64") }, "target I64 a mapped to incompatible outcome %t0 slot 0 of type F64"},
+		{"TypeMismatch", func(p *AssignPlan) { evalAt(p, 0).Slots[0].Type = testType("F64") }, "target I64 a mapped to incompatible outcome %t0 slot 0 of type F64"},
 		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"OwningDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, TypeOwnsHeap: true} }, "discard target carries"},
@@ -347,7 +414,7 @@ func TestValidateRejects(t *testing.T) {
 		}, "fresh target a holds a value"},
 		{"DiscardWithTransfer", func(p *AssignPlan) {
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Commit[0].Transfer = Move
+			p.Commit[0].Transfers = []Transfer{Move}
 		}, "discard of %t0 slot 0 carries a transfer"},
 		{"UnknownOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 5 }, "unknown outcome"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 3 }, "out of range"},
@@ -355,123 +422,129 @@ func TestValidateRejects(t *testing.T) {
 		{"NegativeSlot", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = -1 }, "out of range"},
 		{"DoubleConsume", func(p *AssignPlan) { p.Commit[1].Outcome = p.Commit[0].Outcome }, "consumed twice"},
 		{"UnknownTargetKind", func(p *AssignPlan) { p.Commit[0].Target.Kind = 7 }, "unknown target kind"},
-		{"UnmanagedMoved", func(p *AssignPlan) { p.Commit[0].Transfer = Move }, "uses transfer move; ownership requires store"},
+		{"UnmanagedMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "uses transfer move; ownership requires store"},
 		{"UnmanagedIntoOwnerNotCopied", func(p *AssignPlan) { p.Commit[0].Target.TypeOwnsHeap = true }, "uses transfer store; ownership requires copy"},
-		{"OwnedNotMoved", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = Owned }, "uses transfer store; ownership requires move"},
-		{"BorrowedNotCopied", func(p *AssignPlan) { p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b") }, "uses transfer store; ownership requires copy"},
+		{"OwnedNotMoved", func(p *AssignPlan) { evalAt(p, 0).Slots[0].Ownership = Owned }, "uses transfer store; ownership requires move"},
+		{"BorrowedNotCopied", func(p *AssignPlan) { evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b") }, "uses transfer store; ownership requires copy"},
 		{"MovedBorrowOfSurvivingOwner", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "z")
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "z")
+			p.Commit[0].Transfers = []Transfer{Move}
 		}, "target a takes z's old value, but z is not replaced in this group"},
 		{"MovedBorrowOfFreshOwner", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Target.Fresh = true
-			p.Commit[1].Transfer = Copy
+			p.Commit[1].Transfers = []Transfer{Copy}
 		}, "b is not replaced in this group"},
 		{"MovedBorrowOfOwnerHoldingNothing", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[1].Target.TypeOwnsHeap = true
-			p.Commit[1].Transfer = Copy
+			p.Commit[1].Transfers = []Transfer{Copy}
 		}, "b is not replaced in this group"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Evals[1].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
-			p.Commit[1].Transfer = Move
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			evalAt(p, 1).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
+			p.Commit[1].Transfers = []Transfer{Move}
 			p.Commit[1].Target.HoldsHeap = true
 		}, "b's old value is taken by 2 targets"},
 		{"ReplacedNeverReleased", func(p *AssignPlan) { p.Commit[0].Target.HoldsHeap = true }, "a's old value is neither taken nor released"},
 		{"ReplacedTakenAndDropped", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[1].Target.HoldsHeap = true
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "b"}}
+			p.Replaced = []string{"b"}
 		}, "b's old value is both taken and dropped"},
-		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}} }, "a holds no replaced value"},
+		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Replaced = []string{"a"} }, "a holds no replaced value"},
 		{"DropOfFreshTarget", func(p *AssignPlan) {
 			p.Commit[0].Target.TypeOwnsHeap = true
 			p.Commit[0].Target.Fresh = true
-			p.Commit[0].Transfer = Copy
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}}
+			p.Commit[0].Transfers = []Transfer{Copy}
+			p.Replaced = []string{"a"}
 		}, "a holds no replaced value"},
 		{"ReplacedDroppedTwice", func(p *AssignPlan) {
 			p.Commit[0].Target.HoldsHeap = true
-			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}, {Kind: DropReplaced, Target: "a"}}
+			p.Replaced = []string{"a", "a"}
 		}, "a's old value dropped twice"},
-		{"DropOfMappedOutcome", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}} }, "not a discarded owned outcome"},
+		{"DropOfMappedOutcome", func(p *AssignPlan) { p.Discarded = []OutcomeRef{{Outcome: 0}} }, "not a discarded owned outcome"},
 		{"DropOfDiscardedBorrow", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "z")
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "z")
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Discarded = []OutcomeRef{{Outcome: 0}}
 		}, "not a discarded owned outcome"},
 		{"DiscardedOwnedNeverReleased", func(p *AssignPlan) {
-			p.Evals[0].Slots[0].Ownership = Owned
+			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 		}, "discarded owned outcome %t0 slot 0 is never released"},
 		{"DiscardedOwnedDroppedTwice", func(p *AssignPlan) {
-			p.Evals[0].Slots[0].Ownership = Owned
+			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
-			p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Discarded = []OutcomeRef{{Outcome: 0}, {Outcome: 0}}
 		}, "%t0 slot 0 dropped twice"},
-		{"UnknownDropKind", func(p *AssignPlan) { p.Drops = []Drop{{Kind: 4}} }, "unknown drop kind"},
-		{"AccessWithoutScope", func(p *AssignPlan) { p.Evals[0].Expr = read("arr", 0) }, "eval %t0 holds a checked access with no out-of-bounds scope"},
-		{"ScopeWithoutAccess", func(p *AssignPlan) { p.Evals[0].OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
+		{"AccessWithoutScope", func(p *AssignPlan) { evalAt(p, 0).Expr = read("arr", 0) }, "eval %t0 holds a checked access with no out-of-bounds scope"},
+		{"ScopeWithoutAccess", func(p *AssignPlan) { evalAt(p, 0).OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
+		{"FallbackOutsideFirst", func(p *AssignPlan) {
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), UseFallback
+		}, "eval %t0 falls back, but is no side of a first"},
+		{"UnknownScope", func(p *AssignPlan) {
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), 9
+		}, "eval %t0 has unknown out-of-bounds scope 9"},
 		{"AccessInLiteralCell", func(p *AssignPlan) {
-			p.Evals[0].Expr = &ast.ArrayLiteral{Rows: [][]ast.Expression{{read("arr", 0)}}}
+			evalAt(p, 0).Expr = &ast.ArrayLiteral{Rows: [][]ast.Expression{{read("arr", 0)}}}
 		}, "eval %t0 holds a checked access in a literal cell"},
 		{"SkipWithoutPolicy", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
 		}, "target a = %t0 slot 0 has skip policy none; its outcome and target require keep"},
 		{"KeepOnFreshTarget", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
 			p.Commit[0].Target.Fresh = true
 			p.Commit[0].OnSkip = KeepOnSkip
 		}, "has skip policy keep; its outcome and target require zero"},
 		{"PolicyOnCertainOutcome", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "has skip policy keep; its outcome and target require none"},
 		{"PolicyOnDiscard", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 			p.Commit[0].OnSkip = KeepOnSkip
 		}, "target _ = %t0 slot 0 has skip policy keep; its outcome and target require none"},
 		{"MovedBorrowOfOwnerThatMaySkip", func(p *AssignPlan) {
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
-			p.Evals[1].Expr, p.Evals[1].OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
+			evalAt(p, 1).Expr, evalAt(p, 1).OnOOB = read("arr", 0), SkipOutcome
 			p.Commit[1].Target.HoldsHeap = true
 			p.Commit[1].OnSkip = KeepOnSkip
 		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
 		{"MovedBorrowThatMaySkip", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
 			p.Commit[1].Target.HoldsHeap = true
 		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
 		{"SkippedOwnedNeverReleased", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-			p.Evals[0].Slots[0].Ownership = Owned
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Slots[0].Ownership = Owned
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
-		}, "owned outcome %t0 slot 0 is never released where it skips"},
+		}, "owned outcome %t0 slot 0 is never released where it fails"},
 		{"SkipDropOfCertainOutcome", func(p *AssignPlan) {
-			p.Evals[0].Slots[0].Ownership = Owned
-			p.Commit[0].Transfer = Move
-			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+			evalAt(p, 0).Slots[0].Ownership = Owned
+			p.Commit[0].Transfers = []Transfer{Move}
+			p.Skipped = []OutcomeRef{{Outcome: 0}}
 		}, "skip-path drop of %t0 slot 0"},
 		{"SkippedDroppedTwice", func(p *AssignPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-			p.Evals[0].Slots[0].Ownership = Owned
-			p.Commit[0].Transfer = Move
+			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Slots[0].Ownership = Owned
+			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
-			p.Drops = []Drop{{Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}, {Kind: DropSkipped, Outcome: OutcomeRef{Outcome: 0}}}
+			p.Skipped = []OutcomeRef{{Outcome: 0}, {Outcome: 0}}
 		}, "skipped %t0 slot 0 dropped twice"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := swapPlan()
+			Elaborate(p)
 			tc.mutate(p)
 			err := Validate(p, sameSpelling)
 			if err == nil {
@@ -481,6 +554,131 @@ func TestValidateRejects(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tc.wantErr, err.Error())
 			}
 		})
+	}
+}
+
+// Plan §4, §14: a first's invariants, each broken on `s = sarr[9] || h`.
+func TestValidateFirstRejects(t *testing.T) {
+	str := testType("Str")
+	cases := []struct {
+		name    string
+		mutate  func(*AssignPlan)
+		wantErr string
+	}{
+		{"FirstIDOutOfOrder", func(p *AssignPlan) { firstAt(p, 0).Result = 3 }, "first has result ID 3 where 0 is next; IDs must be dense"},
+		{"SparseSideID", func(p *AssignPlan) { firstAt(p, 0).Sides[1].Result = 5 }, "eval 2 has result ID 5; IDs must be dense"},
+		{"NoType", func(p *AssignPlan) { firstAt(p, 0).Type = nil }, "first %t0 has no type"},
+		{"OneSide", func(p *AssignPlan) { firstAt(p, 0).Sides = firstAt(p, 0).Sides[:1] }, "first %t0 has 1 sides and needs a fallback"},
+		{"SideWithTwoSlots", func(p *AssignPlan) {
+			firstAt(p, 0).Sides[1].Slots = []Slot{borrowedSlot(str, "h"), borrowedSlot(str, "h")}
+		}, "side %t2 of first %t0 has 2 slots"},
+		{"SideTypeMismatch", func(p *AssignPlan) { firstAt(p, 0).Sides[1].Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit first %t0 of type Str"},
+		{"FallbackScopeWithoutAccess", func(p *AssignPlan) { firstAt(p, 0).Sides[0].Expr = ident("t") }, "eval %t1 has an out-of-bounds scope and no checked access"},
+		{"FallbackAfterSideThatCannotFail", func(p *AssignPlan) {
+			firstAt(p, 0).Sides[0].Expr, firstAt(p, 0).Sides[0].OnOOB = ident("t"), NoChecks
+		}, "side %t1 of first %t0 has out-of-bounds scope none; the fallback after it needs fallback"},
+		{"SkipBeforeFallback", func(p *AssignPlan) { firstAt(p, 0).Sides[0].OnOOB = SkipOutcome }, "side %t1 of first %t0 has out-of-bounds scope skip; the fallback after it needs fallback"},
+		{"LastSideFallsBack", func(p *AssignPlan) {
+			firstAt(p, 0).Sides[1].Expr, firstAt(p, 0).Sides[1].OnOOB = read("sarr", 8), UseFallback
+		}, "the last side %t2 of first %t0 falls back to nothing"},
+		{"MappedSide", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 1 }, "commit references %t1, a side of first %t0"},
+		{"FirstSlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
+		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 evals that can supply it"},
+		{"BorrowedSideMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move, Move} }, "target s takes h's old value from %t2, one side of a first"},
+		{"OwnedSideNotMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Copy, Copy} }, "target s = %t1 slot 0 uses transfer copy; ownership requires move"},
+		{"FailedSideNeverReleased", func(p *AssignPlan) { p.Skipped = nil }, "owned outcome %t1 slot 0 is never released where it fails"},
+		{"PolicyOnFirstThatAlwaysYields", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "target s = %t0 slot 0 has skip policy keep; its outcome and target require none"},
+		{"NoPolicyOnFirstThatMaySkip", func(p *AssignPlan) {
+			firstAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome}
+		}, "target s = %t0 slot 0 has skip policy none; its outcome and target require keep"},
+		{"DiscardedFirstWithTransfer", func(p *AssignPlan) {
+			p.Commit[0].Target = Target{Kind: DiscardTarget}
+		}, "discard of %t0 slot 0 carries a transfer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := firstPlan()
+			Elaborate(p)
+			tc.mutate(p)
+			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §12: a first binds its outcome on a line of its own, with each side
+// under a label beneath it, first and then fallback, and a failed read names
+// what its failure does. A mapping names a transfer per side where the sides
+// differ, and a release of what a failed side built carries that side's word.
+func TestRenderFirst(t *testing.T) {
+	p := firstPlan()
+	Elaborate(p)
+	want := `assign s
+    source "s = sarr[9] || h"
+
+    execute
+        %t0 =
+            first Str
+                %t1 = eval Str sarr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval Str h
+
+    commit
+        s = %t0
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	want = `assign s
+    source "s = sarr[9] || h"
+
+    execute
+        %t0 =
+            first Str
+                %t1 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval borrowed Str h
+
+    commit
+        s = %t0 [move %t1] [copy %t2]
+        drop %t1 [on-fallback]
+        drop s [old]
+`
+	if got := p.Render(true); got != want {
+		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+
+	chain := chainPlan()
+	Elaborate(chain)
+	if err := Validate(chain, sameSpelling); err != nil {
+		t.Fatalf("chain plan rejected: %v", err)
+	}
+	want = `assign n, z, m
+    source "n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7"
+
+    execute
+        %t0 = eval I64 5
+        %t1 =
+            first Str
+                %t2 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                %t3 = eval owned Str sarr[8] [on-oob=fallback]
+            fallback
+                %t4 = eval owned Str sarr[7] [on-oob=skip]
+        %t5 = eval I64 7
+
+    commit
+        n = %t0
+        z = %t1 [move] [on-skip=zero]
+        m = %t5
+        drop %t2 [on-fallback]
+        drop %t3 [on-fallback]
+        drop %t4 [on-skip]
+`
+	if got := chain.Render(true); got != want {
+		t.Fatalf("chain render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -511,7 +709,10 @@ func TestValidatePrint(t *testing.T) {
 		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
 		{"MaySkip", func(p *PrintPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
-		}, "print takes %t0, which may skip"},
+		}, "print takes %t0, which may fail"},
+		{"FallsBack", func(p *PrintPlan) {
+			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), UseFallback
+		}, "print takes %t0, which may fail"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -558,9 +759,9 @@ func TestRenderPrint(t *testing.T) {
 func TestRenderConcise(t *testing.T) {
 	p := &AssignPlan{
 		Head: Head{Label: "assign x, _", Source: "x, _ = 5, 7"},
-		Evals: []*Eval{
-			{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(testType("I64"))}},
-			{Result: 1, Expr: intLit(7), Slots: []Slot{unmanagedSlot(testType("I64"))}},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(testType("I64"))}},
+			&Eval{Result: 1, Expr: intLit(7), Slots: []Slot{unmanagedSlot(testType("I64"))}},
 		},
 		Commit: []Mapping{
 			{Target: local("x", testType("I64")), Outcome: OutcomeRef{Outcome: 0}},
@@ -588,8 +789,8 @@ func TestRenderConcise(t *testing.T) {
 func TestRenderMultiOutput(t *testing.T) {
 	p := &AssignPlan{
 		Head: Head{Label: "assign a, b", Source: "a, b = Pair(x)"},
-		Evals: []*Eval{
-			{Result: 0, Expr: call("Pair", ident("x")), Slots: []Slot{unmanagedSlot(testType("I64")), ownedSlot(testType("Str"))}},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: call("Pair", ident("x")), Slots: []Slot{unmanagedSlot(testType("I64")), ownedSlot(testType("Str"))}},
 		},
 		Commit: []Mapping{
 			{Target: local("a", testType("I64")), Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
@@ -684,7 +885,7 @@ func TestRenderRejectsUnsupportedNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := swapPlan()
-			p.Evals[0].Expr = tt.expr
+			evalAt(p, 0).Expr = tt.expr
 			if got := renderPanic(p); got != tt.want {
 				t.Fatalf("panic = %v, want %v", got, tt.want)
 			}
@@ -702,6 +903,7 @@ func renderPanic(p *AssignPlan) (v any) {
 // slot carries no ownership word and an unmanaged store no transfer annotation.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
+	Elaborate(p)
 	got := p.Render(true)
 	want := `assign a, b
     source "a, b = b, a"
@@ -833,9 +1035,9 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 	for _, tc := range cases {
 		p := swapPlan()
-		p.Evals = p.Evals[:1]
-		p.Evals[0].Expr = tc.expr
-		p.Evals[0].Slots[0].Type = testType("Str")
+		p.Execute = p.Execute[:1]
+		evalAt(p, 0).Expr = tc.expr
+		evalAt(p, 0).Slots[0].Type = testType("Str")
 		p.Commit = p.Commit[:1]
 		got := p.Render(false)
 		if !strings.Contains(got, "        "+tc.want+"\n") || strings.Count(got, "\n") != 8 {
@@ -867,8 +1069,8 @@ func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 func renderDiscardedPair(t *testing.T, slots []Slot) string {
 	t.Helper()
 	p := &AssignPlan{
-		Head:  Head{Label: "assign _, _", Source: "_, _ = pair"},
-		Evals: []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
+		Head:    Head{Label: "assign _, _", Source: "_, _ = pair"},
+		Execute: []Node{&Eval{Result: 0, Expr: ident("pair"), Slots: slots}},
 		Commit: []Mapping{
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},

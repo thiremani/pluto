@@ -180,8 +180,9 @@ machinery's last consumer is gone.
 | `collector` | Declare a logical collection result before its domains (`prepare`) |
 | `domain` | Execute a region once per point in one resolved range domain |
 | `gate` | Admit or reject one shared statement iteration for its whole region |
-| `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the value-position `&&`'s right side (as `fallback` is the value-position `||`), and the work a failure scope's checks gate (§3) |
-| `fallback` | Lazily evaluate an alternative for missing outcomes |
+| `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the value-position `&&`'s right side (as `first` is the value-position `||`), and the work a failure scope's checks gate (§3) |
+| `first` | Take the first of its sides that yields: the value-position `||`, a chain of them as one list however it is grouped |
+| `fallback` | Lazily evaluate the next side of a `first`, where the side before it failed |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
 | `yield` | Produce a value from the current value or cell region |
@@ -639,23 +640,39 @@ and the value an outcome, which the `%` sets apart from a line that binds a
 new result; it prints no type, the outcome's own line naming it; an `output`
 target (§6) is spelled with that word first, `output res = %t0`; an eval that
 holds a
-checked access ends with its out-of-bounds scope, `[on-oob=skip]`, and each
+checked access ends with its out-of-bounds scope, named for what a failed
+access does: `[on-oob=skip]` where it skips the outcome, and
+`[on-oob=fallback]` where a `fallback` follows the eval's side of a `first`;
+each
 binding mapped from an outcome that may skip ends with what it holds then,
-`[on-skip=keep]` or `[on-skip=zero]` (§9), in both views; square brackets otherwise carry declarative policies, not
+`[on-skip=keep]` or `[on-skip=zero]` (§9), in both views, so `[on-oob=skip]`
+pairs with a policy on each binding the skip reaches, while a mapping to
+`_`, which keeps nothing, carries none; a `first` binds its outcome on a line
+of its own, `%t0 =`, and the selection follows one level in: a `first I64`
+line, which names the whole selection and its type, then a `fallback` label
+for each side after the first, with every side one level further in, so the
+labels line up, the sides line up, and no column depends on a name's width;
+no side carries a `yield` line, a side's value being its last outcome;
+square brackets otherwise carry declarative policies, not
 executable code. The expanded view puts each eval slot's ownership before
 its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
 which carries no obligation: `%t0 = eval I64, owned Str Pair(x)`,
 `%t0 = eval borrowed Str h`. The word is a fact about the slot and no part
-of its type. A borrow's owner is its operand when that is the owner's bare
+of its type. A `first` line carries none: the selection has no slot of its
+own, and each side's eval carries its own. A borrow's owner is its operand
+when that is the owner's bare
 name; any other borrow names its owner, `borrowed(h)`. The expanded view
 also appends a mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
-for a plain store — and follows the mappings with the derived releases,
+for a plain store; a mapping fed by a `first` names a transfer for each side
+where they differ, `[move %t1] [copy %t2]`, and one word where they agree —
+and follows the mappings with the derived releases,
 `drop %t1` for a discarded owned outcome, `drop %t0 [on-skip]` for what an
-owned outcome built before it skipped, and `drop x [old]` for a
+owned outcome built before it skipped, `drop %t1 [on-fallback]` for what a
+side of a `first` built before its fallback ran, and `drop x [old]` for a
 replaced target's old value, in the order they run (§8). Each names the
 value it frees, which exists on one path only: a skipped outcome's target
 kept its old value, and an outcome that yielded was moved into its target.
@@ -714,23 +731,25 @@ and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
 assign x
-    source "x = a > 0 && data[i] || -1"
+    source "x = ((data[i] || other[j]) || (-1))"
 
     execute
-        %result = fallback I64
-            primary
-                %condition = eval I64 a > 0 [yield=scalar]
-                %selected = require I64 %condition
-                    %loaded = eval I64 data[i] [on-oob=skip]
-                    yield %loaded
-                yield %selected
-            otherwise
-                %default = eval I64 -1
-                yield %default
+        %t0 =
+            first I64
+                %t1 = eval I64 data[i] [on-oob=fallback]
+            fallback
+                %t2 = eval I64 other[j] [on-oob=fallback]
+            fallback
+                %t3 = eval I64 -1
 
     commit
-        x = %result
+        x = %t0
 ```
+
+The value-position `&&` is planned to print the same way under `last`
+(decided 2026-11-15): the sides in order, and the value of the last when
+every side before it yielded. The words for its clauses are chosen in
+Step 6.
 
 A plan's header is its kind followed by its targets (`assign a, b` — targets
 comma-separated, since `_` is an identifier character and a joined
@@ -1420,10 +1439,10 @@ append.
   never the value. The solver currently rejects the spelling —
   `conditionPropagates` excludes checked failure, conflicting with §15's
   checked = `MayYield` / fallback composition. **This introduces the PIR
-  `fallback` operation in restricted form** — a checked-access left side with
-  an ordinary alternative, in assignment position, with regression tests.
-  Step 6 extends the same operation to full value conditionals and print
-  position; it does not add a second one. The solver change is equally
+  `first` operation and its `fallback` sides in restricted form** — a
+  checked-access left side with an ordinary alternative, in assignment
+  position, with regression tests. Step 6 extends the same operation to full
+  value conditionals and print position; it does not add a second one. The solver change is equally
   restricted: `conditionPropagates` feeds `expressionCanFail`, which
   statement-gate validation and logical `&&` share, so widening it to accept
   checked accesses would prematurely legalize checked `&&` and bare checked
@@ -1440,9 +1459,9 @@ assignment whose value holds an index read plans (matrix row 7, and row 5d
 for a `_` target), at the script root and in a body without a range
 parameter. The read stays inside its `eval`, which records the scope every
 access in it has: a failed read skips the eval's outcome, every slot of it
-(`[on-oob=skip]`). Each mapping of that outcome records what its target
-then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the builder
-and checked by the validator against the outcome and the target's
+(`[on-oob=skip]`). Each mapping of that outcome to a binding records what
+its target then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the
+builder and checked by the validator against the outcome and the target's
 freshness.
 
 ```text
@@ -1481,7 +1500,8 @@ so it never sees that the other side replaces the owner.
 The validator enforces invariant 15 on every eval: an access outside a
 literal cell needs the eval's scope, and a scope needs an access. An access
 in a literal cell is rejected, because the cell resolves it and no plan node
-records that scope yet; so is a print eval that may skip.
+records that scope yet; so is a print eval that may fail, and a scope the
+plan does not define.
 
 The lowerer emits the guard from the plan. An eval with the scope runs under
 a bounds guard of its own, which each read ANDs its in-bounds bit into, and
@@ -1500,8 +1520,8 @@ cell while the statement always commits (the literal stays legacy as a
 whole, planned for Step 8 with the collector nodes); a read in a call
 argument (row 6c, planned for Step 6); a print with a read (row 31); a read
 beside a comparison or under a gate (row 21, planned for Step 6); and a
-ranged read (planned for Step 7). The `||` fallback after a read (row 7b)
-and the affine rule above are this step's later slices.
+ranged read (planned for Step 7). The affine rule above is this step's later
+slice.
 
 Over the fixtures as they stood before this slice, 76 more assignments plan
 and the machine code of 87 of the 88 executables is unchanged.
@@ -1515,9 +1535,73 @@ result in and freed the seed. Pinned by `TestPlanGoldenCheckedReads` and
 `TestValidateRejects`, `TestValidatePrint` and `TestRenderSkip`, and at run
 time by `array/oob_skip`, `discard` and `mem/leak/oob_paths`.
 
+**Second slice landed — the fallback after a checked read.** `x = arr[oob] ||
+-1` assigns `-1` (matrix row 7b). The solver's rule is the fallback's own
+(`fallsBackFromRead`): an index read without a range fails the left side of
+`||` wherever a condition would, so a wrapped read `(arr[i] + 1) || -1` and a
+chain `a[i] || b[j] || -1` are accepted. `conditionPropagates` is unchanged,
+and a read still gates no statement and no `&&`. A left side only a ranged
+read can fail (row 7e) stays an error.
+
+A value that is such a `||` plans as a `first` (§4, §12), in an assignment,
+when each of its sides is an expression an eval admits. A chain is one
+`first` however it is grouped, since it takes the first side that yields
+either way.
+
+```text
+assign s
+    source "s = (sarr[9] || h)"
+
+    execute
+        %t0 =
+            first Str
+                %t1 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                %t2 = eval borrowed Str h
+
+    commit
+        s = %t0 [move %t1] [copy %t2]
+        drop %t1 [on-fallback]
+        drop s [old]
+```
+
+A side with a `fallback` after it must be able to fail, and its reads carry
+`[on-oob=fallback]`. The last side's reads carry `[on-oob=skip]`: where it
+fails too the outcome skips, and only then does the mapping carry a skip
+policy, so `x = arr[9] || -1` prints `x = %t0` for a fresh target and an
+existing one alike. The validator checks each of these on every `first`.
+
+Each side keeps its own ownership, and nothing is copied where the sides
+meet (the rule Step 6 plans for every conditional value): the commit takes
+the side that yielded by that side's transfer, choosing by the yield bits.
+A borrowed side is always copied. It supplies the value on one path only, so
+it cannot take its owner's old value, which every other path would then have
+to release.
+
+The lowerer runs the sides in order, each after the first only where the one
+before it failed, and stages each value and yield bit in memory, since a
+side after the first runs on a path of its own. The mapping then lands on
+the path of the side that yielded, with the release of what each failed side
+built on the way, so its binding sits in memory: an existing one moves
+there, and a fresh one starts unwritten when the `first` always yields. A
+failed read can hold heap state: a row read past the end of a matrix builds
+a zero row, which `drop %t1 [on-fallback]` releases.
+
+Staying legacy: a `||` after a read anywhere but the whole of an
+assignment's value, which is in a print, a literal cell, a call argument,
+under an operator or a gate, and beside a comparison. The solver's rule
+admits those too, and legacy lowering resolves them as the semantics doc
+says: the read's failure is one of its lane's conditions there already.
+
+Pinned by `TestFallbackAfterRead`, `TestPlanGoldenFallbacks` and
+`TestPlanRouterRejections`, on hand-built plans by `pir`'s `TestElaborate`,
+`TestValidateFirstRejects` and `TestRenderFirst`, and at run time by
+`array/oob_fallback`.
+
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 
-- `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
+- `gate` with keep-old/zero commit policies; `require`, `first` beyond a
+  checked read, `last` for the value-position `&&` (§12), `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval` and emitting each failure scope's checks before the work they
   gate (§3), including in the checked-only plans Step 5 migrated.

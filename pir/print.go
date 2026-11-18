@@ -2,6 +2,7 @@ package pir
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -15,12 +16,21 @@ import (
 // its body.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
-	writeExecute(&b, p.Head, p.Evals, expanded)
+	writeHead(&b, p.Head)
+	for _, node := range p.Execute {
+		switch n := node.(type) {
+		case *Eval:
+			writeEval(&b, executeIndent, n, expanded)
+		case *First:
+			writeFirst(&b, n, expanded)
+		}
+	}
+
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
-		fmt.Fprintf(&b, "        %s = %s", targetString(m.Target), outcomeString(p.Evals, m.Outcome))
-		if expanded && m.Transfer != Store {
-			fmt.Fprintf(&b, " [%s]", m.Transfer)
+		fmt.Fprintf(&b, "        %s = %s", targetString(m.Target), p.refString(m.Outcome))
+		if expanded {
+			b.WriteString(p.transfersString(m))
 		}
 		if m.OnSkip != NoSkipPolicy {
 			fmt.Fprintf(&b, " [on-skip=%s]", m.OnSkip)
@@ -28,9 +38,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 		b.WriteString("\n")
 	}
 	if expanded {
-		for _, d := range p.Drops {
-			fmt.Fprintf(&b, "        %s\n", p.dropString(d))
-		}
+		p.writeReleases(&b)
 	}
 
 	return placed(b.String(), p.Func)
@@ -40,7 +48,10 @@ func (p *AssignPlan) Render(expanded bool) string {
 // region, and the expanded view marks each owned slot it takes with [move].
 func (p *PrintPlan) Render(expanded bool) string {
 	var b strings.Builder
-	writeExecute(&b, p.Head, p.Evals, expanded)
+	writeHead(&b, p.Head)
+	for _, ev := range p.Evals {
+		writeEval(&b, executeIndent, ev, expanded)
+	}
 	fmt.Fprintf(&b, "        print %s\n", strings.Join(p.argStrings(expanded), ", "))
 
 	return placed(b.String(), p.Func)
@@ -54,7 +65,7 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 			continue
 		}
 		for i, slot := range p.Evals[arg.Outcome].Slots {
-			part := outcomeString(p.Evals, OutcomeRef{Outcome: arg.Outcome, Slot: i})
+			part := outcomeString(p.Evals[arg.Outcome], i)
 			if expanded && slot.Ownership == Owned {
 				part += " [" + Move.String() + "]"
 			}
@@ -64,19 +75,35 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 	return parts
 }
 
-// writeExecute writes what every plan opens with: its header, its source and
-// the evals of its execute region.
-func writeExecute(b *strings.Builder, head Head, evals []*Eval, expanded bool) {
+// executeIndent is the level of an execute region's own lines. A first's
+// labels, first and fallback, sit one level further in and its sides two.
+const executeIndent = "        "
+
+// writeHead writes what every plan opens with: its header, its source, and
+// the line that opens its execute region.
+func writeHead(b *strings.Builder, head Head) {
 	fmt.Fprintf(b, "%s\n", head.Label)
 	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
 	b.WriteString("\n    execute\n")
-	for _, ev := range evals {
-		operand := renderPayload(ev.Expr)
-		fmt.Fprintf(b, "        %%t%d = eval %s %s", ev.Result, slotsString(ev.Slots, operand, expanded), operand)
-		if ev.MaySkip() {
-			b.WriteString(" [on-oob=skip]")
+}
+
+func writeEval(b *strings.Builder, indent string, ev *Eval, expanded bool) {
+	operand := renderPayload(ev.Expr)
+	fmt.Fprintf(b, "%s%%t%d = eval %s %s", indent, ev.Result, slotsString(ev.Slots, operand, expanded), operand)
+	if ev.MayFail() {
+		fmt.Fprintf(b, " [on-oob=%s]", ev.OnOOB)
+	}
+	b.WriteString("\n")
+}
+
+func writeFirst(b *strings.Builder, f *First, expanded bool) {
+	fmt.Fprintf(b, "%s%%t%d =\n", executeIndent, f.Result)
+	fmt.Fprintf(b, "%s    first %s\n", executeIndent, f.Type.String())
+	for i, side := range f.Sides {
+		if i > 0 {
+			fmt.Fprintf(b, "%s    fallback\n", executeIndent)
 		}
-		b.WriteString("\n")
+		writeEval(b, executeIndent+"        ", side, expanded)
 	}
 }
 
@@ -211,11 +238,52 @@ func targetString(t Target) string {
 	return t.Name
 }
 
-func outcomeString(evals []*Eval, ref OutcomeRef) string {
-	if len(evals[ref.Outcome].Slots) > 1 {
-		return fmt.Sprintf("%%t%d#%d", ref.Outcome, ref.Slot)
+// outcomeString names slot i of ev's outcome; a slot selector follows only
+// where the outcome has several.
+func outcomeString(ev *Eval, i int) string {
+	if len(ev.Slots) > 1 {
+		return fmt.Sprintf("%%t%d#%d", ev.Result, i)
+	}
+	return fmt.Sprintf("%%t%d", ev.Result)
+}
+
+// refString names what ref refers to: a slot of an eval outside a first,
+// a first, or one of its sides, which like a first has one slot.
+func (p *AssignPlan) refString(ref OutcomeRef) string {
+	if ev := p.eval(ref.Outcome); ev != nil {
+		return outcomeString(ev, ref.Slot)
 	}
 	return fmt.Sprintf("%%t%d", ref.Outcome)
+}
+
+// transfersString spells how a mapping's target acquires its value: one word
+// where every eval that can supply it agrees, nothing for a plain store, and
+// otherwise a word for each, beside the eval it applies to.
+func (p *AssignPlan) transfersString(m Mapping) string {
+	if len(slices.Compact(slices.Clone(m.Transfers))) == 1 {
+		if m.Transfers[0] == Store {
+			return ""
+		}
+		return fmt.Sprintf(" [%s]", m.Transfers[0])
+	}
+
+	var b strings.Builder
+	for i, src := range p.sources(m.Outcome) {
+		fmt.Fprintf(&b, " [%s %s]", m.Transfers[i], p.refString(src.ref))
+	}
+	return b.String()
+}
+
+func (scope OOBScope) String() string {
+	switch scope {
+	case NoChecks:
+		return "none"
+	case SkipOutcome:
+		return "skip"
+	case UseFallback:
+		return "fallback"
+	}
+	return fmt.Sprintf("oob-scope(%d)", int(scope))
 }
 
 func (policy SkipPolicy) String() string {
@@ -230,14 +298,37 @@ func (policy SkipPolicy) String() string {
 	return fmt.Sprintf("skip-policy(%d)", int(policy))
 }
 
-// dropString names a release by the value it frees: a target's old value,
-// what a skipped outcome built, or an outcome no target took.
-func (p *AssignPlan) dropString(d Drop) string {
-	switch d.Kind {
-	case DropReplaced:
-		return "drop " + d.Target + " [old]"
-	case DropSkipped:
-		return "drop " + outcomeString(p.Evals, d.Outcome) + " [on-skip]"
+// writeReleases names each release by the value it frees: what a failed eval
+// built, tagged with what its failure does, an outcome mapped to `_`, or a
+// target's old value.
+func (p *AssignPlan) writeReleases(b *strings.Builder) {
+	for _, ref := range p.Skipped {
+		fmt.Fprintf(b, "        drop %s [on-%s]\n", p.refString(ref), p.eval(ref.Outcome).OnOOB)
 	}
-	return "drop " + outcomeString(p.Evals, d.Outcome)
+	for _, ref := range p.Discarded {
+		fmt.Fprintf(b, "        drop %s\n", p.refString(ref))
+	}
+	for _, name := range p.Replaced {
+		fmt.Fprintf(b, "        drop %s [old]\n", name)
+	}
+}
+
+// eval finds the eval whose outcome is id, a first's side included; it is
+// nil when id names a first.
+func (p *AssignPlan) eval(id OutcomeID) *Eval {
+	for _, node := range p.Execute {
+		switch n := node.(type) {
+		case *Eval:
+			if n.Result == id {
+				return n
+			}
+		case *First:
+			for _, side := range n.Sides {
+				if side.Result == id {
+					return side
+				}
+			}
+		}
+	}
+	return nil
 }
