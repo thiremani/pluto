@@ -757,6 +757,23 @@ func TestValidateGateRejects(t *testing.T) {
 	}
 }
 
+// A gate names the outcome it takes, and Condition finds the check by that
+// name, not by where the check sits.
+func TestConditionIsTheCheckTheGateNames(t *testing.T) {
+	p := gatePlan()
+	check, gate := p.Execute[0], p.Execute[1]
+	between := &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(testType("Str"), "t")}}
+	p.Execute = []Node{check, between, gate}
+	if p.Condition() != check {
+		t.Fatalf("the check the gate names is not found apart from the gate: got %v", p.Condition())
+	}
+
+	p.Gate().Cond = 1
+	if ch := p.Condition(); ch != nil {
+		t.Fatalf("the gate names %%t1, but Condition returned check %%t%d", ch.Result)
+	}
+}
+
 // The compiler elaborates a plan before it validates it, so elaboration
 // leaves a wrongly shaped execute region for the validator to name.
 func TestValidateNamesShapeAfterElaborate(t *testing.T) {
