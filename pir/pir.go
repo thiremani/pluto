@@ -234,20 +234,14 @@ func (p *AssignPlan) Gate() *Gate {
 	return gate
 }
 
-// Condition returns the check that binds the outcome a gate takes; nil for a
-// statement without a gate, or with a gate whose outcome no check binds.
+// Condition returns the check a gate takes, the first node of a gated region;
+// nil for a statement without a gate, or with a gate alone.
 func (p *AssignPlan) Condition() *Check {
-	gate := p.Gate()
-	if gate == nil {
+	if p.Gate() == nil {
 		return nil
 	}
-
-	for _, node := range p.Execute {
-		if ch, isCheck := node.(*Check); isCheck && ch.Result == gate.Cond {
-			return ch
-		}
-	}
-	return nil
+	ch, _ := p.Execute[0].(*Check)
+	return ch
 }
 
 // Values returns the nodes whose outcomes the commit maps: a gate's region,
