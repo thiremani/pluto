@@ -268,8 +268,8 @@ func outcomeString(ev *Eval, i int) string {
 	return fmt.Sprintf("%%t%d", ev.Result)
 }
 
-// refString names what ref refers to: a slot of an eval outside a first,
-// a first, or one of its sides, which like a first has one slot.
+// refString names what ref refers to: a slot of an eval outside a first, or
+// a first, one of its sides or a check, each of which has one slot.
 func (p *AssignPlan) refString(ref OutcomeRef) string {
 	if ev := p.eval(ref.Outcome); ev != nil {
 		return outcomeString(ev, ref.Slot)

@@ -27,7 +27,7 @@ const (
 	Borrowed
 )
 
-// Slot is one output of an eval. Type is the solver's semantic type;
+// Slot is one output of an eval or a check. Type is the solver's semantic type;
 // Ownership follows the value's effective storage, which may hold heap state
 // the type does not show (an empty reset backed by a typed array).
 type Slot struct {
@@ -36,15 +36,16 @@ type Slot struct {
 	Owner     string // the borrowed-from binding; empty unless Borrowed
 }
 
-// OOBScope is what a failed checked access in an eval does (plan §9). The
-// accesses of one eval share one scope.
+// OOBScope is what a failed checked access in an eval or a check does (plan
+// §9). The accesses of one node share one scope.
 type OOBScope int
 
 const (
-	// NoChecks: the eval holds no checked access, so its outcome always yields.
+	// NoChecks: the node holds no checked access, so none skips its outcome.
 	NoChecks OOBScope = iota
-	// SkipOutcome: a failed access skips the eval's outcome, every slot of it,
-	// and each mapping's OnSkip says what its target then holds.
+	// SkipOutcome: a failed access skips the node's outcome, every slot of it.
+	// An eval's mappings say in OnSkip what each target then holds, and a
+	// check's gate rejects the statement.
 	SkipOutcome
 	// UseFallback: the eval is a side of a first with a side after it, which
 	// runs where an access fails.
@@ -226,14 +227,17 @@ type AssignPlan struct {
 // Gate returns the gate that closes the execute region, nil for a statement
 // without one.
 func (p *AssignPlan) Gate() *Gate {
+	if len(p.Execute) == 0 {
+		return nil
+	}
 	gate, _ := p.Execute[len(p.Execute)-1].(*Gate)
 	return gate
 }
 
 // Condition returns the check a gate takes, the node before the gate; nil for
-// a statement without a gate.
+// a statement without a gate, or with a gate no check precedes.
 func (p *AssignPlan) Condition() *Check {
-	if p.Gate() == nil {
+	if p.Gate() == nil || len(p.Execute) < 2 {
 		return nil
 	}
 	ch, _ := p.Execute[len(p.Execute)-2].(*Check)

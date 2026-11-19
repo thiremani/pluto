@@ -8,9 +8,10 @@ package pir
 // borrowed inputs move, copy, or transfer regardless of it. Replacement
 // and promotion follow HoldsHeap.
 func Elaborate(p *AssignPlan) {
-	// A borrow takes its owner's old value only when its own mapping and the
-	// owner's replacement both always commit: were one to land without the
-	// other, two bindings would hold one value, or none.
+	// A borrow takes its owner's old value only when neither its own mapping
+	// nor the owner's replacement may skip: were one to land without the
+	// other, two bindings would hold one value, or none. A gate is no such
+	// skip, since it rejects both together.
 	replaced := make(map[string]bool, len(p.Commit))
 	takeable := make(map[string]bool, len(p.Commit))
 	for _, m := range p.Commit {

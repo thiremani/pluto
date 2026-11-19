@@ -76,15 +76,14 @@ func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
 	}
 }
 
-// planCheckEligible admits a condition as one check: a comparison of one
-// slot whose operands are each an expression an eval takes, so no range and
-// no condition of their own. The operands of a chain and of a lazy && or ||
-// are conditions, and a comparison of several slots has several modes; each
-// waits for the node that plans it. The one slot is a scalar's: the solver
-// admits no mask as a condition.
+// planCheckEligible admits a condition as one check: a scalar comparison of
+// one slot whose operands are each an expression an eval takes, so no range
+// and no condition of their own. A lazy && or || is no comparison, a chain's
+// left operand is a condition, and a comparison of several slots has several
+// modes; each waits for the node that plans it.
 func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if len(info.CompareModes) != 1 {
+	if len(info.CompareModes) != 1 || !info.IsCondScalar(0) {
 		return false
 	}
 

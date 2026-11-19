@@ -715,7 +715,6 @@ func TestValidateGateRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"NoCheckBeforeGate", func(p *AssignPlan) { p.Execute = p.Execute[1:] }, "gate follows 0 nodes and takes one check"},
 		{"TwoChecksBeforeGate", func(p *AssignPlan) {
 			p.Execute = []Node{p.Execute[0], p.Execute[0], p.Execute[1]}
 		}, "gate follows 2 nodes and takes one check"},
@@ -751,6 +750,31 @@ func TestValidateGateRejects(t *testing.T) {
 			Elaborate(p)
 			tc.mutate(p)
 			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// The compiler elaborates a plan before it validates it, so elaboration
+// leaves a wrongly shaped execute region for the validator to name.
+func TestValidateNamesShapeAfterElaborate(t *testing.T) {
+	gateAlone := gatePlan()
+	gateAlone.Execute = gateAlone.Execute[1:]
+
+	cases := []struct {
+		name    string
+		plan    *AssignPlan
+		wantErr string
+	}{
+		{"NoNodes", &AssignPlan{Head: Head{Label: "assign s", Source: "s = 1"}}, "plan assign s has no evals"},
+		{"NoCheckBeforeGate", gateAlone, "gate follows 0 nodes and takes one check"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			Elaborate(tc.plan)
+			err := Validate(tc.plan, sameSpelling)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
