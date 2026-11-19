@@ -16,7 +16,7 @@ func (t testType) String() string { return string(t) }
 
 type unknownNode OutcomeID
 
-func (n unknownNode) ID() OutcomeID { return OutcomeID(n) }
+func (unknownNode) node() {}
 
 // sameSpelling stands in for the compiler's binding-compatibility relation;
 // these tests exercise the plan invariants, not the type system.
@@ -41,6 +41,10 @@ func call(name string, args ...ast.Expression) ast.Expression {
 
 func concat(left, right ast.Expression) ast.Expression {
 	return &ast.InfixExpression{Token: token.Token{Type: token.OPERATOR, Literal: "⊕"}, Left: left, Operator: "⊕", Right: right}
+}
+
+func greater(left, right ast.Expression) *ast.InfixExpression {
+	return &ast.InfixExpression{Token: token.Token{Type: token.OPERATOR, Literal: ">"}, Left: left, Operator: ">", Right: right}
 }
 
 // read is `arr[index]`, a checked access.
@@ -202,6 +206,23 @@ func chainPlan() *AssignPlan {
 	}
 }
 
+// gatePlan is `s = sarr[1] > "m" sarr[9]` over heap strings, before
+// elaboration: the check reads a copy the gate only tests, and the gate's
+// region reads another into a binding that holds a value.
+func gatePlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = sarr[1] > "m" sarr[9]`},
+		Execute: []Node{
+			&Check{Result: 0, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&Gate{Cond: 0, Body: []Node{
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			}},
+		},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip}},
+	}
+}
+
 // evalAt is node i of p's execute region, an eval.
 func evalAt(p *AssignPlan, i int) *Eval { return p.Execute[i].(*Eval) }
 
@@ -354,6 +375,8 @@ func TestElaborate(t *testing.T) {
 		}, [][]Transfer{{Store, Store}}, Releases{Discarded: []OutcomeRef{{Outcome: 1}, {Outcome: 2}}}},
 		{"a first whose last side may skip releases each side where it failed", chainPlan(),
 			[][]Transfer{{Store}, {Move, Move, Move}, {Store}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}, {Outcome: 4}}}},
+		{"a gate releases what its check built, and its region's values as any other", gatePlan(),
+			[][]Transfer{{Move}}, Releases{Tested: []OutcomeRef{{Outcome: 0}}, Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"s"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -363,7 +386,8 @@ func TestElaborate(t *testing.T) {
 					t.Errorf("mapping %d transfers = %v, want %v", i, m.Transfers, tc.transfers[i])
 				}
 			}
-			if !slices.Equal(tc.plan.Skipped, tc.releases.Skipped) ||
+			if !slices.Equal(tc.plan.Tested, tc.releases.Tested) ||
+				!slices.Equal(tc.plan.Skipped, tc.releases.Skipped) ||
 				!slices.Equal(tc.plan.Discarded, tc.releases.Discarded) ||
 				!slices.Equal(tc.plan.Replaced, tc.releases.Replaced) {
 				t.Errorf("releases = %+v, want %+v", tc.plan.Releases, tc.releases)
@@ -679,6 +703,121 @@ func TestRenderFirst(t *testing.T) {
 `
 	if got := chain.Render(true); got != want {
 		t.Fatalf("chain render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Plan §4, §9, §14: a gate's invariants, each broken on
+// `s = sarr[1] > "m" sarr[9]`.
+func TestValidateGateRejects(t *testing.T) {
+	str := testType("Str")
+	cases := []struct {
+		name    string
+		mutate  func(*AssignPlan)
+		wantErr string
+	}{
+		{"TwoChecksBeforeGate", func(p *AssignPlan) {
+			p.Execute = []Node{p.Execute[0], p.Execute[0], p.Execute[1]}
+		}, "gate follows 2 nodes and takes one check"},
+		{"EvalBeforeGate", func(p *AssignPlan) {
+			p.Execute[0] = &Eval{Result: 0, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
+		}, "gate follows *pir.Eval, which is no check"},
+		{"CheckWithoutGate", func(p *AssignPlan) { p.Execute = append(p.Execute[:1], p.Gate().Body...) }, "unknown execute node *pir.Check"},
+		{"GateInsideGate", func(p *AssignPlan) { p.Gate().Body = []Node{&Gate{Cond: 0, Body: p.Gate().Body}} }, "unknown execute node *pir.Gate"},
+		{"EmptyRegion", func(p *AssignPlan) { p.Gate().Body = nil }, "gate admits an empty region"},
+		{"GateTakesAnotherOutcome", func(p *AssignPlan) { p.Gate().Cond = 1 }, "gate takes %t1 where check %t0 precedes it"},
+		{"SparseCheckID", func(p *AssignPlan) { p.Execute[0].(*Check).Result = 1 }, "check has result ID 1 where 0 is next; IDs must be dense"},
+		{"ValueIDRepeatsCheck", func(p *AssignPlan) { p.Gate().Body[0].(*Eval).Result = 0 }, "eval 1 has result ID 0; IDs must be dense"},
+		{"CheckWithTwoSlots", func(p *AssignPlan) {
+			p.Condition().Slots = []Slot{ownedSlot(str), ownedSlot(str)}
+		}, "check %t0 has 2 slots"},
+		{"CheckSlotWithoutType", func(p *AssignPlan) { p.Condition().Slots[0].Type = nil }, "check %t0 slot 0 has no type"},
+		{"CheckFallsBack", func(p *AssignPlan) { p.Condition().OnOOB = UseFallback }, "check %t0 falls back, but is no side of a first"},
+		{"CheckAccessWithoutScope", func(p *AssignPlan) { p.Condition().OnOOB = NoChecks }, "check %t0 holds a checked access with no out-of-bounds scope"},
+		{"MappedCheck", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 0 }, "commit references unknown outcome %t0"},
+		{"NoPolicyUnderGate", func(p *AssignPlan) {
+			p.Gate().Body[0] = &Eval{Result: 1, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
+			p.Commit[0].OnSkip = NoSkipPolicy
+		}, "target s = %t1 slot 0 has skip policy none; its outcome and target require keep"},
+		{"TestedNeverReleased", func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t0 slot 0, which a gate tested, is never released"},
+		{"TestedDroppedTwice", func(p *AssignPlan) { p.Tested = []OutcomeRef{{Outcome: 0}, {Outcome: 0}} }, "tested %t0 slot 0 dropped twice"},
+		{"TestedDropOfBorrow", func(p *AssignPlan) {
+			p.Condition().Slots[0] = borrowedSlot(str, "x")
+		}, "drop of %t0 slot 0, which is not an owned outcome a gate tested"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := gatePlan()
+			Elaborate(p)
+			tc.mutate(p)
+			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// The compiler elaborates a plan before it validates it, so elaboration
+// leaves a wrongly shaped execute region for the validator to name.
+func TestValidateNamesShapeAfterElaborate(t *testing.T) {
+	gateAlone := gatePlan()
+	gateAlone.Execute = gateAlone.Execute[1:]
+
+	cases := []struct {
+		name    string
+		plan    *AssignPlan
+		wantErr string
+	}{
+		{"NoNodes", &AssignPlan{Head: Head{Label: "assign s", Source: "s = 1"}}, "plan assign s has no evals"},
+		{"NoCheckBeforeGate", gateAlone, "gate follows 0 nodes and takes one check"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			Elaborate(tc.plan)
+			err := Validate(tc.plan, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §12: a check binds its outcome like an eval, and the gate that takes
+// it sits beneath with its region one level in. Each binding says what it
+// holds where the gate rejects, and what the check built is released first.
+func TestRenderGate(t *testing.T) {
+	p := gatePlan()
+	Elaborate(p)
+	want := `assign s
+    source "s = sarr[1] > \"m\" sarr[9]"
+
+    execute
+        %t0 = check Str sarr[1] > "m" [on-oob=skip]
+        gate %t0
+            %t1 = eval Str sarr[9] [on-oob=skip]
+
+    commit
+        s = %t1 [on-skip=keep]
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	want = `assign s
+    source "s = sarr[1] > \"m\" sarr[9]"
+
+    execute
+        %t0 = check owned Str sarr[1] > "m" [on-oob=skip]
+        gate %t0
+            %t1 = eval owned Str sarr[9] [on-oob=skip]
+
+    commit
+        s = %t1 [move] [on-skip=keep]
+        drop %t0
+        drop %t1 [on-skip]
+        drop s [old]
+`
+	if got := p.Render(true); got != want {
+		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

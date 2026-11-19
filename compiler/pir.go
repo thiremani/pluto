@@ -35,7 +35,7 @@ func (c *Compiler) lowerRoutedBody(stmts []ast.Statement, fn string) {
 func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
-		if len(s.Condition) > 0 || !c.planValuesEligible(s.Value, true) {
+		if !c.planGateEligible(s.Condition) || !c.planValuesEligible(s.Value, true) {
 			return false
 		}
 		plan := c.buildLetPlan(s, fn)
@@ -60,6 +60,39 @@ func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 		return true
 	}
 	return false
+}
+
+// planGateEligible admits a statement without a gate, or one whose gate takes
+// one check (matrix row 15). A gate of several conditions is an && of them,
+// which waits for the node that plans it.
+func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
+	switch len(conds) {
+	case 0:
+		return true
+	case 1:
+		return c.planCheckEligible(conds[0])
+	default:
+		return false
+	}
+}
+
+// planCheckEligible admits a condition as one check: a scalar comparison of
+// one slot whose operands are each an expression an eval takes, so no range
+// and no condition of their own. A lazy && or || is no comparison, a chain's
+// left operand is a condition, and a comparison of several slots has several
+// modes; each waits for the node that plans it.
+func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(info.CompareModes) != 1 || !info.IsCondScalar(0) {
+		return false
+	}
+
+	for _, operand := range expr.(*ast.InfixExpression).Operands() {
+		if !c.planExprEligible(operand, true) {
+			return false
+		}
+	}
+	return true
 }
 
 // planValuesEligible reports whether every value of a statement is an
@@ -196,17 +229,19 @@ func planOOBScope(expr ast.Expression, fallbackFollows bool) pir.OOBScope {
 	}
 }
 
-// planSkipPolicy is what a target holds where its outcome skipped (plan §9):
-// the value it had, or zero when the statement introduces it. A discard
-// keeps nothing.
-func planSkipPolicy(maySkip bool, target pir.Target) pir.SkipPolicy {
+// planSkipPolicy is what a target holds where its mapping did not commit
+// (plan §9): the value it had, or zero when the statement introduces it. A
+// discard keeps nothing.
+func planSkipPolicy(mayNotCommit bool, target pir.Target) pir.SkipPolicy {
 	switch {
-	case !maySkip || target.Kind == pir.DiscardTarget:
+	case target.Kind == pir.DiscardTarget:
 		return pir.NoSkipPolicy
-	case target.Fresh:
+	case mayNotCommit && target.Fresh:
 		return pir.ZeroOnSkip
-	default:
+	case mayNotCommit:
 		return pir.KeepOnSkip
+	default:
+		return pir.NoSkipPolicy
 	}
 }
 
@@ -278,7 +313,9 @@ func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 
 // buildLetPlan maps each expression's output slots onto the next targets in
 // order; the solver validated that the totals match. A value-position ||
-// becomes a first, which has one slot.
+// becomes a first, which has one slot. A statement's condition becomes a
+// check and the gate that takes it, whose region holds the values: a gate may
+// leave every mapping unapplied.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPlan {
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
@@ -290,24 +327,43 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	}
 
 	next := pir.OutcomeID(0)
+	var check *pir.Check
+	if len(stmt.Condition) > 0 {
+		check = c.buildCheck(stmt.Condition[0].(*ast.InfixExpression), next)
+		next++
+	}
+	gated := check != nil
+
+	var values []pir.Node
 	for _, expr := range stmt.Value {
 		if _, isOr := ast.IsLogicalOr(expr); isOr {
 			first := c.buildFirst(expr, next)
-			plan.Execute = append(plan.Execute, first)
-			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, first.MaySkip())
+			values = append(values, first)
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, gated || first.MaySkip())
 			next += pir.OutcomeID(1 + len(first.Sides))
 			continue
 		}
 
 		ev := c.buildEval(expr, next, false)
-		plan.Execute = append(plan.Execute, ev)
+		values = append(values, ev)
 		for slot := range ev.Slots {
-			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, ev.MaySkip())
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, gated || ev.MaySkip())
 		}
 		next++
 	}
 
+	plan.Execute = values
+	if gated {
+		plan.Execute = []pir.Node{check, &pir.Gate{Cond: check.Result, Body: values}}
+	}
 	return plan
+}
+
+// buildCheck plans the comparison cmp as one check, whose outcome is its left
+// operand.
+func (c *Compiler) buildCheck(cmp *ast.InfixExpression, id pir.OutcomeID) *pir.Check {
+	t := c.ExprCache[key(c.FuncNameMangled, cmp)].OutTypes[0]
+	return &pir.Check{Result: id, Expr: cmp, Slots: []pir.Slot{c.planSlot(cmp.Left, t)}, OnOOB: planOOBScope(cmp, false)}
 }
 
 // buildEval plans expr as one eval; fallbackFollows says it is a side of a
@@ -337,9 +393,9 @@ func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First 
 }
 
 // mapNextTarget maps an outcome slot onto the statement's next target.
-func (c *Compiler) mapNextTarget(plan *pir.AssignPlan, stmt *ast.LetStatement, outcome pir.OutcomeRef, maySkip bool) {
+func (c *Compiler) mapNextTarget(plan *pir.AssignPlan, stmt *ast.LetStatement, outcome pir.OutcomeRef, mayNotCommit bool) {
 	target := c.planTarget(stmt.Name[len(plan.Commit)])
-	plan.Commit = append(plan.Commit, pir.Mapping{Target: target, Outcome: outcome, OnSkip: planSkipPolicy(maySkip, target)})
+	plan.Commit = append(plan.Commit, pir.Mapping{Target: target, Outcome: outcome, OnSkip: planSkipPolicy(mayNotCommit, target)})
 }
 
 // buildPrintPlan gives each argument to the invocation in source order: a
@@ -388,7 +444,10 @@ type loweredNode struct {
 // decides nothing itself: old values are captured before any eval runs, each
 // outcome's mappings land where it yielded, and the releases of replaced
 // values run after every mapping has landed, so a swap never reads a freed
-// payload.
+// payload. Under a gate the values run and commit only where its check
+// yielded, so every binding has storage both paths reach before they part.
+// A target the statement introduces is no name until the values have run: a
+// string's marker that spells it stays text.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
@@ -400,8 +459,31 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 		replaced[name] = c.derefIfPointer(sym, name+"_old_load")
 	}
 
+	check := plan.Condition()
+	if check == nil {
+		nodes := c.lowerValues(plan.Values())
+		c.nameFreshTargets(c.backBranchedTargets(plan), replaced)
+		c.commitValues(plan, nodes, replaced)
+		return
+	}
+
+	tested, admitted := c.lowerCheck(check)
+	for _, ref := range plan.Tested {
+		c.freeSymbolValue(tested[ref.Slot], "check_free")
+	}
+
+	fresh := c.backBranchedTargets(plan)
+	c.withCondBranch(admitted, "gate", func() {
+		nodes := c.lowerValues(plan.Values())
+		c.nameFreshTargets(fresh, replaced)
+		c.commitValues(plan, nodes, replaced)
+	}, nil)
+}
+
+// lowerValues runs the nodes whose outcomes the commit maps.
+func (c *Compiler) lowerValues(values []pir.Node) []loweredNode {
 	var nodes []loweredNode
-	for _, node := range plan.Execute {
+	for _, node := range values {
 		switch n := node.(type) {
 		case *pir.Eval:
 			out, yielded := c.lowerEval(n)
@@ -410,8 +492,12 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			nodes = append(nodes, c.lowerFirst(n))
 		}
 	}
+	return nodes
+}
 
-	c.backBranchedTargets(plan, replaced)
+// commitValues lands every node's mappings, then runs the releases that
+// follow them.
+func (c *Compiler) commitValues(plan *pir.AssignPlan, nodes []loweredNode, replaced map[string]*Symbol) {
 	for _, n := range nodes {
 		c.landSources(plan, n, 0)
 	}
@@ -424,6 +510,33 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			c.dropReplaced(plan, n.id, replaced)
 		}, nil)
 	}
+}
+
+// lowerCheck compares a check's operands. It returns the left operand, which
+// is the check's outcome, and the bit that says whether it yielded. The right
+// operand is only compared, so it is released here. A read past the end gives
+// a zero the comparison still computes with, and clears the bit.
+func (c *Compiler) lowerCheck(ch *pir.Check) ([]*Symbol, llvm.Value) {
+	if ch.OnOOB == pir.NoChecks {
+		return c.compareOperands(ch.Expr)
+	}
+
+	guard := c.pushBoundsGuard("check_bounds_guard")
+	defer c.popBoundsGuard()
+
+	out, held := c.compareOperands(ch.Expr)
+	inBounds := c.createLoad(guard, Int{Width: 1}, "check_bounds_ok")
+	return out, c.builder.CreateAnd(held, inBounds, "check_yielded")
+}
+
+// compareOperands evaluates a comparison of one scalar slot: its left operand
+// and the bit that says whether the comparison holds.
+func (c *Compiler) compareOperands(cmp *ast.InfixExpression) ([]*Symbol, llvm.Value) {
+	left := c.compileExpression(cmp.Left, nil)
+	right := c.compileExpression(cmp.Right, nil)
+	out, held := c.compareScalars(cmp.Operator, left[0], right[0])
+	c.freeTemporary(cmp.Right, right)
+	return []*Symbol{out}, held
 }
 
 // lowerEval compiles one eval and returns its outcome with the bit that says
@@ -502,13 +615,24 @@ func (c *Compiler) nodeYielded(n loweredNode) llvm.Value {
 	return yielded
 }
 
+// freshSlot is the memory of a target the statement introduces, before the
+// statement names it, and the zero it holds where a mapping may leave it
+// unwritten.
+type freshSlot struct {
+	name string
+	t    Type
+	mem  llvm.Value
+	zero *Symbol
+}
+
 // backBranchedTargets gives every binding whose mapping lands on one path of
 // several storage that all of them reach. A binding a skip can leave alone
 // moves to memory when it exists, and a fresh one starts at its zero, the
-// value it holds where its outcome skipped; a commit replaces that zero, so
-// it joins replaced. A first's binding takes its value on the path of the
-// side that yielded, so it sits in memory too.
-func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string]*Symbol) {
+// value it holds where its mapping did not commit. A first's binding takes its
+// value on the path of the side that yielded, so it sits in memory too. The
+// fresh bindings' memory is returned unnamed, for nameFreshTargets.
+func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan) []freshSlot {
+	var fresh []freshSlot
 	for _, m := range plan.Commit {
 		if m.Target.Kind == pir.DiscardTarget {
 			continue
@@ -517,11 +641,33 @@ func (c *Compiler) backBranchedTargets(plan *pir.AssignPlan, replaced map[string
 		branched := len(m.Transfers) > 1
 		switch {
 		case m.OnSkip == pir.ZeroOnSkip:
-			replaced[m.Target.Name] = c.seedFreshDest(m.Target.Name, m.Target.Type.(Type))
+			slot := c.newFreshSlot(m.Target)
+			slot.zero = c.makeZeroValue(slot.t)
+			c.createStore(slot.zero.Val, slot.mem, slot.t)
+			fresh = append(fresh, slot)
 		case branched && m.Target.Fresh:
-			c.bindFreshDest(m.Target.Name, m.Target.Type.(Type))
+			fresh = append(fresh, c.newFreshSlot(m.Target))
 		case m.OnSkip == pir.KeepOnSkip || branched:
 			c.promoteExistingSym(m.Target.Name)
+		}
+	}
+	return fresh
+}
+
+// newFreshSlot allocates memory nothing has written yet for a fresh target.
+func (c *Compiler) newFreshSlot(target pir.Target) freshSlot {
+	t := target.Type.(Type)
+	return freshSlot{name: target.Name, t: t, mem: c.createEntryBlockAlloca(c.mapToLLVMType(t), target.Name+".mem")}
+}
+
+// nameFreshTargets binds each fresh target's name to its memory, once the
+// statement's values have run. A commit replaces the zero a slot holds, so
+// the zero joins replaced.
+func (c *Compiler) nameFreshTargets(fresh []freshSlot, replaced map[string]*Symbol) {
+	for _, slot := range fresh {
+		Put(c.Scopes, slot.name, &Symbol{Val: slot.mem, Type: Ptr{Elem: slot.t}})
+		if slot.zero != nil {
+			replaced[slot.name] = slot.zero
 		}
 	}
 }

@@ -135,8 +135,10 @@ s`)
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// gates, conditional values, and ranged RHS keep their legacy lowering, and
-// so does a call given a range or an argument that can fail (matrix rows 13,
+// conditional values and ranged RHS keep their legacy lowering, and so does a
+// gate of several conditions, of several slots, or with a condition for an
+// operand (row 15), while a gate of one plain comparison plans. So does
+// a call given a range or an argument that can fail (matrix rows 13,
 // 6c) and a literal with an index read in a cell, while an index read whose
 // failure skips the statement's own value plans (row 7), and so does a ||
 // after one when it is the whole value (row 7b), not under an operator, in a
@@ -158,6 +160,9 @@ lo, hi = Both(a)
     hi = a + 1
 `, `x = 5
 g = x > 2 13
+ga = x > 2 && x < 9 13
+gc = x > 2 < 9 13
+gp, gs = Both(x) > Both(0) 13, 14
 y = 0
 y = x > 2
 s = "hi"
@@ -190,9 +195,9 @@ fc = [arr[9] || 1]
 fd = Twice(arr[9] || 1)
 fx = x > 9 || arr[9] || 1
 fm, fn = arr[9] || Both(x)
-g, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
+g, ga, gc, gp, gs, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -238,14 +243,14 @@ func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	// The gated statement promotes x to memory; the final plain assignment
+	// The gated statement moves x to memory; the plain assignment after it
 	// must still plan.
 	plans := compileScriptPlans(t, ctx, "planPromoted", "", `x = 1
 x = x > 0 5
 x = x + 1
 x`)
 
-	require.Equal(t, []string{"assign x", "assign x"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign x", "assign x"}, planLabels(plans))
 }
 
 // TestInvalidPlanPanicsBeforeLowering drives the production
@@ -889,8 +894,8 @@ d, l, r, n, copied.age, tag`)
 // Matrix rows 14 and 14i: the body of a function without a range parameter
 // plans. The script's plans are emitted first, then each specialization's in
 // first-lowered order, so Outer's body precedes the Inner it calls. A gated
-// body statement stays legacy (row 14a: Pick's second line), and so does a
-// body a range parameter drives (row 14b): Sum plans for a scalar x only.
+// body statement plans (row 14a: Pick's second line); a body a range
+// parameter drives stays legacy (row 14b): Sum plans for a scalar x only.
 func TestPlanGoldenFunctionOutputs(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -933,6 +938,7 @@ n, o, k, p, q, one, acc`)
 		{Func: "I64 = AddOne(I64)", Label: "assign res"},
 		{Func: "Str, Str = Echo(Str)", Label: "assign out"},
 		{Func: "Str, Str = Echo(Str)", Label: "assign kept"},
+		{Func: "Str = Pick(Str, I64)", Label: "assign out"},
 		{Func: "Str = Pick(Str, I64)", Label: "assign out"},
 		{Func: "I64 = Outer(I64)", Label: "assign res"},
 		{Func: "I64 = Inner(I64)", Label: "assign res"},
@@ -993,6 +999,150 @@ n, o, k, p, q, one, acc`)
             output out = %t0 [copy]
             drop out [old]
 `, plans[12].Render(true))
+	// Row 14a: a rejected gate leaves an output holding what it held.
+	require.Equal(t, `    assign out
+        source "out = (n > 0) (s ⊕ \"?\")"
+
+        execute
+            %t0 = check I64 n > 0
+            gate %t0
+                %t1 = eval owned Str s ⊕ "?"
+
+        commit
+            output out = %t1 [move] [on-skip=keep]
+            drop out [old]
+`, plans[13].Render(true))
+}
+
+// Plan §4, §9 and matrix rows 5e, 15, 16: a statement's condition plans as a
+// check, and a gate takes its outcome and admits the values beneath it. A
+// rejected gate leaves every mapping unapplied, so each binding carries a
+// skip policy, and the two mappings of a swap still land together. What the
+// check built is released; a borrow it read is not.
+func TestPlanGoldenGates(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planGates", `s = MkStr(x)
+    s = "s-x"
+`, `n = 3
+x = 1
+x = n > 0 5
+t = "heap" ⊕ "!"
+u = "old" ⊕ "!"
+fresh = n > 9 t
+t, u = n > 0 u, t
+arr = [10 20 30]
+x = arr[1] > -1 arr[9] || 8
+hc = MkStr(n) > "a" 7
+bc = t > "abc" 1
+_ = n > 0 MkStr(n)
+x, fresh, t, u, hc, bc`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign n"}, {Label: "assign x"}, {Label: "assign x"}, {Label: "assign t"},
+		{Label: "assign u"}, {Label: "assign fresh"}, {Label: "assign t, u"}, {Label: "assign arr"},
+		{Label: "assign x"}, {Label: "assign hc"}, {Label: "assign bc"}, {Label: "assign _"},
+		{Label: "print"},
+		{Func: "Str = MkStr(I64)", Label: "assign s"},
+	}, planOwners(plans))
+
+	// An existing target keeps its value where the gate rejects.
+	require.Equal(t, `assign x
+    source "x = (n > 0) 5"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 = eval I64 5
+
+    commit
+        x = %t1 [on-skip=keep]
+`, plans[2].Render(true))
+	// A fresh target holds zero there, and has no old value to release.
+	require.Equal(t, `assign fresh
+    source "fresh = (n > 9) t"
+
+    execute
+        %t0 = check I64 n > 9
+        gate %t0
+            %t1 = eval borrowed Str t
+
+    commit
+        fresh = %t1 [copy] [on-skip=zero]
+`, plans[5].Render(true))
+	// A gate rejects both mappings or neither, so each borrow still takes its
+	// owner's old value.
+	require.Equal(t, `assign t, u
+    source "t, u = (n > 0) u, t"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 = eval borrowed Str u
+            %t2 = eval borrowed Str t
+
+    commit
+        t = %t1 [move] [on-skip=keep]
+        u = %t2 [move] [on-skip=keep]
+`, plans[6].Render(true))
+	// A read in the condition skips the check, and a first sits in the gate's
+	// region like any value.
+	require.Equal(t, `assign x
+    source "x = (arr[1] > (-1)) (arr[9] || 8)"
+
+    execute
+        %t0 = check I64 arr[1] > (-1) [on-oob=skip]
+        gate %t0
+            %t1 =
+                first I64
+                    %t2 = eval I64 arr[9] [on-oob=fallback]
+                fallback
+                    %t3 = eval I64 8
+
+    commit
+        x = %t1 [on-skip=keep]
+`, plans[8].Render(false))
+	// The gate only tests the check, so the string the check built is released.
+	require.Equal(t, `assign hc
+    source "hc = (MkStr(n) > \"a\") 7"
+
+    execute
+        %t0 = check owned Str MkStr(n) > "a"
+        gate %t0
+            %t1 = eval I64 7
+
+    commit
+        hc = %t1 [on-skip=zero]
+        drop %t0
+`, plans[9].Render(true))
+	// A binding the check read stays its owner's.
+	require.Equal(t, `assign bc
+    source "bc = (t > \"abc\") 1"
+
+    execute
+        %t0 = check borrowed(t) Str t > "abc"
+        gate %t0
+            %t1 = eval I64 1
+
+    commit
+        bc = %t1 [on-skip=zero]
+`, plans[10].Render(true))
+	// Row 5e: a discard keeps nothing, so it carries no policy; what its eval
+	// built is released where the gate admitted it.
+	require.Equal(t, `assign _
+    source "_ = (n > 0) MkStr(n)"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 = eval owned Str MkStr(n)
+
+    commit
+        _ = %t1
+        drop %t1
+`, plans[11].Render(true))
 }
 
 // A planned statement moves the bindings it passes by reference to memory
@@ -1390,4 +1540,20 @@ a, s, c, g, p, q, r, w`)
         commit
             output res = %t0
 `, plans[15].Render(false))
+}
+
+// A gate reads whether its check yielded and takes nothing, so what the check
+// built is released before the gate's region runs (plan §8).
+func TestPlanGateReleasesCheckFirst(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "planGateRelease", `s = MkStr(x)
+    s = "s-x"
+`, `n = 3
+hc = MkStr(n) > "a" 7
+hc`)
+
+	released := strings.Index(ir, "call void @free(ptr %call_final)")
+	region := strings.Index(ir, "gate_if:")
+	require.NotEqual(t, -1, released, "expected the check's string to be released")
+	require.NotEqual(t, -1, region, "expected the gate's region")
+	require.Less(t, released, region, "the check's string must be released before the region runs")
 }

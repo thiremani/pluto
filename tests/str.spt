@@ -118,3 +118,12 @@ heapMsg
 
 # A call's heap outputs print directly, and the line releases each one
 twoStr("left", "right")
+
+# A statement's own targets are not names while its values run, so a marker
+# that spells one stays text: under a gate, and beside a read that may skip
+gateOn = 1
+gateNum, gateText = gateOn > 0 5, "-gateNum"
+gateSelf = gateOn > 0 "-gateSelf%d"
+readFrom = [7 8]
+readNum, readText = readFrom[1], "-readNum"
+"own markers: -gateNum [-gateText] [-gateSelf] -readNum [-readText]"

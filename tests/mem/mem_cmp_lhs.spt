@@ -21,3 +21,14 @@ label > "abc"
 chained = "qq" ⊕ "rr"
 chained > "aa" > "A"
 "Chained: -chained"
+
+# A gate only tests its comparison, so a left operand the comparison built is
+# released whether the gate admits or rejects.
+admitted = mkTag(1) > "abc" 1
+rejected = mkTag(1) > "zzz" 1
+"BuiltLeft: -admitted -rejected"
+
+# The right operand is only compared, so one the comparison built is released
+# as well.
+above = name > mkTag(1) 1
+"BuiltRight: -above"

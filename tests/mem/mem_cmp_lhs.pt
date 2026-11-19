@@ -4,3 +4,7 @@ out = pickByHeapCompare(k)
     label = "he" ⊕ "llo"
     out = 0
     out = label > "abc" k
+
+# A heap string the comparison builds, an operand that is no binding.
+tag = mkTag(v)
+    tag = "tag-v"

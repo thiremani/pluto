@@ -179,7 +179,8 @@ machinery's last consumer is gone.
 | `carry` | Declare state that may advance across iterations (`prepare`) |
 | `collector` | Declare a logical collection result before its domains (`prepare`) |
 | `domain` | Execute a region once per point in one resolved range domain |
-| `gate` | Admit or reject one shared statement iteration for its whole region |
+| `check` | Evaluate one comparison: its outcome is the left operand, and it yields where the comparison holds |
+| `gate` | Admit one shared statement iteration to its whole region where the outcome it takes yielded, and reject it elsewhere |
 | `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the value-position `&&`'s right side (as `first` is the value-position `||`), and the work a failure scope's checks gate (§3) |
 | `first` | Take the first of its sides that yields: the value-position `||`, a chain of them as one list however it is grouped |
 | `fallback` | Lazily evaluate the next side of a `first`, where the side before it failed |
@@ -748,8 +749,28 @@ assign x
 
 The value-position `&&` is planned to print the same way under `last`
 (decided 2026-11-15): the sides in order, and the value of the last when
-every side before it yielded. The words for its clauses are chosen in
-Step 6.
+every side before it yielded. Its clause word is `next`, where a `first` has
+`fallback` (decided 2026-11-18).
+
+A statement's condition is planned as a value is (decided 2026-11-18). A
+comparison binds its outcome on a `check` line, and the `gate` that takes
+that outcome follows on a line of its own, binding nothing, with its region
+one level in. An `&&` of comparisons is planned to reach its gate as one
+`last` and an `||` as one `first`, so a gate line names one outcome whatever
+the condition.
+
+```text
+assign x
+    source "x = (n > 0) 5"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 = eval I64 5
+
+    commit
+        x = %t1 [on-skip=keep]
+```
 
 A plan's header is its kind followed by its targets (`assign a, b` — targets
 comma-separated, since `_` is an identifier character and a joined
@@ -1656,6 +1677,71 @@ Pinned by `TestFallbackAfterRead`, `TestPlanGoldenFallbacks` and
   complete multi-line `Struct` emission.
 - The gated print (§9) lands with this step, in its own PR: the parser, AST
   and solver first, then its `PrintPlan` under the statement `gate`.
+
+**First slice landed — the statement gate over one comparison.**
+`x = n > 0 5` plans (matrix rows 5e, 14a, 15, 16, 17). The condition is
+planned as a value is (§12): the comparison is a `check`, whose outcome is its
+left operand and which yields where the comparison holds, and a `gate` takes
+that outcome and holds the statement's values in its region.
+
+```text
+assign s
+    source "s = (MkStr(n) > \"a\") t"
+
+    execute
+        %t0 = check owned Str MkStr(n) > "a"
+        gate %t0
+            %t1 = eval borrowed Str t
+
+    commit
+        s = %t1 [copy] [on-skip=keep]
+        drop %t0
+        drop s [old]
+```
+
+A rejected gate leaves every mapping unapplied, so each binding under a gate
+carries the policy a skipped outcome gives it: `[on-skip=keep]`, or
+`[on-skip=zero]` for a fresh target. A gate rejects all of a statement's
+mappings or none, so it stands in no borrow's way: `a, b = n > 0 b, a` still
+moves both strings. The gate reads whether its check yielded and takes
+nothing, so elaboration releases what the check built (`drop %t0`), whether
+or not it yielded. A read in an operand gives the check `[on-oob=skip]`: a
+failed read skips the check, and the gate rejects.
+
+The validator checks that a gate closes its region, takes the one check
+before it, and admits at least one value; that a check has one slot and no
+fallback scope; and that every binding under a gate carries its policy.
+
+The lowerer compares the operands, releases what the gate only tested, and
+gives each binding storage that both paths reach before they part. The values
+then run and commit only where the check yielded. A target the statement
+introduces gets its storage before the paths part and its name only after
+the values have run, so in `fresh, text = n > 0 5, "-fresh"` the marker stays
+text, as it does without a gate. Legacy lowering instead
+seeds a slot for each target with a copy of the value it holds, on both
+paths, and commits the slot where the paths meet, so a gated statement's
+machine code changes with this slice while what it does stays.
+
+Staying legacy: a gate that is not one comparison of one scalar slot over
+operands an eval admits. That is an `&&` of comparisons, planned for the next
+slice as a `last` (§12); an `||` of them, a chain and a comparison of several
+slots, each planned with the node that carries it; a gate over a value that
+does not plan; and a ranged gate (planned for Step 7). A mask is no gate at
+all: the solver rejects an array as a statement condition.
+
+Over the fixtures as they stood before this slice, 79 more assignments plan,
+as 84 plans over the specializations of their bodies, and the machine code
+of 76 of the 89 executables is unchanged. The other 13 each hold a gated
+statement whose code differs as above. With the router admitting no gate,
+all 89 match the code before this slice and every plan's text is unchanged,
+so the slice touches no statement without a gate.
+
+Pinned by `TestPlanGoldenGates`, `TestPlanGoldenFunctionOutputs`,
+`TestPlanRouterRejections` and `TestPlanGateReleasesCheckFirst`, on
+hand-built plans by `pir`'s `TestElaborate`, `TestValidateGateRejects` and
+`TestRenderGate`, and at run time by `mem/mem_cmp_lhs` (`BuiltLeft`,
+`BuiltRight`), `array/oob_skip` (`CondOOBSkips`), `str` (`own markers`)
+and the gated statements the fixtures already held.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
