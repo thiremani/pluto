@@ -63,16 +63,16 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Label, len(p.Commit), slots)
 	}
 
-	consumed := make(map[OutcomeRef]bool, slots)
+	outcomes, err := p.validateOutcomes()
+	if err != nil {
+		return err
+	}
+
 	replaced := make(map[string]bool, slots)
-	for _, m := range p.Commit {
-		if err := p.validateMapping(m, compatible); err != nil {
+	for i, m := range p.Commit {
+		if err := p.validateMapping(m, outcomes[i], compatible); err != nil {
 			return err
 		}
-		if consumed[m.Outcome] {
-			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
-		}
-		consumed[m.Outcome] = true
 		if m.Target.binds() && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
@@ -364,11 +364,28 @@ func checkedAccesses(expr ast.Expression, inCell bool) (outcome, cell int) {
 	return outcome, cell
 }
 
-func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome Type) bool) error {
-	outcome, err := p.outcomeType(m.Outcome)
-	if err != nil {
-		return err
+// validateOutcomes checks that each mapping takes an outcome slot a value
+// binds, no two the same, and returns each slot's type. Validate runs it
+// before checking any mapping further: a moved borrow asks whether the
+// mapping that replaces its owner may skip, and that mapping may come later.
+func (p *AssignPlan) validateOutcomes() ([]Type, error) {
+	types := make([]Type, len(p.Commit))
+	consumed := make(map[OutcomeRef]bool, len(p.Commit))
+	for i, m := range p.Commit {
+		outcome, err := p.outcomeType(m.Outcome)
+		if err != nil {
+			return nil, err
+		}
+		if consumed[m.Outcome] {
+			return nil, fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
+		}
+		consumed[m.Outcome] = true
+		types[i] = outcome
 	}
+	return types, nil
+}
+
+func (p *AssignPlan) validateMapping(m Mapping, outcome Type, compatible func(target, outcome Type) bool) error {
 	sources := p.sources(m.Outcome)
 	if len(m.Transfers) != len(sources) {
 		return fmt.Errorf("plan %s: target %s = %%t%d slot %d has %d transfers for the %d nodes that can supply it",

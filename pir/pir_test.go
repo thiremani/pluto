@@ -557,6 +557,12 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Transfers = []Transfer{Copy}
 		}, "b is not replaced in this group"},
+		{"OwnerReplacedFromUnknownOutcome", func(p *AssignPlan) {
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
+			p.Commit[1].Target.HoldsHeap = true
+			p.Commit[1].Outcome.Outcome = 5
+		}, "commit references unknown outcome %t5"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
 			evalAt(p, 1).Slots[0] = borrowedSlot(testType("I64"), "b")
