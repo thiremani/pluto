@@ -85,8 +85,9 @@ func (f *First) MaySkip() bool { return f.Sides[len(f.Sides)-1].MaySkip() }
 // Last is an && (plan §4), in value position or over a gate's conditions: its
 // sides run in order while each yields, and its outcome is its final side's,
 // yielding where every side did. A side before the final one is a check,
-// which is only tested. Each side has one slot, and a chain of && is one Last
-// however it is grouped. Its sides take the outcome IDs after Result.
+// which is only tested, and the final one is a check or an eval. Each side
+// has one slot, and a chain of && is one Last however it is grouped. Its
+// sides take the outcome IDs after Result.
 type Last struct {
 	Result OutcomeID
 	Type   Type
@@ -102,15 +103,45 @@ func (l *Last) final() Node {
 	return l.Sides[len(l.Sides)-1]
 }
 
+// leading returns the sides before the final one, each only tested; none for
+// a last with no sides, which the validator names.
+func (l *Last) leading() []Node {
+	if len(l.Sides) == 0 {
+		return nil
+	}
+	return l.Sides[:len(l.Sides)-1]
+}
+
 // Check evaluates one comparison (plan §4): its outcome is the left operand,
 // and it yields where the comparison holds. A failed access in an operand
-// skips it as a failed comparison does. It has one slot.
+// skips it as a failed comparison does. It has one slot. A gate only tests
+// the outcome, and a mapping takes it as a value.
 type Check struct {
 	Result OutcomeID
 	Expr   *ast.InfixExpression
 	Slots  []Slot
 	OnOOB  OOBScope
 }
+
+// MayFail reports a check that can fail to yield: every one, since its
+// comparison may not hold.
+func (ch *Check) MayFail() bool { return true }
+
+// MaySkip reports a check whose failure reaches the commit: every one, since
+// no fallback follows a check.
+func (ch *Check) MaySkip() bool { return true }
+
+// Supplier is a node whose value a mapping can take: an eval, or a check,
+// whose value is its left operand.
+type Supplier interface {
+	Node
+	MayFail() bool
+	MaySkip() bool
+	slot(i int) Slot
+}
+
+func (ev *Eval) slot(i int) Slot  { return ev.Slots[i] }
+func (ch *Check) slot(i int) Slot { return ch.Slots[i] }
 
 // Gate admits or rejects the statement for its whole region (plan §4, §9):
 // Body runs where the outcome Cond names yielded, and no mapping commits where
@@ -211,8 +242,9 @@ const (
 // Mapping is one recorded target = outcome commit pair; the lowerer
 // consumes it as recorded, never rematching by name or position. It commits
 // where its outcome yielded, under a gate only where the gate admitted, and
-// follows OnSkip elsewhere. Transfers holds one entry per eval that can
-// supply the value: the outcome's own, or each side of a first in order.
+// follows OnSkip elsewhere. Transfers holds one entry per node that can
+// supply the value: the outcome's own eval or check, each side of a first in
+// order, or a last's final side.
 type Mapping struct {
 	Target    Target
 	Outcome   OutcomeRef
@@ -227,8 +259,8 @@ type Mapping struct {
 // or a check.
 type Releases struct {
 	Tested    []OutcomeRef // an owned outcome a check built and nothing takes, released once the check has compared it
-	Skipped   []OutcomeRef // what an eval built before it failed, which its binding never took, released only where it failed
-	Discarded []OutcomeRef // an owned outcome mapped to `_`, released where its eval ran, whether or not it yielded
+	Skipped   []OutcomeRef // what an eval or a check built before it failed, which its binding never took, released only where it failed
+	Discarded []OutcomeRef // an owned outcome mapped to `_`, released where its eval or check ran, whether or not it yielded
 	Replaced  []string     // a binding whose old value is released after every mapping, where the mapping that replaces it committed
 }
 
@@ -286,8 +318,8 @@ func (p *AssignPlan) Condition() Node {
 }
 
 // tests returns the checks whose outcomes are only tested, in the order they
-// run: a gate's condition, then the checks of each value last, whose final
-// side is the eval that supplies its value.
+// run: a gate's condition, then the checks before the final side of each
+// value last, whose final side supplies its value.
 func (p *AssignPlan) tests() []*Check {
 	var checks []*Check
 	switch cond := p.Condition().(type) {
@@ -299,7 +331,7 @@ func (p *AssignPlan) tests() []*Check {
 
 	for _, node := range p.Values() {
 		if l, isLast := node.(*Last); isLast {
-			checks = appendChecks(checks, l.Sides)
+			checks = appendChecks(checks, l.leading())
 		}
 	}
 	return checks
@@ -324,14 +356,14 @@ func (p *AssignPlan) Values() []Node {
 	return p.Execute
 }
 
-// source is one eval a mapping can take its value from, and the slot it
+// source is one node a mapping can take its value from, and the slot it
 // gives.
 type source struct {
 	ref  OutcomeRef
-	eval *Eval
+	node Supplier
 }
 
-func (s source) slot() Slot { return s.eval.Slots[s.ref.Slot] }
+func (s source) slot() Slot { return s.node.slot(s.ref.Slot) }
 
 // value returns the node among the values that binds outcome id, nil when
 // none does.
@@ -344,30 +376,31 @@ func (p *AssignPlan) value(id OutcomeID) Node {
 	return nil
 }
 
-// sources returns the evals that can supply ref's value, in the order they
-// run: the outcome's own eval, each side of a first, or the final side of a
-// last. It is empty when ref names none of them.
+// sources returns the nodes that can supply ref's value, in the order they
+// run: the outcome's own eval or check, each side of a first, or the final
+// side of a last. It is empty when ref names none of them.
 func (p *AssignPlan) sources(ref OutcomeRef) []source {
 	switch n := p.value(ref.Outcome).(type) {
-	case *Eval:
-		return []source{{ref: ref, eval: n}}
+	case Supplier:
+		return []source{{ref: ref, node: n}}
 	case *First:
 		sides := make([]source, len(n.Sides))
 		for i, side := range n.Sides {
-			sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, eval: side}
+			sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, node: side}
 		}
 		return sides
 	case *Last:
-		if final, isEval := n.final().(*Eval); isEval {
-			return []source{{ref: OutcomeRef{Outcome: final.Result}, eval: final}}
+		if final, supplies := n.final().(Supplier); supplies {
+			id, _ := result(final)
+			return []source{{ref: OutcomeRef{Outcome: id}, node: final}}
 		}
 	}
 	return nil
 }
 
 // maySkip reports a mapping whose own outcome may skip: it comes from a last,
-// whose checks can fail, or the last eval that can supply its value may skip.
-// A mapping no eval supplies, which the validator names, does not. A gate's
+// whose checks can fail, or the last node that can supply its value may skip.
+// A mapping no node supplies, which the validator names, does not. A gate's
 // rejection is no skip of one mapping: it leaves every mapping of the
 // statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
@@ -375,7 +408,7 @@ func (p *AssignPlan) maySkip(m Mapping) bool {
 		return true
 	}
 	sources := p.sources(m.Outcome)
-	return len(sources) > 0 && sources[len(sources)-1].eval.MaySkip()
+	return len(sources) > 0 && sources[len(sources)-1].node.MaySkip()
 }
 
 // mayNotCommit reports a mapping that some path leaves unapplied, so that its

@@ -328,6 +328,15 @@ aoHr = "kept"
 aoHr = 1 < 2 && (aoStrs[9] ⊕ "!")
 "AndHeapReadFails: -aoHr"
 
+# An && that ends in a comparison yields that comparison's left operand where
+# every side holds, and keeps old where the final one fails.
+aoCl = 6
+aoCe = 0
+aoCe = 1 < 2 && aoCl > 5
+aoCk = 3
+aoCk = 1 < 2 && aoCl > 9
+"AndEndsInCheck: -aoCe -aoCk"
+
 # Chain mid-fail keeps old through an existing destination.
 aoW = 5
 "AndChainBefore: -aoW"

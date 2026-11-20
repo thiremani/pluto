@@ -74,14 +74,11 @@ func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
 	return true
 }
 
-// planCheckEligible admits a condition as one check: a scalar comparison of
-// one slot whose operands are each an expression an eval takes, so no range
-// and no condition of their own. A lazy && or || is no comparison, a chain's
-// left operand is a condition, and a comparison of several slots has several
-// modes; each waits for the node that plans it.
+// planCheckEligible admits a condition as one check: a scalar comparison
+// whose operands are each an expression an eval takes, so no range and no
+// condition of their own.
 func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if len(info.CompareModes) != 1 || !info.IsCondScalar(0) {
+	if !c.scalarComparison(expr) {
 		return false
 	}
 
@@ -91,6 +88,15 @@ func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
 		}
 	}
 	return true
+}
+
+// scalarComparison reports a comparison of one scalar slot, which plans as a
+// check. A lazy && or || is no comparison, a chain's left operand is a
+// condition, and a comparison of several slots has several modes; each waits
+// for the node that plans it.
+func (c *Compiler) scalarComparison(expr ast.Expression) bool {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	return len(info.CompareModes) == 1 && info.IsCondScalar(0)
 }
 
 // planValuesEligible reports whether every value of a statement is an
@@ -111,14 +117,17 @@ func (c *Compiler) planValuesEligible(exprs []ast.Expression, reads bool) bool {
 	return true
 }
 
-// planValueEligible admits a value as one eval, as a first when it is a
-// value-position ||, each side an eval of one slot, or as a last when it is a
-// value-position &&. A first or a last plans where reads holds, in an
-// assignment, and the solver has left a first a side that can fail before
-// every fallback.
+// planValueEligible admits a value as one eval, as a check when it is a
+// comparison, as a first when it is a value-position ||, each side an eval of
+// one slot, or as a last when it is a value-position &&. A check, a first or
+// a last plans where reads holds, in an assignment, and the solver has left a
+// first a side that can fail before every fallback.
 func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
 	if _, isAnd := ast.IsLogicalAnd(expr); isAnd {
 		return reads && c.planLastEligible(expr)
+	}
+	if c.scalarComparison(expr) {
+		return reads && c.planCheckEligible(expr)
 	}
 	if _, isOr := ast.IsLogicalOr(expr); !isOr {
 		return c.planExprEligible(expr, reads)
@@ -135,9 +144,8 @@ func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
 	return true
 }
 
-// planLastEligible admits a value-position && as one last: checks, then an
-// eval of one slot, whose value the last yields. A final side that is itself
-// a condition waits for the node that takes a check's value.
+// planLastEligible admits a value-position && as one last: checks, then a
+// check or an eval of one slot, whose value the last yields.
 func (c *Compiler) planLastEligible(expr ast.Expression) bool {
 	sides := lastSides(expr)
 	final := sides[len(sides)-1]
@@ -145,6 +153,10 @@ func (c *Compiler) planLastEligible(expr ast.Expression) bool {
 		if !c.planCheckEligible(side) {
 			return false
 		}
+	}
+
+	if c.scalarComparison(final) {
+		return c.planCheckEligible(final)
 	}
 	return len(c.ExprCache[key(c.FuncNameMangled, final)].OutTypes) == 1 && c.planExprEligible(final, true)
 }
@@ -339,10 +351,10 @@ func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 }
 
 // buildLetPlan maps each expression's output slots onto the next targets in
-// order; the solver validated that the totals match. A value-position ||
-// becomes a first and a value-position && a last, each of one slot. A
-// statement's condition becomes the gate that takes it, whose region holds
-// the values: a gate may leave every mapping unapplied.
+// order; the solver validated that the totals match. A comparison becomes a
+// check, a value-position || a first and a value-position && a last, each of
+// one slot. A statement's condition becomes the gate that takes it, whose
+// region holds the values: a gate may leave every mapping unapplied.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPlan {
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
@@ -359,11 +371,18 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	var values []pir.Node
 	for _, expr := range stmt.Value {
 		if _, isAnd := ast.IsLogicalAnd(expr); isAnd {
-			sides := lastSides(expr)
-			last := c.buildLast(sides, len(sides)-1, c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0], next)
+			last := c.buildLast(lastSides(expr), c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0], next)
 			values = append(values, last)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: last.Result}, true)
-			next += pir.OutcomeID(1 + len(sides))
+			next += pir.OutcomeID(1 + len(last.Sides))
+			continue
+		}
+
+		if c.scalarComparison(expr) {
+			check := c.buildCheck(expr.(*ast.InfixExpression), next)
+			values = append(values, check)
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: check.Result}, true)
+			next++
 			continue
 		}
 
@@ -406,17 +425,17 @@ func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.Outcome
 	}
 
 	t := c.ExprCache[key(c.FuncNameMangled, conds[len(conds)-1])].OutTypes[0]
-	return c.buildLast(conds, len(conds), t, conditionID), conditionID + pir.OutcomeID(1+len(conds))
+	return c.buildLast(conds, t, conditionID), conditionID + pir.OutcomeID(1+len(conds))
 }
 
 // buildLast plans sides as one last of type t, whose outcome is id; its sides
-// take the IDs after it. The first checks of them are comparisons, each a
-// check, and a side after those is an eval.
-func (c *Compiler) buildLast(sides []ast.Expression, checks int, t Type, id pir.OutcomeID) *pir.Last {
+// take the IDs after it. A side that is a comparison is a check, and any
+// other side is an eval.
+func (c *Compiler) buildLast(sides []ast.Expression, t Type, id pir.OutcomeID) *pir.Last {
 	last := &pir.Last{Result: id, Type: t, Sides: make([]pir.Node, len(sides))}
 	for i, side := range sides {
 		sideID := id + pir.OutcomeID(1+i)
-		if i < checks {
+		if c.scalarComparison(side) {
 			last.Sides[i] = c.buildCheck(side.(*ast.InfixExpression), sideID)
 			continue
 		}
@@ -488,22 +507,22 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 	return bindingSlotCompatible(target.(Type), outcome.(Type))
 }
 
-// loweredSource is one eval that can supply a node's outcome, after it ran:
-// its slots, and the bit that says whether it yielded, nil when it always
-// does. The bit covers every slot: an eval yields or fails as a whole.
-// A side of a first or a last runs on a path of its own, so its slots point
-// to memory and are loaded where they are read. A last's final side runs only
-// where the sides before it yielded, and ran is the bit that says it did; it
-// is nil for an eval that always runs.
+// loweredSource is one eval or check that can supply a node's outcome, after
+// it ran: the outcome it binds, its slots, and the bit that says whether it
+// yielded, nil when it always does. The bit covers every slot: an eval yields
+// or fails as a whole. A side of a first or a last runs on a path of its own,
+// so its slots point to memory and are loaded where they are read. A last's
+// final side runs only where the sides before it yielded, and ran is the bit
+// that says it did; it is nil for a source that always runs.
 type loweredSource struct {
-	eval    *pir.Eval
+	id      pir.OutcomeID
 	out     []*Symbol
 	yielded llvm.Value
 	ran     llvm.Value
 }
 
-// loweredNode is one node of a plan's execute region after it ran: the evals
-// that can supply its outcome, in the order they were tried.
+// loweredNode is one node of a plan's execute region after it ran: the
+// sources that can supply its outcome, in the order they were tried.
 type loweredNode struct {
 	id      pir.OutcomeID
 	sources []loweredSource
@@ -552,7 +571,7 @@ func (c *Compiler) lowerCondition(cond pir.Node, tested []pir.OutcomeRef) llvm.V
 	if check, isCheck := cond.(*pir.Check); isCheck {
 		return c.lowerTested(check, tested)
 	}
-	return c.lowerLast(cond.(*pir.Last), tested).yielded
+	return c.lowerLast(cond.(*pir.Last), tested, false).yielded
 }
 
 // lowerTested runs a check whose outcome is only tested: it releases what the
@@ -572,16 +591,29 @@ func (c *Compiler) lowerValues(plan *pir.AssignPlan) []loweredNode {
 	var nodes []loweredNode
 	for _, node := range plan.Values() {
 		switch n := node.(type) {
-		case *pir.Eval:
-			out, yielded := c.lowerEval(n)
-			nodes = append(nodes, loweredNode{id: n.Result, sources: []loweredSource{{eval: n, out: out, yielded: yielded}}})
+		case pir.Supplier:
+			src := c.lowerSource(n)
+			nodes = append(nodes, loweredNode{id: src.id, sources: []loweredSource{src}})
 		case *pir.First:
 			nodes = append(nodes, c.lowerFirst(n))
 		case *pir.Last:
-			nodes = append(nodes, loweredNode{id: n.Result, sources: []loweredSource{c.lowerLast(n, plan.Tested)}})
+			nodes = append(nodes, loweredNode{id: n.Result, sources: []loweredSource{c.lowerLast(n, plan.Tested, true)}})
 		}
 	}
 	return nodes
+}
+
+// lowerSource runs an eval or a check whose outcome a mapping takes: its
+// outcome, and the bit that says whether it yielded.
+func (c *Compiler) lowerSource(n pir.Supplier) loweredSource {
+	if check, isCheck := n.(*pir.Check); isCheck {
+		out, yielded := c.lowerCheck(check)
+		return loweredSource{id: check.Result, out: out, yielded: yielded}
+	}
+
+	ev := n.(*pir.Eval)
+	out, yielded := c.lowerEval(ev)
+	return loweredSource{id: ev.Result, out: out, yielded: yielded}
 }
 
 // commitValues lands every node's mappings, then runs the releases that
@@ -654,13 +686,13 @@ func (c *Compiler) lowerFirst(f *pir.First) loweredNode {
 	sides := make([]loweredSource, len(f.Sides))
 	flags := make([]llvm.Value, len(f.Sides))
 	for i, side := range f.Sides {
-		sides[i] = loweredSource{eval: side}
+		sides[i] = loweredSource{id: side.Result}
 		if side.MayFail() {
 			flags[i] = c.clearedFlag("first_yielded.mem")
 		}
 	}
 
-	c.lowerSides(sides, flags, 0)
+	c.lowerSides(f, sides, flags, 0)
 
 	for i, flag := range flags {
 		if !flag.IsNil() {
@@ -670,10 +702,10 @@ func (c *Compiler) lowerFirst(f *pir.First) loweredNode {
 	return loweredNode{id: f.Result, sources: sides}
 }
 
-// lowerSides runs side i, stages its value and its yield flag, and runs the
-// sides after it only where it failed.
-func (c *Compiler) lowerSides(sides []loweredSource, flags []llvm.Value, i int) {
-	out, yielded := c.lowerEval(sides[i].eval)
+// lowerSides runs side i of f, stages its value and its yield flag, and runs
+// the sides after it only where it failed.
+func (c *Compiler) lowerSides(f *pir.First, sides []loweredSource, flags []llvm.Value, i int) {
+	out, yielded := c.lowerEval(f.Sides[i])
 	slot := c.createEntryBlockAlloca(c.mapToLLVMType(out[0].Type), "first_side.mem")
 	c.createStore(out[0].Val, slot, out[0].Type)
 	sides[i].out = []*Symbol{{Val: slot, Type: Ptr{Elem: out[0].Type}}}
@@ -686,7 +718,7 @@ func (c *Compiler) lowerSides(sides []loweredSource, flags []llvm.Value, i int) 
 		return
 	}
 	c.withCondBranch(c.builder.CreateNot(yielded, "first_failed"), "first_fallback", func() {
-		c.lowerSides(sides, flags, i+1)
+		c.lowerSides(f, sides, flags, i+1)
 	}, nil)
 }
 
@@ -700,18 +732,19 @@ func (c *Compiler) clearedFlag(name string) llvm.Value {
 
 // lowerLast runs a last's sides in order while each yields (plan §4). It
 // returns the final side as the one source of the last's outcome, with the
-// bit that says every side yielded. A final side that is a check is only
-// tested, so the source then holds nothing but that bit.
-func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef) loweredSource {
+// bit that says every side yielded. mapped says a mapping takes the outcome,
+// so the final side's value is staged; a gate only tests its last, whose
+// source then holds nothing but that bit.
+func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef, mapped bool) loweredSource {
 	i1 := Int{Width: 1}
 	src := loweredSource{}
 	yielded := c.clearedFlag("last_yielded.mem")
 	ran := yielded
-	if final, isEval := l.Sides[len(l.Sides)-1].(*pir.Eval); isEval && final.MayFail() {
+	if final := l.Sides[len(l.Sides)-1].(pir.Supplier); mapped && final.MayFail() {
 		ran = c.clearedFlag("last_ran.mem")
 	}
 
-	c.lowerLastSides(l.Sides, tested, &src, yielded, ran)
+	c.lowerLastSides(l.Sides, tested, mapped, &src, yielded, ran)
 
 	src.yielded = c.createLoad(yielded, i1, "last_yielded")
 	src.ran = src.yielded
@@ -723,34 +756,33 @@ func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef) loweredSource
 
 // lowerLastSides runs the first of sides and, where it yielded, the sides
 // after it. A side before the final one is a check that is only tested. The
-// final side sets the yielded flag, and an eval there stages its value in src
-// and sets the ran flag.
-func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, src *loweredSource, yielded, ran llvm.Value) {
+// final side sets the yielded flag. Where mapped holds, it stages its value
+// in src and sets the ran flag; otherwise it is a check that is only tested.
+func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, mapped bool, src *loweredSource, yielded, ran llvm.Value) {
 	i1 := Int{Width: 1}
 	if len(sides) > 1 {
 		held := c.lowerTested(sides[0].(*pir.Check), tested)
 		c.withCondBranch(held, "last_next", func() {
-			c.lowerLastSides(sides[1:], tested, src, yielded, ran)
+			c.lowerLastSides(sides[1:], tested, mapped, src, yielded, ran)
 		}, nil)
 		return
 	}
 
-	final, isEval := sides[0].(*pir.Eval)
-	if !isEval {
+	if !mapped {
 		c.createStore(c.lowerTested(sides[0].(*pir.Check), tested), yielded, i1)
 		return
 	}
 
-	out, evalYielded := c.lowerEval(final)
-	slot := c.createEntryBlockAlloca(c.mapToLLVMType(out[0].Type), "last_side.mem")
-	c.createStore(out[0].Val, slot, out[0].Type)
-	src.eval = final
-	src.out = []*Symbol{{Val: slot, Type: Ptr{Elem: out[0].Type}}}
+	final := c.lowerSource(sides[0].(pir.Supplier))
+	slot := c.createEntryBlockAlloca(c.mapToLLVMType(final.out[0].Type), "last_side.mem")
+	c.createStore(final.out[0].Val, slot, final.out[0].Type)
+	src.id = final.id
+	src.out = []*Symbol{{Val: slot, Type: Ptr{Elem: final.out[0].Type}}}
 
 	held := llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
 	c.createStore(held, ran, i1)
-	if !evalYielded.IsNil() {
-		c.createStore(evalYielded, yielded, i1)
+	if !final.yielded.IsNil() {
+		c.createStore(final.yielded, yielded, i1)
 	}
 }
 
@@ -867,7 +899,7 @@ func (c *Compiler) dropDiscarded(plan *pir.AssignPlan, n loweredNode, i int) {
 func discardsAny(plan *pir.AssignPlan, sources []loweredSource) bool {
 	for _, ref := range plan.Discarded {
 		for _, src := range sources {
-			if ref.Outcome == src.eval.Result {
+			if ref.Outcome == src.id {
 				return true
 			}
 		}
@@ -888,7 +920,7 @@ func (c *Compiler) dropRanSlots(refs []pir.OutcomeRef, src loweredSource, loadNa
 // namesSource reports whether refs names a slot of src.
 func namesSource(refs []pir.OutcomeRef, src loweredSource) bool {
 	for _, ref := range refs {
-		if ref.Outcome == src.eval.Result {
+		if ref.Outcome == src.id {
 			return true
 		}
 	}
@@ -898,7 +930,7 @@ func namesSource(refs []pir.OutcomeRef, src loweredSource) bool {
 // dropSourceSlots releases the slots of src that refs names.
 func (c *Compiler) dropSourceSlots(refs []pir.OutcomeRef, src loweredSource, loadName string) {
 	for _, ref := range refs {
-		if ref.Outcome == src.eval.Result {
+		if ref.Outcome == src.id {
 			c.freeSymbolValue(src.out[ref.Slot], loadName)
 		}
 	}

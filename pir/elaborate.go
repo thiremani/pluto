@@ -43,7 +43,7 @@ func Elaborate(p *AssignPlan) {
 			if len(sources) > 1 || p.maySkip(*m) {
 				mayTake = nil
 			}
-			if owned && src.eval.MayFail() {
+			if owned && src.node.MayFail() {
 				releases.Skipped = append(releases.Skipped, src.ref)
 			}
 			m.Transfers[j] = bindingTransfer(src.slot(), m.Target, mayTake, taken)

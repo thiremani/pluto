@@ -135,12 +135,14 @@ s`)
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// conditional values and ranged RHS keep their legacy lowering, and so does a
-// gate with a condition of several slots or with a condition for an operand
-// (row 15), while a gate of plain comparisons plans, one or an && of them.
-// An && plans as a value too when it is comparisons and then one plain value
-// of one slot, however it is grouped (row 19), and not when it ends in a
-// comparison or holds a chain. Legacy lowering also keeps
+// ranged RHS keep their legacy lowering, and so does a gate with a condition
+// of several slots or with a condition for an operand (row 15), while a gate
+// of plain comparisons plans, one or an && of them. A plain comparison plans
+// as a value too, alone or as the final side of an &&, which plans when it is
+// comparisons and then one plain value of one slot or a comparison, however
+// it is grouped (row 19), and not when it holds a chain, a side of several
+// slots, or a final comparison over a range. Legacy lowering also keeps a
+// comparison in a cell or a call argument,
 // a call given a range or an argument that can fail (matrix rows 13,
 // 6c) and a literal with an index read in a cell, while an index read whose
 // failure skips the statement's own value plans (row 7), and so does a ||
@@ -183,6 +185,7 @@ z = arr[0]
 zc = [arr[0]]
 q = 0:3
 w = q + 1
+lr = x > 2 && q > 1
 _ = 0:3
 d = Twice(x)
 dq = Twice(q)
@@ -204,9 +207,9 @@ fc = [arr[9] || 1]
 fd = Twice(arr[9] || 1)
 fx = x > 9 || arr[9] || 1
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -1199,13 +1202,14 @@ arr = [10 20 30]
 x = n > 0 && n > 1 && arr[9]
 x = n > 0 n > 2 && 10
 _ = n > 0 && MkStr(n)
-x, three, t, u`)
+lb = n > 0 && MkStr(n) > "a"
+x, three, t, u, lb`)
 
 	plans := slices.Concat(sc.Compiler.Plans...)
 	require.Equal(t, []planOwner{
 		{Label: "assign n"}, {Label: "assign x"}, {Label: "assign three"}, {Label: "assign t"},
 		{Label: "assign u"}, {Label: "assign t"}, {Label: "assign t, u"}, {Label: "assign arr"},
-		{Label: "assign x"}, {Label: "assign x"}, {Label: "assign _"},
+		{Label: "assign x"}, {Label: "assign x"}, {Label: "assign _"}, {Label: "assign lb"},
 		{Label: "print"},
 		{Func: "Str = MkStr(I64)", Label: "assign s"},
 	}, planOwners(plans))
@@ -1316,6 +1320,82 @@ x, three, t, u`)
         _ = %t0
         drop %t2
 `, plans[10].Render(true))
+	// A last that ends in a comparison yields that check's left operand, and
+	// what the check built is released where it failed.
+	require.Equal(t, `assign lb
+    source "lb = ((n > 0) && (MkStr(n) > \"a\"))"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                %t2 = check owned Str MkStr(n) > "a"
+
+    commit
+        lb = %t0 [move] [on-skip=zero]
+        drop %t2 [on-skip]
+`, plans[11].Render(true))
+}
+
+// Plan §12 and matrix rows 19, 21: a comparison as a value is one check, whose
+// left operand the binding takes where the comparison holds, alone or in a
+// gate's region. What an owned left operand built moves where the check holds
+// and is released where it skipped.
+func TestPlanGoldenCheckValues(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planCheckValues", `s = MkStr(x)
+    s = "s-x"
+`, `a = 3
+n = 1
+x = 0
+x = a > 2
+g = n > 0 a > 2
+s = "heap" ⊕ "!"
+s = MkStr(a) > "zzz"
+x, g, s`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign a"}, {Label: "assign n"}, {Label: "assign x"}, {Label: "assign x"},
+		{Label: "assign g"}, {Label: "assign s"}, {Label: "assign s"},
+		{Label: "print"},
+		{Func: "Str = MkStr(I64)", Label: "assign s"},
+	}, planOwners(plans))
+
+	require.Equal(t, `assign x
+    source "x = (a > 2)"
+
+    execute
+        %t0 = check I64 a > 2
+
+    commit
+        x = %t0 [on-skip=keep]
+`, plans[3].Render(false))
+	require.Equal(t, `assign g
+    source "g = (n > 0) (a > 2)"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 = check I64 a > 2
+
+    commit
+        g = %t1 [on-skip=zero]
+`, plans[4].Render(false))
+	require.Equal(t, `assign s
+    source "s = (MkStr(a) > \"zzz\")"
+
+    execute
+        %t0 = check owned Str MkStr(a) > "zzz"
+
+    commit
+        s = %t0 [move] [on-skip=keep]
+        drop %t0 [on-skip]
+        drop s [old]
+`, plans[6].Render(true))
 }
 
 // Plan §3 and matrix rows 29, 29b, 29c: a print whose arguments are ordinary
@@ -1712,9 +1792,10 @@ hc`)
 
 // A last's final side runs only where the checks before it held, so what it
 // built is released in the block a branch on the bit that says it ran admits
-// (plan §8), whether it feeds a `_` or failed a read after building: where it
-// never ran, its memory holds nothing to release. A final side that cannot
-// fail ran wherever the last yielded, so that bit is the last's own.
+// (plan §8), whether it feeds a `_`, failed a read after building, or failed
+// its comparison: where it never ran, its memory holds nothing to release. A
+// final side that cannot fail ran wherever the last yielded, so that bit is
+// the last's own.
 func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -1724,6 +1805,7 @@ func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 	}{
 		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_yielded", "%discard"},
 		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free"},
+		{"FailedCheck", `s = n > 9 && MkStr(n) > "a"`, "%last_ran", "%temp_free"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
