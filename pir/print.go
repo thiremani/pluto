@@ -68,9 +68,10 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 	return parts
 }
 
-// executeIndent is the level of an execute region's own lines. A first's
-// labels, first and fallback, sit one level further in and its sides two; a
-// gate's region sits one level in from the gate.
+// executeIndent is the level of an execute region's own lines. The labels of
+// a first, first and fallback, and of a last, last and next, sit one level
+// further in and their sides two; a gate's region sits one level in from the
+// gate.
 const executeIndent = "        "
 
 // level is one step of indentation.
@@ -86,6 +87,8 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) 
 			writeFirst(b, indent, n, expanded)
 		case *Check:
 			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.OnOOB, expanded))
+		case *Last:
+			writeLast(b, indent, n, expanded)
 		case *Gate:
 			fmt.Fprintf(b, "%sgate %%t%d\n", indent, n.Cond)
 			writeNodes(b, indent+level, n.Body, expanded)
@@ -125,6 +128,17 @@ func writeFirst(b *strings.Builder, indent string, f *First, expanded bool) {
 			fmt.Fprintf(b, "%s%sfallback\n", indent, level)
 		}
 		writeEval(b, indent+level+level, side, expanded)
+	}
+}
+
+func writeLast(b *strings.Builder, indent string, l *Last, expanded bool) {
+	fmt.Fprintf(b, "%s%%t%d =\n", indent, l.Result)
+	fmt.Fprintf(b, "%s%slast %s\n", indent, level, l.Type.String())
+	for i, side := range l.Sides {
+		if i > 0 {
+			fmt.Fprintf(b, "%s%snext\n", indent, level)
+		}
+		writeNodes(b, indent+level+level, []Node{side}, expanded)
 	}
 }
 
@@ -268,8 +282,9 @@ func outcomeString(ev *Eval, i int) string {
 	return fmt.Sprintf("%%t%d", ev.Result)
 }
 
-// refString names what ref refers to: a slot of an eval outside a first, or
-// a first, one of its sides or a check, each of which has one slot.
+// refString names what ref refers to: a slot of an eval outside a first or
+// a last, or one of those, a side of one or a check, each of which has one
+// slot.
 func (p *AssignPlan) refString(ref OutcomeRef) string {
 	if ev := p.eval(ref.Outcome); ev != nil {
 		return outcomeString(ev, ref.Slot)
@@ -319,8 +334,8 @@ func (policy SkipPolicy) String() string {
 	return fmt.Sprintf("skip-policy(%d)", int(policy))
 }
 
-// writeReleases names each release by the value it frees: what a gate's check
-// built, what a failed eval built, tagged with what its failure does, an
+// writeReleases names each release by the value it frees: what a check built
+// and nothing takes, what a failed eval built, tagged with what its failure does, an
 // outcome mapped to `_`, or a target's old value.
 func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	for _, ref := range p.Tested {
@@ -337,8 +352,8 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	}
 }
 
-// eval finds the eval whose outcome is id, a first's side included; it is
-// nil when id names a first or a check.
+// eval finds the eval whose outcome is id, a side of a first or a last
+// included; it is nil when id names a first, a last or a check.
 func (p *AssignPlan) eval(id OutcomeID) *Eval {
 	for _, node := range p.Values() {
 		switch n := node.(type) {
@@ -351,6 +366,10 @@ func (p *AssignPlan) eval(id OutcomeID) *Eval {
 				if side.Result == id {
 					return side
 				}
+			}
+		case *Last:
+			if side, isEval := n.final().(*Eval); isEval && side.Result == id {
+				return side
 			}
 		}
 	}

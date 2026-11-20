@@ -19,7 +19,7 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		return fmt.Errorf("plan %s has no evals", p.Label)
 	}
 
-	next, err := p.validateGate()
+	next, err := p.validateGate(compatible)
 	if err != nil {
 		return err
 	}
@@ -39,6 +39,15 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		case *First:
 			if err := validateFirst(p.Label, next, n, compatible); err != nil {
 				return err
+			}
+			next += 1 + len(n.Sides)
+			slots++
+		case *Last:
+			if err := validateLast(p.Label, next, n, compatible); err != nil {
+				return err
+			}
+			if _, isEval := n.final().(*Eval); !isEval {
+				return fmt.Errorf("plan %s: last %%t%d ends in %T, and a mapping takes only an eval's value", p.Label, next, n.final())
 			}
 			next += 1 + len(n.Sides)
 			slots++
@@ -70,10 +79,11 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 }
 
 // validateGate checks what a gated plan's execute region holds beside its
-// values: one check, then the gate that takes it and admits a region. It
-// returns the outcome ID the values start at. A check or a gate anywhere else
-// is no value, and the values' own validation rejects it.
-func (p *AssignPlan) validateGate() (int, error) {
+// values: one condition, then the gate that takes it and admits a region. The
+// condition is a check, or a last whose every side is one. It returns the
+// outcome ID the values start at. A check or a gate anywhere else is no
+// value, and the values' own validation rejects it.
+func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (int, error) {
 	gate := p.Gate()
 	if gate == nil {
 		return 0, nil
@@ -81,23 +91,34 @@ func (p *AssignPlan) validateGate() (int, error) {
 
 	before := p.Execute[:len(p.Execute)-1]
 	if len(before) != 1 {
-		return 0, fmt.Errorf("plan %s: gate follows %d nodes and takes one check", p.Label, len(before))
-	}
-	ch, isCheck := before[0].(*Check)
-	if !isCheck {
-		return 0, fmt.Errorf("plan %s: gate follows %T, which is no check", p.Label, before[0])
-	}
-	if err := validateCheck(p.Label, 0, ch); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("plan %s: gate follows %d nodes and takes one condition", p.Label, len(before))
 	}
 
-	if gate.Cond != ch.Result {
-		return 0, fmt.Errorf("plan %s: gate takes %%t%d where check %%t%d precedes it", p.Label, gate.Cond, ch.Result)
+	next := 1
+	switch cond := before[0].(type) {
+	case *Check:
+		if err := validateCheck(p.Label, 0, cond); err != nil {
+			return 0, err
+		}
+	case *Last:
+		if err := validateLast(p.Label, 0, cond, compatible); err != nil {
+			return 0, err
+		}
+		if _, isCheck := cond.final().(*Check); !isCheck {
+			return 0, fmt.Errorf("plan %s: last %%t0 ends in %T, and a gate's condition ends in a check", p.Label, cond.final())
+		}
+		next += len(cond.Sides)
+	default:
+		return 0, fmt.Errorf("plan %s: gate follows %T, which is no condition", p.Label, before[0])
+	}
+
+	if bound, _ := result(before[0]); gate.Cond != bound {
+		return 0, fmt.Errorf("plan %s: gate takes %%t%d where its condition binds %%t%d", p.Label, gate.Cond, bound)
 	}
 	if len(gate.Body) == 0 {
 		return 0, fmt.Errorf("plan %s: gate admits an empty region", p.Label)
 	}
-	return 1, nil
+	return next, nil
 }
 
 // validateCheck checks a check whose outcome is id: one well-formed slot, and
@@ -118,6 +139,56 @@ func validateCheck(plan string, id int, ch *Check) error {
 		return err
 	}
 	return validateAccesses(plan, node, ch.Expr, ch.OnOOB)
+}
+
+// validateLast checks a last whose outcome is id: at least two sides of one
+// slot each, numbered after it. Every side before the final one is a check,
+// and the final one, a check or an eval, fits the last's type. No side falls
+// back, since nothing follows a failed side.
+func validateLast(plan string, id int, l *Last, compatible func(target, outcome Type) bool) error {
+	if l.Result != OutcomeID(id) {
+		return fmt.Errorf("plan %s: last has result ID %d where %d is next; IDs must be dense in execution order", plan, l.Result, id)
+	}
+	if l.Type == nil {
+		return fmt.Errorf("plan %s: last %%t%d has no type", plan, id)
+	}
+	if len(l.Sides) < 2 {
+		return fmt.Errorf("plan %s: last %%t%d has %d sides and needs a next", plan, id, len(l.Sides))
+	}
+
+	final := len(l.Sides) - 1
+	for i, side := range l.Sides {
+		sideID := id + 1 + i
+		switch n := side.(type) {
+		case *Check:
+			if err := validateCheck(plan, sideID, n); err != nil {
+				return err
+			}
+			if i == final && !compatible(l.Type, n.Slots[0].Type) {
+				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit last %%t%d of type %s", plan, sideID, n.Slots[0].Type.String(), id, l.Type.String())
+			}
+		case *Eval:
+			if i < final {
+				return fmt.Errorf("plan %s: side %%t%d of last %%t%d is an eval before the final side, where a side is a check", plan, sideID, id)
+			}
+			if err := validateEval(plan, sideID, n); err != nil {
+				return err
+			}
+			if len(n.Slots) != 1 {
+				return fmt.Errorf("plan %s: side %%t%d of last %%t%d has %d slots", plan, sideID, id, len(n.Slots))
+			}
+			if n.OnOOB == UseFallback {
+				return fmt.Errorf("plan %s: side %%t%d of last %%t%d falls back, but is no side of a first", plan, sideID, id)
+			}
+			if !compatible(l.Type, n.Slots[0].Type) {
+				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit last %%t%d of type %s", plan, sideID, n.Slots[0].Type.String(), id, l.Type.String())
+			}
+		default:
+			return fmt.Errorf("plan %s: side %%t%d of last %%t%d is %T, which is no check or eval", plan, sideID, id, side)
+		}
+	}
+
+	return nil
 }
 
 // validateFirst checks a first whose outcome is id: at least two sides of one
@@ -423,7 +494,7 @@ func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 // validateReleases checks plan §14.19-21: every owned outcome and every
 // replaced held value is consumed or released exactly once, on each path. An
 // owned outcome a binding takes where it yields is released where it fails,
-// and one a gate tested is released whether or not it yielded.
+// and one a check only tested is released whether or not it yielded.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDiscardDrop := make(map[OutcomeRef]bool)
@@ -453,7 +524,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 
 	needTestDrop := make(map[OutcomeRef]bool)
-	if ch := p.Condition(); ch != nil {
+	for _, ch := range p.tests() {
 		for i, slot := range ch.Slots {
 			if slot.Ownership == Owned {
 				needTestDrop[OutcomeRef{Outcome: ch.Result, Slot: i}] = true
@@ -463,7 +534,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	droppedTested := make(map[OutcomeRef]bool)
 	for _, ref := range p.Tested {
 		if !needTestDrop[ref] {
-			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not an owned outcome a gate tested", p.Label, ref.Outcome, ref.Slot)
+			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not an owned outcome a check only tested", p.Label, ref.Outcome, ref.Slot)
 		}
 		if droppedTested[ref] {
 			return fmt.Errorf("plan %s: tested %%t%d slot %d dropped twice", p.Label, ref.Outcome, ref.Slot)
@@ -472,7 +543,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 	for ref := range needTestDrop {
 		if !droppedTested[ref] {
-			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d, which a gate tested, is never released", p.Label, ref.Outcome, ref.Slot)
+			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d, which a check only tested, is never released", p.Label, ref.Outcome, ref.Slot)
 		}
 	}
 
@@ -530,7 +601,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 }
 
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
-// an eval outside a first, or a first's one slot.
+// an eval outside a first or a last, or the one slot of either.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 	for _, node := range p.Values() {
 		switch n := node.(type) {
@@ -552,6 +623,18 @@ func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 			for _, side := range n.Sides {
 				if side.Result == ref.Outcome {
 					return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of first %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, n.Result)
+				}
+			}
+		case *Last:
+			if n.Result == ref.Outcome {
+				if ref.Slot != 0 {
+					return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+				}
+				return n.Type, nil
+			}
+			for _, side := range n.Sides {
+				if bound, _ := result(side); bound == ref.Outcome {
+					return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of last %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, n.Result)
 				}
 			}
 		}

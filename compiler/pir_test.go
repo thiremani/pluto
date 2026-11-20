@@ -136,8 +136,11 @@ s`)
 
 // TestPlanRouterRejections pins the capability boundary: statements with
 // conditional values and ranged RHS keep their legacy lowering, and so does a
-// gate of several conditions, of several slots, or with a condition for an
-// operand (row 15), while a gate of one plain comparison plans. So does
+// gate with a condition of several slots or with a condition for an operand
+// (row 15), while a gate of plain comparisons plans, one or an && of them.
+// An && plans as a value too when it is comparisons and then one plain value
+// of one slot, however it is grouped (row 19), and not when it ends in a
+// comparison or holds a chain. Legacy lowering also keeps
 // a call given a range or an argument that can fail (matrix rows 13,
 // 6c) and a literal with an index read in a cell, while an index read whose
 // failure skips the statement's own value plans (row 7), and so does a ||
@@ -163,6 +166,12 @@ g = x > 2 13
 ga = x > 2 && x < 9 13
 gc = x > 2 < 9 13
 gp, gs = Both(x) > Both(0) 13, 14
+gm = x > 2 && Both(x) > Both(0) 13
+la = x > 2 && 10
+ln = x > 2 && (x > 3 && 10)
+lb = x > 2 && x < 9
+lc = x > 2 < 9 && 10
+ld, le = x > 2 && Both(x)
 y = 0
 y = x > 2
 s = "hi"
@@ -195,9 +204,9 @@ fc = [arr[9] || 1]
 fd = Twice(arr[9] || 1)
 fx = x > 9 || arr[9] || 1
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign g", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -1167,6 +1176,148 @@ a, b`)
 	require.Less(t, promoted, firstEval, "arr must reach memory before the statement's first eval")
 }
 
+// Plan §4, §12 and matrix rows 15, 19: an && plans as one last however long
+// its chain, in a gate and in value position. A gate takes the last's own
+// outcome. A value last yields its final side's value where every check
+// before it held, so its binding carries a skip policy and takes nothing from
+// another binding. What a check built is released; a discarded final side is
+// released where it ran.
+func TestPlanGoldenLasts(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	sc := compileScript(t, ctx, "planLasts", `s = MkStr(x)
+    s = "s-x"
+`, `n = 3
+x = 1
+three = n > 0 && MkStr(n) > "a" && MkStr(x) > "a" 7
+t = "heap" ⊕ "!"
+u = "old" ⊕ "!"
+t = MkStr(n) > "a" && MkStr(x)
+t, u = n > 0 && u, t
+arr = [10 20 30]
+x = n > 0 && n > 1 && arr[9]
+x = n > 0 n > 2 && 10
+_ = n > 0 && MkStr(n)
+x, three, t, u`)
+
+	plans := slices.Concat(sc.Compiler.Plans...)
+	require.Equal(t, []planOwner{
+		{Label: "assign n"}, {Label: "assign x"}, {Label: "assign three"}, {Label: "assign t"},
+		{Label: "assign u"}, {Label: "assign t"}, {Label: "assign t, u"}, {Label: "assign arr"},
+		{Label: "assign x"}, {Label: "assign x"}, {Label: "assign _"},
+		{Label: "print"},
+		{Func: "Str = MkStr(I64)", Label: "assign s"},
+	}, planOwners(plans))
+
+	// A gate's conjuncts are the sides of one last of the final one's type,
+	// and the gate takes it. Each check is only tested, so the string each
+	// built is released.
+	require.Equal(t, `assign three
+    source "three = (n > 0) && (MkStr(n) > \"a\") && (MkStr(x) > \"a\") 7"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                %t2 = check owned Str MkStr(n) > "a"
+            next
+                %t3 = check owned Str MkStr(x) > "a"
+        gate %t0
+            %t4 = eval I64 7
+
+    commit
+        three = %t4 [on-skip=zero]
+        drop %t2
+        drop %t3
+`, plans[2].Render(true))
+	// A value last moves what its final side built, and what its check built
+	// is only tested.
+	require.Equal(t, `assign t
+    source "t = ((MkStr(n) > \"a\") && MkStr(x))"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check owned Str MkStr(n) > "a"
+            next
+                %t2 = eval owned Str MkStr(x)
+
+    commit
+        t = %t0 [move] [on-skip=keep]
+        drop %t1
+        drop t [old]
+`, plans[5].Render(true))
+	// A last may skip its own mapping, so neither borrow takes the other's
+	// old value: where a gate moves both strings of a swap, this copies both.
+	require.Equal(t, `assign t, u
+    source "t, u = ((n > 0) && u), t"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                %t2 = eval borrowed Str u
+        %t3 = eval borrowed Str t
+
+    commit
+        t = %t0 [copy] [on-skip=keep]
+        u = %t3 [copy]
+        drop t [old]
+        drop u [old]
+`, plans[6].Render(true))
+	// A chain in value position is one last, and a read in its final side
+	// skips it where the read fails.
+	require.Equal(t, `assign x
+    source "x = (((n > 0) && (n > 1)) && arr[9])"
+
+    execute
+        %t0 =
+            last I64
+                %t1 = check I64 n > 0
+            next
+                %t2 = check I64 n > 1
+            next
+                %t3 = eval I64 arr[9] [on-oob=skip]
+
+    commit
+        x = %t0 [on-skip=keep]
+`, plans[8].Render(true))
+	// A last in a gate's region is numbered after the gate's check.
+	require.Equal(t, `assign x
+    source "x = (n > 0) ((n > 2) && 10)"
+
+    execute
+        %t0 = check I64 n > 0
+        gate %t0
+            %t1 =
+                last I64
+                    %t2 = check I64 n > 2
+                next
+                    %t3 = eval I64 10
+
+    commit
+        x = %t1 [on-skip=keep]
+`, plans[9].Render(true))
+	// A discard keeps nothing: what the final side built is released.
+	require.Equal(t, `assign _
+    source "_ = ((n > 0) && MkStr(n))"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                %t2 = eval owned Str MkStr(n)
+
+    commit
+        _ = %t0
+        drop %t2
+`, plans[10].Render(true))
+}
+
 // Plan §3 and matrix rows 29, 29b, 29c: a print whose arguments are ordinary
 // plans as one invocation. A string literal is the invocation's own operand,
 // an owned slot is taken by it, and a print that can fail stays legacy.
@@ -1190,6 +1341,7 @@ Echo(h)
 [1 2] ⊕ [3]
 m = Shout(n)
 n > 3
+n > 3 && n
 m`)
 
 	plans := slices.Concat(sc.Compiler.Plans...)
@@ -1556,4 +1708,53 @@ hc`)
 	require.NotEqual(t, -1, released, "expected the check's string to be released")
 	require.NotEqual(t, -1, region, "expected the gate's region")
 	require.Less(t, released, region, "the check's string must be released before the region runs")
+}
+
+// A last's final side runs only where the checks before it held, so what it
+// built is released in the block a branch on the bit that says it ran admits
+// (plan §8), whether it feeds a `_` or failed a read after building: where it
+// never ran, its memory holds nothing to release. A final side that cannot
+// fail ran wherever the last yielded, so that bit is the last's own.
+func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
+	cases := []struct {
+		name      string
+		statement string
+		ran       string
+		staged    string
+	}{
+		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_yielded", "%discard"},
+		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ir, _ := compileScriptAndCodeIR(t, "planLastRelease"+tc.name, `s = MkStr(x)
+    s = "s-x"
+`, `n = 3
+sarr = ["x" "y"]
+s = "kept"
+`+tc.statement+`
+n, s, sarr`)
+
+			require.Contains(t, ir, tc.ran+" = load i1, ptr "+tc.ran+".mem", "the branch must read the flag the final side sets")
+			require.Contains(t, ir, "br i1 "+tc.ran+", label %ran_if, label %ran_cont")
+			admitted := irBlock(ir, "ran_if")
+			require.Contains(t, admitted, tc.staged+" = load ptr, ptr %last_side.mem")
+			require.Contains(t, admitted, "call void @free(ptr "+tc.staged+")")
+		})
+	}
+}
+
+// irBlock returns the instructions of the basic block labelled label in ir,
+// one per line: those after its label, up to the blank line or the closing
+// brace that ends it.
+func irBlock(ir, label string) string {
+	_, rest, _ := strings.Cut(ir, "\n"+label+":")
+	var b strings.Builder
+	for _, line := range strings.Split(rest, "\n")[1:] {
+		if line == "" || line == "}" {
+			break
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }

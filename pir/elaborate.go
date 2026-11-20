@@ -36,10 +36,11 @@ func Elaborate(p *AssignPlan) {
 				continue
 			}
 
-			// A side of a first supplies the value on one path only, so its
-			// borrow takes nothing either.
+			// Nor does a borrow take anything where its own mapping may skip,
+			// or where it is one side of a first, which supplies the value on
+			// one path only.
 			mayTake := takeable
-			if len(sources) > 1 || src.eval.MayFail() {
+			if len(sources) > 1 || p.maySkip(*m) {
 				mayTake = nil
 			}
 			if owned && src.eval.MayFail() {
@@ -55,9 +56,9 @@ func Elaborate(p *AssignPlan) {
 		}
 	}
 
-	// A gate reads whether its check yielded and takes nothing, so what the
-	// check built is released.
-	if ch := p.Condition(); ch != nil {
+	// A check that is only tested hands its outcome to nothing, so what it
+	// built is released.
+	for _, ch := range p.tests() {
 		for i, slot := range ch.Slots {
 			if slot.Ownership == Owned {
 				releases.Tested = append(releases.Tested, OutcomeRef{Outcome: ch.Result, Slot: i})
