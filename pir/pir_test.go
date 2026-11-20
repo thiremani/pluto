@@ -820,6 +820,10 @@ func TestValidateGateRejects(t *testing.T) {
 func TestValidateNamesShapeAfterElaborate(t *testing.T) {
 	gateAlone := gatePlan()
 	gateAlone.Execute = gateAlone.Execute[1:]
+	emptyLast := lastValuePlan()
+	lastAt(emptyLast, 0).Sides = nil
+	emptyFirst := firstPlan()
+	firstAt(emptyFirst, 0).Sides = nil
 
 	cases := []struct {
 		name    string
@@ -828,6 +832,8 @@ func TestValidateNamesShapeAfterElaborate(t *testing.T) {
 	}{
 		{"NoNodes", &AssignPlan{Head: Head{Label: "assign s", Source: "s = 1"}}, "plan assign s has no evals"},
 		{"NoCheckBeforeGate", gateAlone, "gate follows 0 nodes and takes one condition"},
+		{"LastWithoutSides", emptyLast, "last %t0 has 0 sides and needs a next"},
+		{"FirstWithoutSides", emptyFirst, "first %t0 has 0 sides and needs a fallback"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

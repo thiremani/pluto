@@ -844,7 +844,7 @@ func (c *Compiler) commitSource(plan *pir.AssignPlan, n loweredNode, i int) {
 		if m.Outcome.Outcome != n.id || m.Target.Kind == pir.DiscardTarget {
 			continue
 		}
-		value := c.derefIfPointer(n.sources[i].out[m.Outcome.Slot], "first_side")
+		value := c.derefIfPointer(n.sources[i].out[m.Outcome.Slot], "commit_value")
 		c.storeValue(m.Target.Name, value, m.Transfers[i] == pir.Copy)
 	}
 }

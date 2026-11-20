@@ -1711,17 +1711,19 @@ hc`)
 }
 
 // A last's final side runs only where the checks before it held, so what it
-// built is released under the bit that says it ran (plan §8), whether it
-// feeds a `_` or failed a read after building: where it never ran, its memory
-// holds nothing to release.
+// built is released in the block a branch on the bit that says it ran admits
+// (plan §8), whether it feeds a `_` or failed a read after building: where it
+// never ran, its memory holds nothing to release. A final side that cannot
+// fail ran wherever the last yielded, so that bit is the last's own.
 func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 	cases := []struct {
 		name      string
 		statement string
-		release   string
+		ran       string
+		staged    string
 	}{
-		{"Discarded", `_ = n > 9 && MkStr(n)`, "%discard = load ptr, ptr %last_side.mem"},
-		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%temp_free = load ptr, ptr %last_side.mem"},
+		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_yielded", "%discard"},
+		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1733,13 +1735,26 @@ s = "kept"
 `+tc.statement+`
 n, s, sarr`)
 
-			ran := strings.Index(ir, "ran_if:")
-			released := strings.Index(ir, tc.release)
-			rejoined := strings.Index(ir, "ran_cont:")
-			require.NotEqual(t, -1, ran, "expected a branch on the bit that says the final side ran")
-			require.NotEqual(t, -1, released, "expected the final side's string to be released")
-			require.Less(t, ran, released, "the release must sit under the branch")
-			require.Less(t, released, rejoined, "the release must sit under the branch")
+			require.Contains(t, ir, tc.ran+" = load i1, ptr "+tc.ran+".mem", "the branch must read the flag the final side sets")
+			require.Contains(t, ir, "br i1 "+tc.ran+", label %ran_if, label %ran_cont")
+			admitted := irBlock(ir, "ran_if")
+			require.Contains(t, admitted, tc.staged+" = load ptr, ptr %last_side.mem")
+			require.Contains(t, admitted, "call void @free(ptr "+tc.staged+")")
 		})
 	}
+}
+
+// irBlock returns the instructions of the basic block labelled label in ir,
+// one per line: those after its label, up to the blank line or the closing
+// brace that ends it.
+func irBlock(ir, label string) string {
+	_, rest, _ := strings.Cut(ir, "\n"+label+":")
+	var b strings.Builder
+	for _, line := range strings.Split(rest, "\n")[1:] {
+		if line == "" || line == "}" {
+			break
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }

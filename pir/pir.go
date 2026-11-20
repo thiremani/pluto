@@ -93,8 +93,14 @@ type Last struct {
 	Sides  []Node
 }
 
-// final returns the side whose outcome is the last's own.
-func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
+// final returns the side whose outcome is the last's own; nil for a last with
+// no sides, which the validator names.
+func (l *Last) final() Node {
+	if len(l.Sides) == 0 {
+		return nil
+	}
+	return l.Sides[len(l.Sides)-1]
+}
 
 // Check evaluates one comparison (plan §4): its outcome is the left operand,
 // and it yields where the comparison holds. A failed access in an operand
@@ -361,14 +367,15 @@ func (p *AssignPlan) sources(ref OutcomeRef) []source {
 
 // maySkip reports a mapping whose own outcome may skip: it comes from a last,
 // whose checks can fail, or the last eval that can supply its value may skip.
-// A gate's rejection is no skip of one mapping: it leaves every mapping of the
+// A mapping no eval supplies, which the validator names, does not. A gate's
+// rejection is no skip of one mapping: it leaves every mapping of the
 // statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
 	if _, isLast := p.value(m.Outcome.Outcome).(*Last); isLast {
 		return true
 	}
 	sources := p.sources(m.Outcome)
-	return sources[len(sources)-1].eval.MaySkip()
+	return len(sources) > 0 && sources[len(sources)-1].eval.MaySkip()
 }
 
 // mayNotCommit reports a mapping that some path leaves unapplied, so that its

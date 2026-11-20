@@ -36,8 +36,9 @@ func Elaborate(p *AssignPlan) {
 				continue
 			}
 
-			// A side of a first supplies the value on one path only, so its
-			// borrow takes nothing either.
+			// Nor does a borrow take anything where its own mapping may skip,
+			// or where it is one side of a first, which supplies the value on
+			// one path only.
 			mayTake := takeable
 			if len(sources) > 1 || p.maySkip(*m) {
 				mayTake = nil
