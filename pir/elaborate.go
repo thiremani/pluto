@@ -1,7 +1,8 @@
 package pir
 
 // Elaborate derives each mapping's transfers and the statement's releases
-// (plan §6, §8) from the plan's own annotations; Validate re-checks them.
+// (plan §6, §8) from the plan's own annotations, trusting the shape the
+// compiler builds; Validate re-checks them.
 // The first mapping in commit order takes a replaced owner's value and later
 // borrows of it copy, so one source feeding several targets is never moved
 // twice. An unmanaged input is copied into a TypeOwnsHeap target; owned and

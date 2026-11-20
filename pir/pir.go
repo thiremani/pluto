@@ -94,23 +94,8 @@ type Last struct {
 	Sides  []Node
 }
 
-// final returns the side whose outcome is the last's own; nil for a last with
-// no sides, which the validator names.
-func (l *Last) final() Node {
-	if len(l.Sides) == 0 {
-		return nil
-	}
-	return l.Sides[len(l.Sides)-1]
-}
-
-// leading returns the sides before the final one, each only tested; none for
-// a last with no sides, which the validator names.
-func (l *Last) leading() []Node {
-	if len(l.Sides) == 0 {
-		return nil
-	}
-	return l.Sides[:len(l.Sides)-1]
-}
+// final returns the side whose outcome is the last's own.
+func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
 
 // Check evaluates one comparison (plan §4): its outcome is the left operand,
 // and it yields where the comparison holds. A failed access in an operand
@@ -140,17 +125,8 @@ type Supplier interface {
 	slot(i int) Slot
 }
 
-func (ev *Eval) slot(i int) Slot  { return slotAt(ev.Slots, i) }
-func (ch *Check) slot(i int) Slot { return slotAt(ch.Slots, i) }
-
-// slotAt returns slots[i]; a zero slot where there is none, which the
-// validator names.
-func slotAt(slots []Slot, i int) Slot {
-	if i < 0 || i >= len(slots) {
-		return Slot{}
-	}
-	return slots[i]
-}
+func (ev *Eval) slot(i int) Slot  { return ev.Slots[i] }
+func (ch *Check) slot(i int) Slot { return ch.Slots[i] }
 
 // Gate admits or rejects the statement for its whole region (plan §4, §9):
 // Body runs where the outcome Cond names yielded, and no mapping commits where
@@ -304,26 +280,18 @@ type AssignPlan struct {
 // Gate returns the gate that closes the execute region, nil for a statement
 // without one.
 func (p *AssignPlan) Gate() *Gate {
-	if len(p.Execute) == 0 {
-		return nil
-	}
 	gate, _ := p.Execute[len(p.Execute)-1].(*Gate)
 	return gate
 }
 
 // Condition returns the node whose outcome a gate takes, the first node of a
 // gated region: a check, or a last of checks. It is nil for a statement
-// without a gate, or with a gate alone.
+// without a gate.
 func (p *AssignPlan) Condition() Node {
 	if p.Gate() == nil {
 		return nil
 	}
-
-	switch cond := p.Execute[0].(type) {
-	case *Check, *Last:
-		return cond
-	}
-	return nil
+	return p.Execute[0]
 }
 
 // tests returns the checks whose outcomes are only tested, in the order they
@@ -340,7 +308,7 @@ func (p *AssignPlan) tests() []*Check {
 
 	for _, node := range p.Values() {
 		if l, isLast := node.(*Last); isLast {
-			checks = appendChecks(checks, l.leading())
+			checks = appendChecks(checks, l.Sides[:len(l.Sides)-1])
 		}
 	}
 	return checks
@@ -399,25 +367,23 @@ func (p *AssignPlan) sources(ref OutcomeRef) []source {
 		}
 		return sides
 	case *Last:
-		if final, supplies := n.final().(Supplier); supplies {
-			id, _ := result(final)
-			return []source{{ref: OutcomeRef{Outcome: id}, node: final}}
-		}
+		final := n.final().(Supplier)
+		id, _ := result(final)
+		return []source{{ref: OutcomeRef{Outcome: id}, node: final}}
 	}
 	return nil
 }
 
 // maySkip reports a mapping whose own outcome may skip: it comes from a last,
 // whose checks can fail, or the last node that can supply its value may skip.
-// A mapping no node supplies, which the validator names, does not. A gate's
-// rejection is no skip of one mapping: it leaves every mapping of the
+// A gate's rejection is no skip of one mapping: it leaves every mapping of the
 // statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
 	if _, isLast := p.value(m.Outcome.Outcome).(*Last); isLast {
 		return true
 	}
 	sources := p.sources(m.Outcome)
-	return len(sources) > 0 && sources[len(sources)-1].node.MaySkip()
+	return sources[len(sources)-1].node.MaySkip()
 }
 
 // mayNotCommit reports a mapping that some path leaves unapplied, so that its
