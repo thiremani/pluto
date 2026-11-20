@@ -1817,6 +1817,7 @@ s = "kept"
 `+tc.statement+`
 n, s, sarr`)
 
+			require.Contains(t, ir, "store i1 true, ptr "+tc.ran+".mem", "the final side must set the flag")
 			require.Contains(t, ir, tc.ran+" = load i1, ptr "+tc.ran+".mem", "the branch must read the flag the final side sets")
 			require.Contains(t, ir, "br i1 "+tc.ran+", label %ran_if, label %ran_cont")
 			admitted := irBlock(ir, "ran_if")

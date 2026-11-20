@@ -140,8 +140,17 @@ type Supplier interface {
 	slot(i int) Slot
 }
 
-func (ev *Eval) slot(i int) Slot  { return ev.Slots[i] }
-func (ch *Check) slot(i int) Slot { return ch.Slots[i] }
+func (ev *Eval) slot(i int) Slot  { return slotAt(ev.Slots, i) }
+func (ch *Check) slot(i int) Slot { return slotAt(ch.Slots, i) }
+
+// slotAt returns slots[i]; a zero slot where there is none, which the
+// validator names.
+func slotAt(slots []Slot, i int) Slot {
+	if i < 0 || i >= len(slots) {
+		return Slot{}
+	}
+	return slots[i]
+}
 
 // Gate admits or rejects the statement for its whole region (plan §4, §9):
 // Body runs where the outcome Cond names yielded, and no mapping commits where

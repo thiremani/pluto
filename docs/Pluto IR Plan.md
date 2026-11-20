@@ -1871,8 +1871,9 @@ a final eval's value, with the bit that says the side ran.
 
 Staying legacy: a comparison of several slots and a chain; a comparison
 under an operator, in a cell or a call argument, or as a side of an `||`; a
-comparison with a ranged operand (planned for Step 7); and a comparison in a
-print.
+comparison with an operand an eval does not admit, such as a ranged one
+(planned for Step 7) or one whose read sits in a call argument
+(`Id(a[0]) > 0`); and a comparison in a print.
 
 Over the fixtures as they stood before this slice, 69 more assignments plan,
 each as one plan: 57 with a comparison among their values and 12 whose gated

@@ -533,7 +533,6 @@ func TestValidateRejects(t *testing.T) {
 		{"UnknownOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 5 }, "unknown outcome"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 3 }, "out of range"},
 		{"NegativeOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = -1 }, "unknown outcome"},
-		{"NegativeSlot", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = -1 }, "out of range"},
 		{"DoubleConsume", func(p *AssignPlan) { p.Commit[1].Outcome = p.Commit[0].Outcome }, "consumed twice"},
 		{"UnknownTargetKind", func(p *AssignPlan) { p.Commit[0].Target.Kind = 7 }, "unknown target kind"},
 		{"UnmanagedMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "uses transfer move; ownership requires store"},
@@ -847,7 +846,8 @@ func TestValidateGateRejects(t *testing.T) {
 }
 
 // The compiler elaborates a plan before it validates it, so elaboration
-// leaves a wrongly shaped execute region for the validator to name.
+// leaves a wrongly shaped execute region, or a mapping of a slot its node
+// lacks, for the validator to name.
 func TestValidateNamesShapeAfterElaborate(t *testing.T) {
 	gateAlone := gatePlan()
 	gateAlone.Execute = gateAlone.Execute[1:]
@@ -855,6 +855,14 @@ func TestValidateNamesShapeAfterElaborate(t *testing.T) {
 	lastAt(emptyLast, 0).Sides = nil
 	emptyFirst := firstPlan()
 	firstAt(emptyFirst, 0).Sides = nil
+	outOfRange := checkPlan()
+	outOfRange.Commit[0].Outcome.Slot = 1
+	negative := swapPlan()
+	negative.Commit[0].Outcome.Slot = -1
+	slotlessCheck := lastValuePlan()
+	lastAt(slotlessCheck, 0).Sides[1] = &Check{Result: 2, Expr: greater(ident("t"), strLit("a"))}
+	slotlessSide := firstPlan()
+	firstAt(slotlessSide, 0).Sides[1].Slots = nil
 
 	cases := []struct {
 		name    string
@@ -865,6 +873,10 @@ func TestValidateNamesShapeAfterElaborate(t *testing.T) {
 		{"NoCheckBeforeGate", gateAlone, "gate follows 0 nodes and takes one condition"},
 		{"LastWithoutSides", emptyLast, "last %t0 has 0 sides and needs a next"},
 		{"FirstWithoutSides", emptyFirst, "first %t0 has 0 sides and needs a fallback"},
+		{"CheckSlotOutOfRange", outOfRange, "commit references %t0 slot 1 out of range"},
+		{"NegativeSlot", negative, "commit references %t0 slot -1 out of range"},
+		{"FinalCheckWithoutSlots", slotlessCheck, "check %t2 has 0 slots"},
+		{"FirstSideWithoutSlots", slotlessSide, "eval %t2 has no output slots"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1020,8 +1032,7 @@ func TestRenderLast(t *testing.T) {
 	}
 }
 
-// Plan §4, §14: a check a mapping takes is validated as a gate's is, and the
-// mapping takes its one slot.
+// Plan §4, §14: a check a mapping takes is validated as a gate's is.
 func TestValidateCheckRejects(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -1029,7 +1040,6 @@ func TestValidateCheckRejects(t *testing.T) {
 		wantErr string
 	}{
 		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).OnOOB = UseFallback }, "check %t0 falls back, but is no side of a first"},
-		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

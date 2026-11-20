@@ -329,12 +329,13 @@ aoHr = 1 < 2 && (aoStrs[9] ⊕ "!")
 "AndHeapReadFails: -aoHr"
 
 # An && that ends in a comparison yields that comparison's left operand where
-# every side holds, and keeps old where the final one fails.
+# every side holds, and keeps old where the final one fails, releasing the
+# string it built (leak-checked).
 aoCl = 6
 aoCe = 0
 aoCe = 1 < 2 && aoCl > 5
-aoCk = 3
-aoCk = 1 < 2 && aoCl > 9
+aoCk = "kept"
+aoCk = 1 < 2 && MkStr(aoCl) > "zzz"
 "AndEndsInCheck: -aoCe -aoCk"
 
 # Chain mid-fail keeps old through an existing destination.

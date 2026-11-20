@@ -77,7 +77,7 @@ AndHeap: sq
 AndHeapMiss:  end
 AndReadInBounds: 2
 AndHeapReadFails: kept
-AndEndsInCheck: 6 3
+AndEndsInCheck: 6 kept
 AndChainBefore: 5
 AndChainMidFail: 5
 RangedAndOrAllMiss: -1
