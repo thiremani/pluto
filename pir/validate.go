@@ -42,12 +42,15 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 			}
 			next += 1 + len(n.Sides)
 			slots++
+		case *Check:
+			if err := validateCheck(p.Label, next, n); err != nil {
+				return err
+			}
+			next++
+			slots++
 		case *Last:
 			if err := validateLast(p.Label, next, n, compatible); err != nil {
 				return err
-			}
-			if _, isEval := n.final().(*Eval); !isEval {
-				return fmt.Errorf("plan %s: last %%t%d ends in %T, and a mapping takes only an eval's value", p.Label, next, n.final())
 			}
 			next += 1 + len(n.Sides)
 			slots++
@@ -60,16 +63,16 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Label, len(p.Commit), slots)
 	}
 
-	consumed := make(map[OutcomeRef]bool, slots)
+	outcomes, err := p.validateOutcomes()
+	if err != nil {
+		return err
+	}
+
 	replaced := make(map[string]bool, slots)
-	for _, m := range p.Commit {
-		if err := p.validateMapping(m, compatible); err != nil {
+	for i, m := range p.Commit {
+		if err := p.validateMapping(m, outcomes[i], compatible); err != nil {
 			return err
 		}
-		if consumed[m.Outcome] {
-			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
-		}
-		consumed[m.Outcome] = true
 		if m.Target.binds() && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
@@ -81,8 +84,8 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 // validateGate checks what a gated plan's execute region holds beside its
 // values: one condition, then the gate that takes it and admits a region. The
 // condition is a check, or a last whose every side is one. It returns the
-// outcome ID the values start at. A check or a gate anywhere else is no
-// value, and the values' own validation rejects it.
+// outcome ID the values start at. A gate anywhere else is no value, and the
+// values' own validation rejects it.
 func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (int, error) {
 	gate := p.Gate()
 	if gate == nil {
@@ -361,14 +364,31 @@ func checkedAccesses(expr ast.Expression, inCell bool) (outcome, cell int) {
 	return outcome, cell
 }
 
-func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome Type) bool) error {
-	outcome, err := p.outcomeType(m.Outcome)
-	if err != nil {
-		return err
+// validateOutcomes checks that each mapping takes an outcome slot a value
+// binds, no two the same, and returns each slot's type. Validate runs it
+// before checking any mapping further: a moved borrow asks whether the
+// mapping that replaces its owner may skip, and that mapping may come later.
+func (p *AssignPlan) validateOutcomes() ([]Type, error) {
+	types := make([]Type, len(p.Commit))
+	consumed := make(map[OutcomeRef]bool, len(p.Commit))
+	for i, m := range p.Commit {
+		outcome, err := p.outcomeType(m.Outcome)
+		if err != nil {
+			return nil, err
+		}
+		if consumed[m.Outcome] {
+			return nil, fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
+		}
+		consumed[m.Outcome] = true
+		types[i] = outcome
 	}
+	return types, nil
+}
+
+func (p *AssignPlan) validateMapping(m Mapping, outcome Type, compatible func(target, outcome Type) bool) error {
 	sources := p.sources(m.Outcome)
 	if len(m.Transfers) != len(sources) {
-		return fmt.Errorf("plan %s: target %s = %%t%d slot %d has %d transfers for the %d evals that can supply it",
+		return fmt.Errorf("plan %s: target %s = %%t%d slot %d has %d transfers for the %d nodes that can supply it",
 			p.Label, targetString(m.Target), m.Outcome.Outcome, m.Outcome.Slot, len(m.Transfers), len(sources))
 	}
 	if err := p.validateSkipPolicy(m); err != nil {
@@ -421,7 +441,7 @@ func (p *AssignPlan) validateSkipPolicy(m Mapping) error {
 }
 
 // validateBinding checks a local or output mapping: a named target of a
-// compatible type that takes its outcome, from each eval that can supply it,
+// compatible type that takes its outcome, from each node that can supply it,
 // by the derived transfer.
 func (p *AssignPlan) validateBinding(m Mapping, outcome Type, sources []source, compatible func(target, outcome Type) bool) error {
 	if m.Target.Name == "" {
@@ -444,7 +464,7 @@ func (p *AssignPlan) validateBinding(m Mapping, outcome Type, sources []source, 
 }
 
 // validateSourceTransfer pins the transfer Elaborate must have derived for
-// one eval that can supply m's value (plan §8, §14.20-22); alone says it is
+// one node that can supply m's value (plan §8, §14.20-22); alone says it is
 // the only one. A heap transfer into a target declared non-owning is legal:
 // the binding then holds heap state the next statement reads back.
 func (p *AssignPlan) validateSourceTransfer(m Mapping, src source, transfer Transfer, alone bool) error {
@@ -512,7 +532,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 			}
 			if m.Target.Kind == DiscardTarget {
 				needDiscardDrop[src.ref] = true
-			} else if src.eval.MayFail() {
+			} else if src.node.MayFail() {
 				needSkipDrop[src.ref] = true
 			}
 		}
@@ -601,7 +621,8 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 }
 
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
-// an eval outside a first or a last, or the one slot of either.
+// an eval, or the one slot of a check, a first or a last, never a side of a
+// first or a last.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 	for _, node := range p.Values() {
 		switch n := node.(type) {
@@ -613,6 +634,14 @@ func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
 			}
 			return n.Slots[ref.Slot].Type, nil
+		case *Check:
+			if n.Result != ref.Outcome {
+				continue
+			}
+			if ref.Slot != 0 {
+				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
+			}
+			return n.Slots[0].Type, nil
 		case *First:
 			if n.Result == ref.Outcome {
 				if ref.Slot != 0 {

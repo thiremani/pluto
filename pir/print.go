@@ -335,14 +335,14 @@ func (policy SkipPolicy) String() string {
 }
 
 // writeReleases names each release by the value it frees: what a check built
-// and nothing takes, what a failed eval built, tagged with what its failure does, an
-// outcome mapped to `_`, or a target's old value.
+// and nothing takes, what a failed eval or check built, tagged with what its
+// failure does, an outcome mapped to `_`, or a target's old value.
 func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	for _, ref := range p.Tested {
 		fmt.Fprintf(b, "        drop %s\n", p.refString(ref))
 	}
 	for _, ref := range p.Skipped {
-		fmt.Fprintf(b, "        drop %s [on-%s]\n", p.refString(ref), p.eval(ref.Outcome).OnOOB)
+		fmt.Fprintf(b, "        drop %s [on-%s]\n", p.refString(ref), p.failure(ref.Outcome))
 	}
 	for _, ref := range p.Discarded {
 		fmt.Fprintf(b, "        drop %s\n", p.refString(ref))
@@ -350,6 +350,15 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	for _, name := range p.Replaced {
 		fmt.Fprintf(b, "        drop %s [old]\n", name)
 	}
+}
+
+// failure is what the failure of the eval or check whose outcome is id does:
+// an eval's accesses name it, and a failed check skips its outcome.
+func (p *AssignPlan) failure(id OutcomeID) OOBScope {
+	if ev := p.eval(id); ev != nil {
+		return ev.OnOOB
+	}
+	return SkipOutcome
 }
 
 // eval finds the eval whose outcome is id, a side of a first or a last

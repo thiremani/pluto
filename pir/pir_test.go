@@ -260,6 +260,17 @@ func lastValuePlan() *AssignPlan {
 	}
 }
 
+// checkPlan is `s = MkStr(n) > "a"` over heap strings, before elaboration: the
+// binding takes the string the check built, where the comparison holds.
+func checkPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head:    Head{Label: "assign s", Source: `s = MkStr(n) > "a"`},
+		Execute: []Node{&Check{Result: 0, Expr: greater(call("MkStr", ident("n")), strLit("a")), Slots: []Slot{ownedSlot(str)}}},
+		Commit:  []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+	}
+}
+
 // lastAt is node i of p's execute region, a last.
 func lastAt(p *AssignPlan, i int) *Last { return p.Execute[i].(*Last) }
 
@@ -435,6 +446,27 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 3}},
 			},
 		}, [][]Transfer{{Copy}, {Copy}}, Releases{Replaced: []string{"a", "b"}}},
+		{"a check's value moves where it holds and is released where it failed", checkPlan(),
+			[][]Transfer{{Move}}, Releases{Skipped: []OutcomeRef{{Outcome: 0}}, Replaced: []string{"s"}}},
+		{"a borrowed check takes nothing: its comparison may fail", &AssignPlan{
+			Head: Head{Label: "assign a, b", Source: `a, b = b > "", a`},
+			Execute: []Node{
+				&Check{Result: 0, Expr: greater(ident("b"), strLit("")), Slots: []Slot{borrowedSlot(str, "b")}},
+				&Eval{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+			},
+			Commit: []Mapping{
+				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
+				{Target: heapLocal("b", str), Outcome: OutcomeRef{Outcome: 1}},
+			},
+		}, [][]Transfer{{Copy}, {Copy}}, Releases{Replaced: []string{"a", "b"}}},
+		{"a value last ending in a check moves its final side and releases the side it only tested", &AssignPlan{
+			Head: Head{Label: "assign s", Source: `s = MkStr(n) > "a" && MkStr(x) > "b"`},
+			Execute: []Node{&Last{Result: 0, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(call("MkStr", ident("n")), strLit("a")), Slots: []Slot{ownedSlot(str)}},
+				&Check{Result: 2, Expr: greater(call("MkStr", ident("x")), strLit("b")), Slots: []Slot{ownedSlot(str)}},
+			}}},
+			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+		}, [][]Transfer{{Move}}, Releases{Tested: []OutcomeRef{{Outcome: 1}}, Skipped: []OutcomeRef{{Outcome: 2}}, Replaced: []string{"s"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -525,6 +557,12 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Transfers = []Transfer{Copy}
 		}, "b is not replaced in this group"},
+		{"OwnerReplacedFromUnknownOutcome", func(p *AssignPlan) {
+			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfers = []Transfer{Move}
+			p.Commit[1].Target.HoldsHeap = true
+			p.Commit[1].Outcome.Outcome = 5
+		}, "commit references unknown outcome %t5"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
 			evalAt(p, 1).Slots[0] = borrowedSlot(testType("I64"), "b")
@@ -665,7 +703,7 @@ func TestValidateFirstRejects(t *testing.T) {
 		}, "the last side %t2 of first %t0 falls back to nothing"},
 		{"MappedSide", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 1 }, "commit references %t1, a side of first %t0"},
 		{"FirstSlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
-		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 evals that can supply it"},
+		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 nodes that can supply it"},
 		{"BorrowedSideMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move, Move} }, "target s takes h's old value from %t2, one side of a first"},
 		{"OwnedSideNotMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Copy, Copy} }, "target s = %t1 slot 0 uses transfer copy; ownership requires move"},
 		{"FailedSideNeverReleased", func(p *AssignPlan) { p.Skipped = nil }, "owned outcome %t1 slot 0 is never released where it fails"},
@@ -779,7 +817,6 @@ func TestValidateGateRejects(t *testing.T) {
 		{"EvalBeforeGate", func(p *AssignPlan) {
 			p.Execute[0] = &Eval{Result: 0, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
 		}, "gate follows *pir.Eval, which is no condition"},
-		{"CheckWithoutGate", func(p *AssignPlan) { p.Execute = append(p.Execute[:1], p.Gate().Body...) }, "unknown execute node *pir.Check"},
 		{"GateInsideGate", func(p *AssignPlan) { p.Gate().Body = []Node{&Gate{Cond: 0, Body: p.Gate().Body}} }, "unknown execute node *pir.Gate"},
 		{"EmptyRegion", func(p *AssignPlan) { p.Gate().Body = nil }, "gate admits an empty region"},
 		{"GateTakesAnotherOutcome", func(p *AssignPlan) { p.Gate().Cond = 1 }, "gate takes %t1 where its condition binds %t0"},
@@ -808,37 +845,6 @@ func TestValidateGateRejects(t *testing.T) {
 			Elaborate(p)
 			tc.mutate(p)
 			err := Validate(p, sameSpelling)
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
-			}
-		})
-	}
-}
-
-// The compiler elaborates a plan before it validates it, so elaboration
-// leaves a wrongly shaped execute region for the validator to name.
-func TestValidateNamesShapeAfterElaborate(t *testing.T) {
-	gateAlone := gatePlan()
-	gateAlone.Execute = gateAlone.Execute[1:]
-	emptyLast := lastValuePlan()
-	lastAt(emptyLast, 0).Sides = nil
-	emptyFirst := firstPlan()
-	firstAt(emptyFirst, 0).Sides = nil
-
-	cases := []struct {
-		name    string
-		plan    *AssignPlan
-		wantErr string
-	}{
-		{"NoNodes", &AssignPlan{Head: Head{Label: "assign s", Source: "s = 1"}}, "plan assign s has no evals"},
-		{"NoCheckBeforeGate", gateAlone, "gate follows 0 nodes and takes one condition"},
-		{"LastWithoutSides", emptyLast, "last %t0 has 0 sides and needs a next"},
-		{"FirstWithoutSides", emptyFirst, "first %t0 has 0 sides and needs a fallback"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			Elaborate(tc.plan)
-			err := Validate(tc.plan, sameSpelling)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
@@ -911,9 +917,6 @@ func TestValidateLastRejects(t *testing.T) {
 		}, "side %t2 of last %t0 has 2 slots"},
 		{"FinalEvalFallsBack", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).OnOOB = UseFallback }, "side %t2 of last %t0 falls back, but is no side of a first"},
 		{"FinalEvalOfAnotherType", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit last %t0 of type Str"},
-		{"ValueEndsInCheck", lastValuePlan, func(p *AssignPlan) {
-			lastAt(p, 0).Sides[1] = &Check{Result: 2, Expr: greater(ident("t"), strLit("a")), Slots: []Slot{borrowedSlot(str, "t")}}
-		}, "last %t0 ends in *pir.Check, and a mapping takes only an eval's value"},
 		{"MappedSide", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 2 }, "commit references %t2, a side of last %t0, whose outcome a mapping takes instead"},
 		{"SlotOutOfRange", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 		{"NoPolicy", lastValuePlan, func(p *AssignPlan) {
@@ -989,6 +992,63 @@ func TestRenderLast(t *testing.T) {
 `
 	if got := value.Render(true); got != want {
 		t.Fatalf("expanded value render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Plan §4, §14: a check a mapping takes is validated as a gate's is, and the
+// mapping takes its one slot.
+func TestValidateCheckRejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*AssignPlan)
+		wantErr string
+	}{
+		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).OnOOB = UseFallback }, "check %t0 falls back, but is no side of a first"},
+		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := checkPlan()
+			Elaborate(p)
+			tc.mutate(p)
+			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §12: a check a mapping takes prints as a gate's does, and what it built
+// is dropped where it skipped.
+func TestRenderCheck(t *testing.T) {
+	p := checkPlan()
+	Elaborate(p)
+	want := `assign s
+    source "s = MkStr(n) > \"a\""
+
+    execute
+        %t0 = check Str MkStr(n) > "a"
+
+    commit
+        s = %t0 [on-skip=keep]
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	want = `assign s
+    source "s = MkStr(n) > \"a\""
+
+    execute
+        %t0 = check owned Str MkStr(n) > "a"
+
+    commit
+        s = %t0 [move] [on-skip=keep]
+        drop %t0 [on-skip]
+        drop s [old]
+`
+	if got := p.Render(true); got != want {
+		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

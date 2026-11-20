@@ -1811,9 +1811,9 @@ yielded and, where the final side can itself fail, the bit that says it ran.
 A gate branches on the first bit as it does on a check's.
 
 Staying legacy: a value-position `&&` whose final side is itself a
-condition, planned with a comparison as a value; an `&&` with a side of
-several slots; an `&&` under an operator, in a cell or a call argument, or
-as a side of an `||`; and an `&&` in a print.
+condition, which the third slice plans where it is one comparison; an `&&`
+with a side of several slots; an `&&` under an operator, in a cell or a call
+argument, or as a side of an `||`; and an `&&` in a print.
 
 Over the fixtures as they stood before this slice, 40 more assignments plan,
 13 gates and 27 values, each as one plan. The machine code of 87 of the 89
@@ -1828,6 +1828,67 @@ hand-built plans by `pir`'s `TestElaborate`, `TestValidateLastRejects` and
 `TestRenderLast`, and at run time by `cond/logical_ops` (`AndReadInBounds`,
 `AndHeapReadFails`) and the statements the fixtures already held, among them
 `cond/value_cond_expr`, `assign` and `math/rec`.
+
+**Third slice landed — a comparison as a value.**
+`x = a > 2` plans (matrix rows 19, 21). The comparison is a `check`, as a
+gate's condition is, and the binding takes its outcome, the left operand,
+where the comparison holds; where it fails, the binding carries
+`[on-skip=keep]` or `[on-skip=zero]`.
+
+```text
+assign s
+    source "s = (MkStr(a) > \"zzz\")"
+
+    execute
+        %t0 = check owned Str MkStr(a) > "zzz"
+
+    commit
+        s = %t0 [move] [on-skip=keep]
+        drop %t0 [on-skip]
+        drop s [old]
+```
+
+A check among a gated statement's values sits in the gate's region as any
+value does, so `g = n > 0 a > 2` prints a check, the gate, and a second check
+one level in. An `&&` may end in one: `lb = x > 2 && x < 9` is a `last` of two
+checks whose outcome is the final one's. The builder takes each side's kind
+from the side itself, a comparison of one scalar slot being a check and any
+other side an eval, so a gate's conjuncts and a value's sides follow one rule.
+
+A check a mapping takes is not only tested: what it built moves into its
+binding where it holds and is released where it failed
+(`drop %t0 [on-skip]`), a final side's only where it ran. The comparison may
+fail, so its borrow takes no other binding's old value: `t, u = u > "", t`
+copies both strings.
+
+The validator holds a check among the values to the rules of a gate's
+condition and lets a mapping take its one slot; a `last` may end in a check
+wherever a mapping takes its value.
+
+The lowerer compares the operands and commits the left one where the
+comparison held. A `last` stages its final check's left operand as it stages
+a final eval's value, with the bit that says the side ran.
+
+Staying legacy: a comparison of several slots and a chain; a comparison
+under an operator, in a cell or a call argument, or as a side of an `||`; a
+comparison with an operand an eval does not admit, such as a ranged one
+(planned for Step 7) or one whose read sits in a call argument
+(`Id(a[0]) > 0`); and a comparison in a print.
+
+Over the fixtures as they stood before this slice, 69 more assignments plan,
+each as one plan: 57 with a comparison among their values and 12 whose gated
+value is one. The machine code of 86 of the 89 executables is unchanged;
+`cond/value_cond_expr`, `mem/mem_str` and `numeric/divide` hold statements
+whose code differs. With the router admitting no comparison as a value, all
+89 match the code before this slice and every plan's text is unchanged, so
+the slice touches no other statement.
+
+Pinned by `TestPlanGoldenCheckValues`, `TestPlanGoldenLasts`,
+`TestPlanRouterRejections` and `TestPlanLastReleasesFinalSideWhereItRan`, on
+hand-built plans by `pir`'s `TestElaborate`, `TestValidateCheckRejects` and
+`TestRenderCheck`, and at run time by `cond/logical_ops` (`AndEndsInCheck`)
+and the statements the fixtures already held, among them
+`cond/value_cond_expr`, `cond/gated_value` and `numeric/float`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
