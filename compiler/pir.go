@@ -76,7 +76,8 @@ func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
 
 // planCheckEligible admits a condition as one check: a scalar comparison
 // whose operands are each an expression an eval takes, so no range and no
-// condition of their own.
+// condition of their own. A chain's left operand is a condition, so a chain
+// waits for the node that plans it.
 func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
 	if !c.scalarComparison(expr) {
 		return false
@@ -90,10 +91,10 @@ func (c *Compiler) planCheckEligible(expr ast.Expression) bool {
 	return true
 }
 
-// scalarComparison reports a comparison of one scalar slot, which plans as a
-// check. A lazy && or || is no comparison, a chain's left operand is a
-// condition, and a comparison of several slots has several modes; each waits
-// for the node that plans it.
+// scalarComparison reports a comparison of one scalar slot, a chain included;
+// planCheckEligible decides whether it plans as a check. A lazy && or || is
+// no comparison, and a comparison of several slots has several modes; each
+// waits for the node that plans it.
 func (c *Compiler) scalarComparison(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	return len(info.CompareModes) == 1 && info.IsCondScalar(0)
