@@ -75,6 +75,8 @@ AndOobKeepsOld: 88
 AndOobFallback: -1
 AndHeap: sq
 AndHeapMiss:  end
+AndReadInBounds: 2
+AndHeapReadFails: kept
 AndChainBefore: 5
 AndChainMidFail: 5
 RangedAndOrAllMiss: -1

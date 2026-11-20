@@ -181,9 +181,11 @@ machinery's last consumer is gone.
 | `domain` | Execute a region once per point in one resolved range domain |
 | `check` | Evaluate one comparison: its outcome is the left operand, and it yields where the comparison holds |
 | `gate` | Admit one shared statement iteration to its whole region where the outcome it takes yielded, and reject it elsewhere |
-| `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the value-position `&&`'s right side (as `first` is the value-position `||`), and the work a failure scope's checks gate (§3) |
+| `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the work a failure scope's checks gate (§3) |
 | `first` | Take the first of its sides that yields: the value-position `||`, a chain of them as one list however it is grouped |
 | `fallback` | Lazily evaluate the next side of a `first`, where the side before it failed |
+| `last` | Run its sides in order while each yields, and take the final one's value: the `&&`, in value position or over a gate's conditions, a chain of them as one list however it is grouped |
+| `next` | Lazily evaluate the next side of a `last`, where the side before it yielded |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
 | `yield` | Produce a value from the current value or cell region |
@@ -747,17 +749,34 @@ assign x
         x = %t0
 ```
 
-The value-position `&&` is planned to print the same way under `last`
-(decided 2026-11-15): the sides in order, and the value of the last when
-every side before it yielded. Its clause word is `next`, where a `first` has
-`fallback` (decided 2026-11-18).
+The value-position `&&` prints the same way under `last` (decided
+2026-11-15): the sides in order, and the value of the final one when every
+side before it yielded. Its clause word is `next`, where a `first` has
+`fallback` (decided 2026-11-18). A chain is one `last` however it is grouped,
+and only its final side supplies the value, so a mapping takes it by one
+transfer (decided 2026-11-20).
+
+```text
+assign v
+    source "v = ((n > 2) && 10)"
+
+    execute
+        %t0 =
+            last I64
+                %t1 = check I64 n > 2
+            next
+                %t2 = eval I64 10
+
+    commit
+        v = %t0 [on-skip=zero]
+```
 
 A statement's condition is planned as a value is (decided 2026-11-18). A
 comparison binds its outcome on a `check` line, and the `gate` that takes
 that outcome follows on a line of its own, binding nothing, with its region
-one level in. An `&&` of comparisons is planned to reach its gate as one
-`last` and an `||` as one `first`, so a gate line names one outcome whatever
-the condition.
+one level in. An `&&` of comparisons reaches its gate as one `last`, and an
+`||` is planned to reach it as one `first`, so a gate line names one outcome
+whatever the condition.
 
 ```text
 assign x
@@ -1723,9 +1742,9 @@ paths, and commits the slot where the paths meet, so a gated statement's
 machine code changes with this slice while what it does stays.
 
 Staying legacy: a gate that is not one comparison of one scalar slot over
-operands an eval admits. That is an `&&` of comparisons, planned for the next
-slice as a `last` (§12); an `||` of them, a chain and a comparison of several
-slots, each planned with the node that carries it; a gate over a value that
+operands an eval admits. That is an `&&` of comparisons, which the second
+slice plans as a `last` (§12); an `||` of them, a chain and a comparison of
+several slots, each planned with the node that carries it; a gate over a value that
 does not plan; and a ranged gate (planned for Step 7). A mask is no gate at
 all: the solver rejects an array as a statement condition.
 
@@ -1742,6 +1761,73 @@ hand-built plans by `pir`'s `TestElaborate`, `TestValidateGateRejects` and
 `TestRenderGate`, and at run time by `mem/mem_cmp_lhs` (`BuiltLeft`,
 `BuiltRight`), `array/oob_skip` (`CondOOBSkips`), `str` (`own markers`)
 and the gated statements the fixtures already held.
+
+**Second slice landed — `last` for `&&`.**
+An `&&` plans as one `last` (matrix rows 15, 19), over a gate's conditions
+and in value position. Its sides run in order while each yields. A side
+before the final one is a comparison, a `check` that is only tested, and the
+`last` yields its final side's value where every side did.
+
+```text
+assign t
+    source "t = ((MkStr(n) > \"a\") && MkStr(x))"
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check owned Str MkStr(n) > "a"
+            next
+                %t2 = eval owned Str MkStr(x)
+
+    commit
+        t = %t0 [move] [on-skip=keep]
+        drop %t1
+        drop t [old]
+```
+
+A gate takes the `last`'s own outcome. The conjuncts of its `&&` are the
+sides, each a check, so `three = n > 0 && n > 1 && n > 2 7` prints three
+checks under one `last` and then `gate %t0`. A chain is one `last` however it
+is grouped, as a chain of `||` is one `first`.
+
+In value position the final side is an eval, and a mapping takes the
+`last`'s value from it by one transfer. A check before it can fail, so the
+binding always carries `[on-skip=keep]` or `[on-skip=zero]`, and its borrow
+takes no other binding's old value: `t, u = n > 0 && u, t` copies both
+strings, where the gated swap of the first slice moves both. What a tested
+check built is released once it is compared (`drop %t1`), in a gate and in a
+value alike. The final side runs only where the checks before it held. What
+it built is moved where it yielded, and released where it ran and then
+failed a read, or where it feeds a `_`.
+
+The validator checks that a `last` has at least two sides of one slot each,
+numbered after it; that every side before the final one is a check; and that
+the final one fits the `last`'s type and is an eval where a mapping takes the
+value, a check where a gate does.
+
+The lowerer runs each side under the yield bit of the one before it. It
+stages the final side's value in memory, with the bit that says every side
+yielded and, where the final side can itself fail, the bit that says it ran.
+A gate branches on the first bit as it does on a check's.
+
+Staying legacy: a value-position `&&` whose final side is itself a
+condition, planned with a comparison as a value; an `&&` with a side of
+several slots; an `&&` under an operator, in a cell or a call argument, or
+as a side of an `||`; and an `&&` in a print.
+
+Over the fixtures as they stood before this slice, 40 more assignments plan,
+13 gates and 27 values, each as one plan. The machine code of 87 of the 89
+executables is unchanged; `cond/logical_ops` and `cond/value_cond_expr` hold
+statements whose code differs, as a gated statement's did in the first slice.
+With the router admitting no `last`, all 89 match the code before this slice
+and every plan's text is unchanged, so the slice touches no other statement.
+
+Pinned by `TestPlanGoldenLasts`, `TestPlanRouterRejections`,
+`TestPlanGoldenPrints` and `TestPlanLastReleasesFinalSideWhereItRan`, on
+hand-built plans by `pir`'s `TestElaborate`, `TestValidateLastRejects` and
+`TestRenderLast`, and at run time by `cond/logical_ops` (`AndReadInBounds`,
+`AndHeapReadFails`) and the statements the fixtures already held, among them
+`cond/value_cond_expr`, `assign` and `math/rec`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

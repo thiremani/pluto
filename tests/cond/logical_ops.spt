@@ -317,6 +317,17 @@ aoHs = MkStr("a") > "b" && MkStr("q")
 aoHf = MkStr("a") > "zz" && MkStr("q")
 "AndHeapMiss: -aoHf end"
 
+# A read on the right that is in bounds yields its cell.
+aoRd = 1 < 2 && aoArr[1]
+"AndReadInBounds: -aoRd"
+
+# A heap value the right side built before a read in it failed is released,
+# and the destination keeps old (leak-checked).
+aoStrs = ["x" "y"]
+aoHr = "kept"
+aoHr = 1 < 2 && (aoStrs[9] ⊕ "!")
+"AndHeapReadFails: -aoHr"
+
 # Chain mid-fail keeps old through an existing destination.
 aoW = 5
 "AndChainBefore: -aoW"
