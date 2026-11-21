@@ -819,7 +819,7 @@ func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef, mapped bool) 
 	src := loweredSource{}
 	yielded := c.clearedFlag("last_yielded.mem")
 	ran := yielded
-	if final := l.Sides[len(l.Sides)-1].(pir.Supplier); mapped && final.MayFail() {
+	if mapped && pir.Fallible(l.Final()) {
 		ran = c.clearedFlag("last_ran.mem")
 	}
 

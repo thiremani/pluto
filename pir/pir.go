@@ -191,21 +191,11 @@ func result(node Node) (OutcomeID, bool) {
 // Outcomes counts the outcomes node binds, those of the nodes inside it
 // included, so that the node after it takes the next ID in execution order.
 func Outcomes(node Node) int {
-	switch n := node.(type) {
-	case *First:
-		return 1 + sideOutcomes(n.Sides)
-	case *Last:
-		if n.Result == NoOutcome {
-			return sideOutcomes(n.Sides)
-		}
-		return 1 + sideOutcomes(n.Sides)
-	}
-	return 1
-}
-
-func sideOutcomes(sides []Node) int {
 	total := 0
-	for _, side := range sides {
+	if _, binds := result(node); binds {
+		total = 1
+	}
+	for _, side := range sidesOf(node) {
 		total += Outcomes(side)
 	}
 	return total
