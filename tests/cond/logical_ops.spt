@@ -646,3 +646,15 @@ pcG = (pcP > 2) + (pcR > 3) || -1
 pcH = "b" > "c" || "z" ⊕ "?"
 pcI = "d" > "c" || "z" ⊕ "?"
 "PrecedenceNearest:", pcG, pcH, pcI
+
+# An && side of a || whose final side ran and then failed its comparison: the
+# heap string it built is released where it ran, and the || falls back.
+fsFb = sl > "a" && (sm ⊕ "?") > "zzz" || "fb"
+"FirstLastRanAndFailed: -fsFb"
+
+# An owned comparison inside an && that is a fallback side: it is only tested,
+# so what it built is released in the block the fallback admits.
+fsL = "left"
+fsR = "right"
+fsHeap = fsL > "zzz" || (fsL ⊕ "?") > "a" && fsR
+"FirstLastFallbackTested: -fsHeap"

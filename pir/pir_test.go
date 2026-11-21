@@ -174,9 +174,9 @@ func firstPlan() *AssignPlan {
 	str := testType("Str")
 	return &AssignPlan{
 		Head: Head{Label: "assign s", Source: "s = sarr[9] || h"},
-		Execute: []Node{&First{Result: 0, Type: str, Sides: []*Eval{
-			{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-			{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+			&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+			&Eval{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
 		}}},
 		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
 	}
@@ -191,10 +191,10 @@ func chainPlan() *AssignPlan {
 		Head: Head{Label: "assign n, z, m", Source: "n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7"},
 		Execute: []Node{
 			&Eval{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(i64)}},
-			&First{Result: 1, Type: str, Sides: []*Eval{
-				{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-				{Result: 3, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-				{Result: 4, Expr: read("sarr", 7), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&First{Result: 1, Type: str, Sides: []Node{
+				&Eval{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				&Eval{Result: 3, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				&Eval{Result: 4, Expr: read("sarr", 7), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
 			}},
 			&Eval{Result: 5, Expr: intLit(7), Slots: []Slot{unmanagedSlot(i64)}},
 		},
@@ -203,6 +203,39 @@ func chainPlan() *AssignPlan {
 			{Target: Target{Kind: LocalTarget, Name: "z", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 1}, OnSkip: ZeroOnSkip},
 			{Target: local("m", i64), Outcome: OutcomeRef{Outcome: 5}},
 		},
+	}
+}
+
+// firstCheckPlan is `s = sarr[9] > "a" || h` over heap strings, before
+// elaboration: a check side whose failed read the fallback after it resolves,
+// as a failed comparison is, falling back to a borrow.
+func firstCheckPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = sarr[9] > "a" || h`},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+			&Check{Result: 1, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+			&Eval{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+		}}},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
+	}
+}
+
+// firstLastPlan is `t = MkStr(a) > "a" && MkStr(b) || h` over heap strings,
+// before elaboration: a side that is an && of its own, which binds no
+// outcome, its final side supplying the value where its check held.
+func firstLastPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign t", Source: `t = MkStr(a) > "a" && MkStr(b) || h`},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+			&Last{Result: NoOutcome, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(call("MkStr", ident("a")), strLit("a")), Slots: []Slot{ownedSlot(str)}},
+				&Eval{Result: 2, Expr: call("MkStr", ident("b")), Slots: []Slot{ownedSlot(str)}},
+			}},
+			&Eval{Result: 3, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+		}}},
+		Commit: []Mapping{{Target: heapLocal("t", str), Outcome: OutcomeRef{Outcome: 0}}},
 	}
 }
 
@@ -280,6 +313,18 @@ func evalAt(p *AssignPlan, i int) *Eval { return p.Execute[i].(*Eval) }
 // firstAt is node i of p's execute region, a first.
 func firstAt(p *AssignPlan, i int) *First { return p.Execute[i].(*First) }
 
+// sideEvalAt is side j of the first that is node i of p's execute region, an
+// eval.
+func sideEvalAt(p *AssignPlan, i, j int) *Eval { return firstAt(p, i).Sides[j].(*Eval) }
+
+// sideCheckAt is side j of the first that is node i of p's execute region, a
+// check.
+func sideCheckAt(p *AssignPlan, i, j int) *Check { return firstAt(p, i).Sides[j].(*Check) }
+
+// sideLastAt is side j of the first that is node i of p's execute region, a
+// last.
+func sideLastAt(p *AssignPlan, i, j int) *Last { return firstAt(p, i).Sides[j].(*Last) }
+
 func TestValidateAccepts(t *testing.T) {
 	scalarSwap := swapPlan()
 	Elaborate(scalarSwap)
@@ -287,10 +332,16 @@ func TestValidateAccepts(t *testing.T) {
 	Elaborate(heapSwap)
 	replace := replacePlan()
 	Elaborate(replace)
+	firstCheck := firstCheckPlan()
+	Elaborate(firstCheck)
+	firstLast := firstLastPlan()
+	Elaborate(firstLast)
 	for name, p := range map[string]*AssignPlan{
 		"scalar swap":    scalarSwap,
 		"heap swap":      heapSwap,
 		"replace + drop": replace,
+		"check side":     firstCheck,
+		"&& side":        firstLast,
 	} {
 		if err := Validate(p, sameSpelling); err != nil {
 			t.Fatalf("%s: valid plan rejected: %v", name, err)
@@ -405,9 +456,9 @@ func TestElaborate(t *testing.T) {
 		{"a side of a first copies though its owner is replaced", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: `a, b = sarr[9] || b, "new"`},
 			Execute: []Node{
-				&First{Result: 0, Type: str, Sides: []*Eval{
-					{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-					{Result: 2, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
+				&First{Result: 0, Type: str, Sides: []Node{
+					&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+					&Eval{Result: 2, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
 				}},
 				&Eval{Result: 3, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
 			},
@@ -418,12 +469,14 @@ func TestElaborate(t *testing.T) {
 		}, [][]Transfer{{Move, Copy}, {Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"a", "b"}}},
 		{"a discarded first releases each owned side where it ran", &AssignPlan{
 			Head: Head{Label: "assign _", Source: `_ = sarr[9] || h ⊕ "?"`},
-			Execute: []Node{&First{Result: 0, Type: str, Sides: []*Eval{
-				{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-				{Result: 2, Expr: concat(ident("h"), strLit("?")), Slots: []Slot{ownedSlot(str)}},
+			Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				&Eval{Result: 2, Expr: concat(ident("h"), strLit("?")), Slots: []Slot{ownedSlot(str)}},
 			}}},
 			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, [][]Transfer{{Store, Store}}, Releases{Discarded: []OutcomeRef{{Outcome: 1}, {Outcome: 2}}}},
+		{"a first takes a last side's value from its final side, and releases what the side's check built", firstLastPlan(),
+			[][]Transfer{{Move, Copy}}, Releases{Tested: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"t"}}},
 		{"a first whose last side may skip releases each side where it failed", chainPlan(),
 			[][]Transfer{{Store}, {Move, Move, Move}, {Store}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}, {Outcome: 4}}}},
 		{"a gate releases what its check built, and its region's values as any other", gatePlan(),
@@ -607,7 +660,7 @@ func TestValidateRejects(t *testing.T) {
 		{"ScopeWithoutAccess", func(p *AssignPlan) { evalAt(p, 0).OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
 		{"FallbackOutsideFirst", func(p *AssignPlan) {
 			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), UseFallback
-		}, "eval %t0 falls back, but is no side of a first"},
+		}, "eval %t0 falls back, but no fallback follows it"},
 		{"UnknownScope", func(p *AssignPlan) {
 			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), 9
 		}, "eval %t0 has unknown out-of-bounds scope 9"},
@@ -686,22 +739,22 @@ func TestValidateFirstRejects(t *testing.T) {
 		wantErr string
 	}{
 		{"FirstIDOutOfOrder", func(p *AssignPlan) { firstAt(p, 0).Result = 3 }, "first has result ID 3 where 0 is next; IDs must be dense"},
-		{"SparseSideID", func(p *AssignPlan) { firstAt(p, 0).Sides[1].Result = 5 }, "eval 2 has result ID 5; IDs must be dense"},
+		{"SparseSideID", func(p *AssignPlan) { sideEvalAt(p, 0, 1).Result = 5 }, "eval 2 has result ID 5; IDs must be dense"},
 		{"NoType", func(p *AssignPlan) { firstAt(p, 0).Type = nil }, "first %t0 has no type"},
 		{"OneSide", func(p *AssignPlan) { firstAt(p, 0).Sides = firstAt(p, 0).Sides[:1] }, "first %t0 has 1 sides and needs a fallback"},
 		{"SideWithTwoSlots", func(p *AssignPlan) {
-			firstAt(p, 0).Sides[1].Slots = []Slot{borrowedSlot(str, "h"), borrowedSlot(str, "h")}
+			sideEvalAt(p, 0, 1).Slots = []Slot{borrowedSlot(str, "h"), borrowedSlot(str, "h")}
 		}, "side %t2 of first %t0 has 2 slots"},
-		{"SideTypeMismatch", func(p *AssignPlan) { firstAt(p, 0).Sides[1].Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit first %t0 of type Str"},
-		{"FallbackScopeWithoutAccess", func(p *AssignPlan) { firstAt(p, 0).Sides[0].Expr = ident("t") }, "eval %t1 has an out-of-bounds scope and no checked access"},
+		{"SideTypeMismatch", func(p *AssignPlan) { sideEvalAt(p, 0, 1).Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit first %t0 of type Str"},
+		{"FallbackScopeWithoutAccess", func(p *AssignPlan) { sideEvalAt(p, 0, 0).Expr = ident("t") }, "eval %t1 has an out-of-bounds scope and no checked access"},
 		{"FallbackAfterSideThatCannotFail", func(p *AssignPlan) {
-			firstAt(p, 0).Sides[0].Expr, firstAt(p, 0).Sides[0].OnOOB = ident("t"), NoChecks
-		}, "side %t1 of first %t0 has out-of-bounds scope none; the fallback after it needs fallback"},
-		{"SkipBeforeFallback", func(p *AssignPlan) { firstAt(p, 0).Sides[0].OnOOB = SkipOutcome }, "side %t1 of first %t0 has out-of-bounds scope skip; the fallback after it needs fallback"},
+			sideEvalAt(p, 0, 0).Expr, sideEvalAt(p, 0, 0).OnOOB = ident("t"), NoChecks
+		}, "side %t1 of first %t0 cannot fail, so the fallback after it would never run"},
+		{"SkipBeforeFallback", func(p *AssignPlan) { sideEvalAt(p, 0, 0).OnOOB = SkipOutcome }, "eval %t1 skips a failed access, which the fallback after its side resolves"},
 		{"LastSideFallsBack", func(p *AssignPlan) {
-			firstAt(p, 0).Sides[1].Expr, firstAt(p, 0).Sides[1].OnOOB = read("sarr", 8), UseFallback
-		}, "the last side %t2 of first %t0 falls back to nothing"},
-		{"MappedSide", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 1 }, "commit references %t1, a side of first %t0"},
+			sideEvalAt(p, 0, 1).Expr, sideEvalAt(p, 0, 1).OnOOB = read("sarr", 8), UseFallback
+		}, "eval %t2 falls back, but no fallback follows it"},
+		{"MappedSide", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 1 }, "commit references %t1, which sits inside first %t0"},
 		{"FirstSlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 nodes that can supply it"},
 		{"BorrowedSideMoved", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move, Move} }, "target s takes h's old value from %t2, one side of a first"},
@@ -718,6 +771,58 @@ func TestValidateFirstRejects(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := firstPlan()
+			Elaborate(p)
+			tc.mutate(p)
+			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §4, §14: what a first's sides must be, broken on `s = sarr[9] > "a"
+// || h`, whose side is a check, and on `t = MkStr(a) > "a" && MkStr(b) || h`,
+// whose first side is an && of its own.
+func TestValidateFirstSideRejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		plan    func() *AssignPlan
+		mutate  func(*AssignPlan)
+		wantErr string
+	}{
+		{"CheckSideSkipsBeforeFallback", firstCheckPlan, func(p *AssignPlan) {
+			sideCheckAt(p, 0, 0).OnOOB = SkipOutcome
+		}, "check %t1 skips a failed access, which the fallback after its side resolves"},
+		{"CheckSideTypeMismatch", firstCheckPlan, func(p *AssignPlan) {
+			firstAt(p, 0).Type = testType("I64")
+		}, "side %t1 of type Str does not fit first %t0 of type I64"},
+		{"NestedLastBindsOutcome", firstLastPlan, func(p *AssignPlan) {
+			sideLastAt(p, 0, 0).Result = 1
+		}, "the last in side 1 of first %t0 binds outcome %t1, and a side of a first binds none"},
+		{"NestedLastWithOneSide", firstLastPlan, func(p *AssignPlan) {
+			l := sideLastAt(p, 0, 0)
+			l.Sides = l.Sides[:1]
+		}, "the last in side 1 of first %t0 has 1 sides and needs a next"},
+		{"NestedLastTypeMismatch", firstLastPlan, func(p *AssignPlan) {
+			firstAt(p, 0).Type = testType("I64")
+		}, "the last in side 1 of type Str does not fit first %t0 of type I64"},
+		{"SparseIDInNestedLast", firstLastPlan, func(p *AssignPlan) {
+			sideLastAt(p, 0, 0).Sides[1].(*Eval).Result = 7
+		}, "eval 2 has result ID 7; IDs must be dense"},
+		{"SideAfterNestedLast", firstLastPlan, func(p *AssignPlan) {
+			sideEvalAt(p, 0, 1).Result = 9
+		}, "eval 3 has result ID 9; IDs must be dense"},
+		{"MappedNodeInsideNestedLast", firstLastPlan, func(p *AssignPlan) {
+			p.Commit[0].Outcome.Outcome = 2
+		}, "commit references %t2, which sits inside first %t0"},
+		{"GateAsSide", firstLastPlan, func(p *AssignPlan) {
+			firstAt(p, 0).Sides[0] = &Gate{Cond: 1}
+		}, "side 1 of first %t0 is *pir.Gate, which is no eval, check or last"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.plan()
 			Elaborate(p)
 			tc.mutate(p)
 			err := Validate(p, sameSpelling)
@@ -800,6 +905,36 @@ func TestRenderFirst(t *testing.T) {
 	if got := chain.Render(true); got != want {
 		t.Fatalf("chain render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
+
+	// A side that is a last binds no outcome, so its head sits where the
+	// outcome line would have gone and its own sides stay one level in from
+	// it. A mapping names the node each side supplies the value from.
+	nested := firstLastPlan()
+	Elaborate(nested)
+	if err := Validate(nested, sameSpelling); err != nil {
+		t.Fatalf("plan with a last for a side rejected: %v", err)
+	}
+	want = `assign t
+    source "t = MkStr(a) > \"a\" && MkStr(b) || h"
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check owned Str MkStr(a) > "a"
+                next
+                    %t2 = eval owned Str MkStr(b)
+            fallback
+                %t3 = eval borrowed Str h
+
+    commit
+        t = %t0 [move %t2] [copy %t3]
+        drop %t1
+        drop t [old]
+`
+	if got := nested.Render(true); got != want {
+		t.Fatalf("nested last render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 // Plan §4, §9, §14: a gate's invariants, each broken on
@@ -826,7 +961,7 @@ func TestValidateGateRejects(t *testing.T) {
 			p.Condition().(*Check).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "check %t0 has 2 slots"},
 		{"CheckSlotWithoutType", func(p *AssignPlan) { p.Condition().(*Check).Slots[0].Type = nil }, "check %t0 slot 0 has no type"},
-		{"CheckFallsBack", func(p *AssignPlan) { p.Condition().(*Check).OnOOB = UseFallback }, "check %t0 falls back, but is no side of a first"},
+		{"CheckFallsBack", func(p *AssignPlan) { p.Condition().(*Check).OnOOB = UseFallback }, "check %t0 falls back, but no fallback follows it"},
 		{"CheckAccessWithoutScope", func(p *AssignPlan) { p.Condition().(*Check).OnOOB = NoChecks }, "check %t0 holds a checked access with no out-of-bounds scope"},
 		{"MappedCheck", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 0 }, "commit references unknown outcome %t0"},
 		{"NoPolicyUnderGate", func(p *AssignPlan) {
@@ -915,9 +1050,9 @@ func TestValidateLastRejects(t *testing.T) {
 		{"FinalEvalWithTwoSlots", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[1].(*Eval).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "side %t2 of last %t0 has 2 slots"},
-		{"FinalEvalFallsBack", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).OnOOB = UseFallback }, "side %t2 of last %t0 falls back, but is no side of a first"},
+		{"FinalEvalFallsBack", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).OnOOB = UseFallback }, "eval %t2 falls back, but no fallback follows it"},
 		{"FinalEvalOfAnotherType", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit last %t0 of type Str"},
-		{"MappedSide", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 2 }, "commit references %t2, a side of last %t0, whose outcome a mapping takes instead"},
+		{"MappedSide", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 2 }, "commit references %t2, which sits inside last %t0, whose outcome a mapping takes instead"},
 		{"SlotOutOfRange", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 		{"NoPolicy", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
@@ -1003,7 +1138,7 @@ func TestValidateCheckRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).OnOOB = UseFallback }, "check %t0 falls back, but is no side of a first"},
+		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).OnOOB = UseFallback }, "check %t0 falls back, but no fallback follows it"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 	}
 	for _, tc := range cases {
@@ -1082,7 +1217,7 @@ func TestValidatePrint(t *testing.T) {
 		}, "print takes %t0, which may fail"},
 		{"FallsBack", func(p *PrintPlan) {
 			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), UseFallback
-		}, "print takes %t0, which may fail"},
+		}, "eval %t0 falls back, but no fallback follows it"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

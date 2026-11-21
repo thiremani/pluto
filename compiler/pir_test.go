@@ -147,8 +147,9 @@ s`)
 // 6c) and a literal with an index read in a cell, while an index read whose
 // failure skips the statement's own value plans (row 7), and so does a ||
 // after one when it is the whole value (row 7b), not under an operator, in a
-// cell or a call argument, beside a comparison, or with a side of several
-// slots. Ordinary heap
+// cell or a call argument, or with a side of several slots; a side of a || may
+// itself be a comparison or an && that plans (row 7b), while an || for a
+// statement's gate stays legacy. Ordinary heap
 // values — both string
 // flavours, concatenations, array literals of either layout, table
 // literals — and calls with ordinary arguments plan alongside scalars and
@@ -206,10 +207,13 @@ fo = (arr[9] || 1) + 1
 fc = [arr[9] || 1]
 fd = Twice(arr[9] || 1)
 fx = x > 9 || arr[9] || 1
+fa = x > 2 && 10 || 7
+fq = x > 2 < 9 && 10 || 7
+fg = x > 2 || x < 9 13
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fm, fn`)
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -1776,6 +1780,202 @@ a, s, c, g, p, q, r, w`)
 
 // A gate reads whether its check yielded and takes nothing, so what the check
 // built is released before the gate's region runs (plan §8).
+// Plan §4, §12: a side of a first takes its kind from the side itself, as a
+// last's sides do — a comparison is a check, a value-position && is a last
+// that binds no outcome, and any other side is an eval. A fallback resolves a
+// failed access anywhere in the side before it, and a mapping names the node
+// each side supplies its value from.
+func TestPlanGoldenFirstConditions(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planFirstConditions", `s = MkStr(x)
+    s = "s-x"
+`, `sarr = ["x" "y"]
+arr = [10 20 30]
+h = "heap" ⊕ "!"
+a = 5
+b = 0
+x = a > 2 || 7
+n = 1
+n = a > 9 || a > 1
+z = a > 0 && 11 || 13
+u = a > 9 && 1 || b > 0 && 2
+c = 1 < 2 && arr[9] || -1
+d = arr[9] > 0 && 1 || -1
+s = sarr[9] > "a" || h
+t = MkStr(a) > "a" && MkStr(b) || h
+p, q = a > 0 && 11 || 13, 5
+x, n, z, u, c, d, p, q
+s, t, h`)
+
+	require.Equal(t, []string{"assign sarr", "assign arr", "assign h", "assign a", "assign b", "assign x",
+		"assign n", "assign n", "assign z", "assign u", "assign c", "assign d", "assign s", "assign t",
+		"assign p, q"}, planLabels(plans))
+
+	// A check side yields its left operand; the last side always yields, so
+	// the mapping always commits.
+	require.Equal(t, `assign x
+    source "x = ((a > 2) || 7)"
+
+    execute
+        %t0 =
+            first I64
+                %t1 = check I64 a > 2
+            fallback
+                %t2 = eval I64 7
+
+    commit
+        x = %t0
+`, plans[5].Render(false))
+	// A check as the last side can fail, so the binding keeps its value.
+	require.Equal(t, `assign n
+    source "n = ((a > 9) || (a > 1))"
+
+    execute
+        %t0 =
+            first I64
+                %t1 = check I64 a > 9
+            fallback
+                %t2 = check I64 a > 1
+
+    commit
+        n = %t0 [on-skip=keep]
+`, plans[7].Render(false))
+	// An && side is a last that binds no outcome: its head sits where the
+	// outcome line would have gone, and its value reaches the mapping through
+	// the first's outcome.
+	require.Equal(t, `assign z
+    source "z = (((a > 0) && 11) || 13)"
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 a > 0
+                next
+                    %t2 = eval I64 11
+            fallback
+                %t3 = eval I64 13
+
+    commit
+        z = %t0
+`, plans[8].Render(false))
+	// Every side may be a last, and the IDs stay dense through each one's own
+	// sides. Where no side yields, a fresh binding holds its zero.
+	require.Equal(t, `assign u
+    source "u = (((a > 9) && 1) || ((b > 0) && 2))"
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 a > 9
+                next
+                    %t2 = eval I64 1
+            fallback
+                last I64
+                    %t3 = check I64 b > 0
+                next
+                    %t4 = eval I64 2
+
+    commit
+        u = %t0 [on-skip=zero]
+`, plans[9].Render(false))
+	// The fallback after a side resolves a failed access anywhere in it, a
+	// nested last's final eval included.
+	require.Equal(t, `assign c
+    source "c = (((1 < 2) && arr[9]) || (-1))"
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 1 < 2
+                next
+                    %t2 = eval I64 arr[9] [on-oob=fallback]
+            fallback
+                %t3 = eval I64 -1
+
+    commit
+        c = %t0
+`, plans[10].Render(false))
+	// A check inside a nested last carries the scope its side's position
+	// gives, as the last's final eval does.
+	require.Equal(t, `assign d
+    source "d = (((arr[9] > 0) && 1) || (-1))"
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 arr[9] > 0 [on-oob=fallback]
+                next
+                    %t2 = eval I64 1
+            fallback
+                %t3 = eval I64 -1
+
+    commit
+        d = %t0
+`, plans[11].Render(false))
+	// A check side with a read falls back where the read fails as where the
+	// comparison does, and what it built is released where the fallback ran.
+	require.Equal(t, `assign s
+    source "s = ((sarr[9] > \"a\") || h)"
+
+    execute
+        %t0 =
+            first Str
+                %t1 = check owned Str sarr[9] > "a" [on-oob=fallback]
+            fallback
+                %t2 = eval borrowed Str h
+
+    commit
+        s = %t0 [move %t1] [copy %t2]
+        drop %t1 [on-fallback]
+`, plans[12].Render(true))
+	// A mapping takes a last side's value from its final side, so the
+	// transfers name %t2 and %t3; the check before it is only tested, and
+	// what it built is released once it is compared.
+	require.Equal(t, `assign t
+    source "t = (((MkStr(a) > \"a\") && MkStr(b)) || h)"
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check owned Str MkStr(a) > "a"
+                next
+                    %t2 = eval owned Str MkStr(b)
+            fallback
+                %t3 = eval borrowed Str h
+
+    commit
+        t = %t0 [move %t2] [copy %t3]
+        drop %t1
+`, plans[13].Render(true))
+	// The value after a first takes the ID after every node inside it, a
+	// nested last's own sides included.
+	require.Equal(t, `assign p, q
+    source "p, q = (((a > 0) && 11) || 13), 5"
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 a > 0
+                next
+                    %t2 = eval I64 11
+            fallback
+                %t3 = eval I64 13
+        %t4 = eval I64 5
+
+    commit
+        p = %t0
+        q = %t4
+`, plans[14].Render(false))
+}
+
 func TestPlanGateReleasesCheckFirst(t *testing.T) {
 	ir, _ := compileScriptAndCodeIR(t, "planGateRelease", `s = MkStr(x)
     s = "s-x"
@@ -1825,6 +2025,37 @@ n, s, sarr`)
 			require.Contains(t, admitted, "call void @free(ptr "+tc.staged+")")
 		})
 	}
+}
+
+// A last that is a side of a first stages its value on a path of its own, so
+// the bit that says its final side ran is cleared before the sides part and
+// read where the mappings land: a side that never ran staged nothing to
+// release, and one that ran and then failed must release what it built
+// (plan §8).
+func TestPlanFirstReleasesLastSideWhereItRan(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "planFirstLastRelease", `s = MkStr(x)
+    s = "s-x"
+`, `a = 5
+b = 3
+sarr = ["x" "y"]
+s = "kept"
+s = sarr[9] || MkStr(a) > "a" && MkStr(b) > "zzz"
+a, b, s`)
+
+	cleared := strings.Index(ir, "store i1 false, ptr %first_side_ran.mem")
+	parted := strings.Index(ir, "first_fallback_if:")
+	require.NotEqual(t, -1, cleared, "expected the side's ran bit to be cleared")
+	require.NotEqual(t, -1, parted, "expected the fallback side's own block")
+	require.Less(t, cleared, parted, "the bit must be cleared before the sides part")
+
+	require.Contains(t, irBlock(ir, "last_next_cont"), "store i1 %last_ran, ptr %first_side_ran.mem",
+		"the last must record whether its final side ran")
+	require.Contains(t, irBlock(ir, "first_fallback_cont"), "%first_side_ran = load i1, ptr %first_side_ran.mem",
+		"the bit must be read where every path reaches it")
+	require.Contains(t, ir, "br i1 %first_side_ran, label %ran_if")
+	admitted := irBlock(ir, "ran_if")
+	require.Contains(t, admitted, "= load ptr, ptr %last_side.mem")
+	require.Contains(t, admitted, "call void @free(ptr %temp_free")
 }
 
 // irBlock returns the instructions of the basic block labelled label in ir,

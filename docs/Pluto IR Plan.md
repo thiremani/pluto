@@ -645,7 +645,8 @@ target (§6) is spelled with that word first, `output res = %t0`; an eval that
 holds a
 checked access ends with its out-of-bounds scope, named for what a failed
 access does: `[on-oob=skip]` where it skips the outcome, and
-`[on-oob=fallback]` where a `fallback` follows the eval's side of a `first`;
+`[on-oob=fallback]` where a `fallback` follows the node's side of a `first`,
+which a `check` carries as an `eval` does;
 each
 binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views, so `[on-oob=skip]`
@@ -655,7 +656,12 @@ of its own, `%t0 =`, and the selection follows one level in: a `first I64`
 line, which names the whole selection and its type, then a `fallback` label
 for each side after the first, with every side one level further in, so the
 labels line up, the sides line up, and no column depends on a name's width;
-no side carries a `yield` line, a side's value being its last outcome;
+no side carries a `yield` line, a side's value being its last outcome; a
+side is spelled as the node it is — an `eval`, a `check`, or a `last`, an
+`&&` of its own — and a `first` or a `last` binds an outcome only where a
+mapping can take it, so a `last` that is a side of a `first` binds none and
+its head line sits where the outcome line would have gone, its own sides
+staying one level in from it (decided 2026-11-20);
 square brackets otherwise carry declarative policies, not
 executable code. The expanded view puts each eval slot's ownership before
 its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
@@ -1889,6 +1895,87 @@ hand-built plans by `pir`'s `TestElaborate`, `TestValidateCheckRejects` and
 `TestRenderCheck`, and at run time by `cond/logical_ops` (`AndEndsInCheck`)
 and the statements the fixtures already held, among them
 `cond/value_cond_expr`, `cond/gated_value` and `numeric/float`.
+
+**Fourth slice landed — a `first` whose sides may be conditions.**
+`x = a > 2 || 7` and `x = a > 0 && y || z` plan (matrix rows 7b, 19). A side
+of a `first` takes its kind from the side itself, as a `last`'s sides do: a
+comparison of one scalar slot is a `check`, a value-position `&&` is a `last`,
+and any other side is an `eval`.
+
+```text
+assign t
+    source "t = ((MkStr(a) > \"a\") && MkStr(b)) || h"
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check owned Str MkStr(a) > "a"
+                next
+                    %t2 = eval owned Str MkStr(b)
+            fallback
+                %t3 = eval borrowed Str h
+
+    commit
+        t = %t0 [move %t2] [copy %t3]
+        drop %t1
+        drop t [old]
+```
+
+A `first` or a `last` binds an outcome where a mapping can take it, at the top
+of a value; a `last` that is a side of a `first` binds none, its value
+reaching the mapping through the `first`'s own outcome, so its head sits where
+the outcome line would have gone (decided 2026-11-20). The outcome IDs stay
+dense in execution order through each side's own nodes, so the side after a
+`last` of two sides takes the third ID. A mapping names the node each side
+supplies its value from, which for a `last` side is its final side, and the
+checks before that side are only tested, so what one built is released once it
+is compared (`drop %t1`).
+
+The fallback after a side resolves a failed access anywhere in that side, a
+nested `last`'s own sides included, so a `check` side carries
+`[on-oob=fallback]` exactly where an `eval` side does and what it built is
+released where the fallback ran (`drop %t1 [on-fallback]`). A side the
+`fallback` resolves must be able to fail; a `check` and a `last` always can,
+and an `eval` must hold a checked access, as before. Whether the mapping
+carries a skip policy follows the side no `fallback` follows: `x = a > 2 || 7`
+always commits, while `x = a > 2 || a > 3` and `x = a > 9 && 1 || b > 0 && 2`
+carry `[on-skip=keep]` or `[on-skip=zero]`.
+
+The validator holds each side to the rules of its own kind and checks that a
+`last` that is a side of a `first` binds no outcome, that each side's type
+fits the `first`'s, and that no node inside a side is mapped.
+
+The lowerer runs each side as before, under the bit that says the side before
+it failed, and stages the value each supplies: an `eval`'s or a `check`'s
+outcome in memory of its own, and a `last`'s final side's in the `last`'s own
+staging. A side runs on a path of its own, so the bits the commit reads are
+cleared before the sides part: the bit that says the side yielded, as before,
+and, for a side that is a `last` whose final side can itself fail, the bit
+that says that side ran and staged a value to release.
+
+Over the fixtures as they stood before this slice, 28 more assignments plan,
+each as one plan: 13 with a comparison for a side and 15 with an `&&`. The
+machine code of 84 of the 89 executables is unchanged; `cond/logical_ops`,
+`cond/value_cond_expr`, `numeric/divide_checked`, `array/oob_fallback` and
+`math/rec_infer` hold statements whose code differs, as earlier slices' did,
+while `numeric/float`'s planned `ao = nan != 0.0 || -1.0` compiles to the
+same code as before. With the router admitting no condition for a side, all
+89 match the code before this slice and every plan's text is unchanged, so
+the slice touches no other statement.
+
+Staying legacy: an `||` as a statement's gate, which needs a `first` whose
+outcome is only tested and one that is a side of a `last`; a side of several
+slots; a side whose own `&&` does not plan; and an `||` under an operator, in
+a cell, in a call argument or in a print.
+
+Pinned by `TestPlanGoldenFirstConditions`, `TestPlanRouterRejections` and
+`TestPlanFirstReleasesLastSideWhereItRan`, on hand-built plans by `pir`'s
+`TestElaborate`, `TestValidateAccepts`, `TestValidateFirstSideRejects` and
+`TestRenderFirst`, and at run time by `cond/logical_ops`
+(`FirstLastRanAndFailed`, `FirstLastFallbackTested`) and the statements the
+fixtures already held, among them `cond/value_cond_expr`,
+`numeric/divide_checked` and `array/oob_fallback`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
