@@ -550,17 +550,18 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 }
 
 // loweredSource is one eval or check that can supply a node's outcome, after
-// it ran: the outcome it binds, its slots, and the bit that says whether it
-// yielded, nil when it always does. The bit covers every slot: an eval yields
-// or fails as a whole. A side of a first or a last runs on a path of its own,
-// so its slots point to memory and are loaded where they are read. A last's
-// final side runs only where the sides before it yielded, and ran is the bit
-// that says it did; it is nil for a source that always runs.
+// it ran: the outcome it binds, its slots, and two bits. ran says the
+// expression that produces the value ran, so a value is there to take or to
+// release; it is nil for a source that always runs. yielded says that value
+// is the outcome, and is nil for one that always yields. Each bit covers
+// every slot: an eval yields or fails as a whole. A side of a first or a last
+// runs on a path of its own, so its slots point to memory and are loaded
+// where they are read.
 type loweredSource struct {
 	id      pir.OutcomeID
 	out     []*Symbol
-	yielded llvm.Value
 	ran     llvm.Value
+	yielded llvm.Value
 }
 
 // loweredNode is one node of a plan's execute region after it ran: the
@@ -720,15 +721,15 @@ func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
 	return out, c.createLoad(guard, Int{Width: 1}, "assign_bounds_ok")
 }
 
-// sideFlags are the bits one side of a first sets, cleared before the sides
-// part so that reading them where the mappings land dominates: yielded says
-// the side yielded, and ran says the side staged a value to release, which
-// only a side that is a last needs, since such a side can stop at a check
-// before it stages one, or stage one and then fail. A side that cannot fail
-// needs no yielded.
+// sideFlags are a side's two bits in memory, cleared before the sides part so
+// that reading them where the mappings land dominates. ran says the
+// expression that produces the side's value ran; yielded says that value is
+// the first's outcome. Only a side that is a last needs ran, since its final
+// side runs only where the checks before it held, while entering any other
+// side runs its expression. A side that cannot fail needs no yielded.
 type sideFlags struct {
-	yielded llvm.Value
 	ran     llvm.Value
+	yielded llvm.Value
 }
 
 // lowerFirst runs a first's sides in order until one yields (plan §4). A
@@ -736,11 +737,11 @@ type sideFlags struct {
 func (c *Compiler) lowerFirst(f *pir.First, tested []pir.OutcomeRef) loweredNode {
 	flags := make([]sideFlags, len(f.Sides))
 	for i, side := range f.Sides {
-		if pir.Fallible(side) {
-			flags[i].yielded = c.clearedFlag("first_yielded.mem")
-		}
 		if _, isLast := side.(*pir.Last); isLast {
 			flags[i].ran = c.clearedFlag("first_side_ran.mem")
+		}
+		if pir.Fallible(side) {
+			flags[i].yielded = c.clearedFlag("first_yielded.mem")
 		}
 	}
 
@@ -749,11 +750,11 @@ func (c *Compiler) lowerFirst(f *pir.First, tested []pir.OutcomeRef) loweredNode
 
 	i1 := Int{Width: 1}
 	for i := range f.Sides {
-		if !flags[i].yielded.IsNil() {
-			sides[i].yielded = c.createLoad(flags[i].yielded, i1, "first_yielded")
-		}
 		if !flags[i].ran.IsNil() {
 			sides[i].ran = c.createLoad(flags[i].ran, i1, "first_side_ran")
+		}
+		if !flags[i].yielded.IsNil() {
+			sides[i].yielded = c.createLoad(flags[i].yielded, i1, "first_yielded")
 		}
 	}
 	return loweredNode{id: f.Result, sources: sides}
@@ -812,21 +813,21 @@ func (c *Compiler) clearedFlag(name string) llvm.Value {
 func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef, mapped bool, flags sideFlags) loweredSource {
 	i1 := Int{Width: 1}
 	src := loweredSource{}
-	yielded := flags.yielded
-	if yielded.IsNil() {
-		yielded = c.clearedFlag("last_yielded.mem")
-	}
 	ran := flags.ran
 	if ran.IsNil() && mapped {
 		ran = c.clearedFlag("last_ran.mem")
 	}
+	yielded := flags.yielded
+	if yielded.IsNil() {
+		yielded = c.clearedFlag("last_yielded.mem")
+	}
 
-	c.lowerLastSides(l.Sides, tested, mapped, &src, yielded, ran)
+	c.lowerLastSides(l.Sides, tested, mapped, &src, ran, yielded)
 
-	src.yielded = c.createLoad(yielded, i1, "last_yielded")
 	if !ran.IsNil() {
 		src.ran = c.createLoad(ran, i1, "last_ran")
 	}
+	src.yielded = c.createLoad(yielded, i1, "last_yielded")
 	return src
 }
 
@@ -834,12 +835,12 @@ func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef, mapped bool, 
 // after it. A side before the final one is a check that is only tested. The
 // final side sets the yielded flag. Where mapped holds, it stages its value
 // in src and sets the ran flag; otherwise it is a check that is only tested.
-func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, mapped bool, src *loweredSource, yielded, ran llvm.Value) {
+func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, mapped bool, src *loweredSource, ran, yielded llvm.Value) {
 	i1 := Int{Width: 1}
 	if len(sides) > 1 {
 		held := c.lowerTested(sides[0].(*pir.Check), tested)
 		c.withCondBranch(held, "last_next", func() {
-			c.lowerLastSides(sides[1:], tested, mapped, src, yielded, ran)
+			c.lowerLastSides(sides[1:], tested, mapped, src, ran, yielded)
 		}, nil)
 		return
 	}
