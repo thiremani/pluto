@@ -764,7 +764,7 @@ func (c *Compiler) lowerFirst(f *pir.First, tested []pir.OutcomeRef) loweredNode
 // where it failed.
 func (c *Compiler) lowerSides(f *pir.First, tested []pir.OutcomeRef, sides []loweredSource, flags []sideFlags, i int) {
 	sides[i] = c.lowerFirstSide(f.Sides[i], tested, flags[i])
-	if flags[i].yielded.IsNil() || i+1 == len(sides) {
+	if i+1 == len(sides) {
 		return
 	}
 	c.withCondBranch(c.builder.CreateNot(sides[i].yielded, "first_failed"), "first_fallback", func() {
