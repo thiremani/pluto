@@ -188,8 +188,10 @@ func result(node Node) (OutcomeID, bool) {
 	return NoOutcome, false
 }
 
-// Outcomes counts the outcomes node binds, those of the nodes inside it
-// included, so that the node after it takes the next ID in execution order.
+// Outcomes counts the outcomes node binds, those of the nodes inside its
+// sides included, so that the node after it takes the next ID in execution
+// order. It is asked about a value, never about a gate, whose body holds the
+// values and is counted through them.
 func Outcomes(node Node) int {
 	total := 0
 	if _, binds := result(node); binds {
