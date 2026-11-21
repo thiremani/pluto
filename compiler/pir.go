@@ -775,8 +775,9 @@ func (c *Compiler) lowerSides(f *pir.First, tested []pir.OutcomeRef, sides []low
 // supplies. A side runs on a path of its own, so the value it supplies is
 // staged in memory, which the commit reads where the side yielded: an eval's
 // or a check's outcome here, and a last's final side's in the last's own
-// staging. A last sets its own flags; any other side holds nothing to release
-// once it has run, so it sets only whether it yielded.
+// staging. A last sets both of its bits; any other side records only whether
+// it yielded, since entering it stages its value and only a path on which the
+// sides before it failed reaches its release.
 func (c *Compiler) lowerFirstSide(side pir.Node, tested []pir.OutcomeRef, flags sideFlags) loweredSource {
 	if l, isLast := side.(*pir.Last); isLast {
 		return c.lowerLast(l, tested, true, flags)

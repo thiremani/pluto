@@ -2041,6 +2041,11 @@ s = "kept"
 `+tc.statement+`
 n, s, sarr`)
 
+			cleared := strings.Index(ir, "store i1 false, ptr "+tc.ran+".mem")
+			parted := strings.Index(ir, "last_next_if:")
+			require.NotEqual(t, -1, cleared, "the flag must start false, so that it reads false where the final side never ran")
+			require.NotEqual(t, -1, parted, "expected the block the check before the final side admits")
+			require.Less(t, cleared, parted, "the flag must be cleared before the sides part")
 			require.Contains(t, ir, "store i1 true, ptr "+tc.ran+".mem", "the final side must set the flag")
 			require.Contains(t, ir, tc.ran+" = load i1, ptr "+tc.ran+".mem", "the branch must read the flag the final side sets")
 			require.Contains(t, ir, "br i1 "+tc.ran+", label %ran_if, label %ran_cont")

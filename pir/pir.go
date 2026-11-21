@@ -108,8 +108,8 @@ type Last struct {
 // its checks may not hold and no fallback follows a last of its own.
 func (l *Last) MaySkip() bool { return true }
 
-// Final returns the side whose outcome is the last's own.
-func (l *Last) Final() Node { return l.Sides[len(l.Sides)-1] }
+// final returns the side whose outcome is the last's own.
+func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
 
 // Check evaluates one comparison (plan §4): its outcome is the left operand,
 // and it yields where the comparison holds. A failed access in an operand
@@ -207,7 +207,7 @@ func Outcomes(node Node) int {
 // supplies its own, and a last supplies its final side's.
 func supplier(node Node) Supplier {
 	if l, isLast := node.(*Last); isLast {
-		return supplier(l.Final())
+		return supplier(l.final())
 	}
 	return node.(Supplier)
 }
@@ -215,8 +215,7 @@ func supplier(node Node) Supplier {
 // Fallible reports a node a failure can keep from yielding, so that a
 // fallback after it has something to resolve: an eval where it holds a
 // checked access, and a check or a last always, a comparison being able not
-// to hold. It is asked about a side of a first and a last's final side, and
-// about no other node.
+// to hold. It is asked about a side of a first, and about no other node.
 func Fallible(node Node) bool {
 	if ev, isEval := node.(*Eval); isEval {
 		return ev.MayFail()

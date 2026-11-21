@@ -1951,8 +1951,9 @@ it failed, and stages the value each supplies: an `eval`'s or a `check`'s
 outcome in memory of its own, and a `last`'s final side's in the `last`'s own
 staging. A side runs on a path of its own, so the bits the commit reads are
 cleared before the sides part: the bit that says the side yielded, as before,
-and, for a side that is a `last` whose final side can itself fail, the bit
-that says that side ran and staged a value to release.
+and, for a side that is a `last`, the bit that says its final side ran and
+staged a value to release. A `last` writes the bits its caller cleared, so a
+side of a `first` keeps none of its own.
 
 Over the fixtures as they stood before this slice, 28 more assignments plan,
 each as one plan: 13 with a comparison for a side and 15 with an `&&`. The

@@ -106,8 +106,8 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 		if err := validateLast(p.Label, "last %t0", 1, cond, compatible, false); err != nil {
 			return 0, err
 		}
-		if _, isCheck := cond.Final().(*Check); !isCheck {
-			return 0, fmt.Errorf("plan %s: last %%t0 ends in %T, and a gate's condition ends in a check", p.Label, cond.Final())
+		if _, isCheck := cond.final().(*Check); !isCheck {
+			return 0, fmt.Errorf("plan %s: last %%t0 ends in %T, and a gate's condition ends in a check", p.Label, cond.final())
 		}
 	default:
 		return 0, fmt.Errorf("plan %s: gate follows %T, which is no condition", p.Label, before[0])
