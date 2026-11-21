@@ -271,7 +271,7 @@ func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 	return true
 }
 
-// planOOBScope gives an eval's index reads their scope (plan §9): a failed
+// planOOBScope gives a node's index reads their scope (plan §9): a failed
 // read runs the fallback that follows its side of a first, and skips the
 // outcome otherwise. The router admits a read only in those two places.
 func planOOBScope(expr ast.Expression, fallbackFollows bool) pir.OOBScope {
@@ -474,8 +474,8 @@ func (c *Compiler) buildCheck(cmp *ast.InfixExpression, id pir.OutcomeID, fallba
 	return &pir.Check{Result: id, Expr: cmp, Slots: []pir.Slot{c.planSlot(cmp.Left, t)}, OnOOB: planOOBScope(cmp, fallbackFollows)}
 }
 
-// buildEval plans expr as one eval; fallbackFollows says it is a side of a
-// first with a side after it.
+// buildEval plans expr as one eval; fallbackFollows says a fallback follows
+// the side of a first it belongs to.
 func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID, fallbackFollows bool) *pir.Eval {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	ev := &pir.Eval{Result: id, Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), OnOOB: planOOBScope(expr, fallbackFollows)}

@@ -1965,15 +1965,18 @@ same code as before. With the router admitting no condition for a side, all
 the slice touches no other statement.
 
 Staying legacy: an `||` as a statement's gate, which needs a `first` whose
-outcome is only tested and one that is a side of a `last`; a side of several
-slots; a side whose own `&&` does not plan; and an `||` under an operator, in
-a cell, in a call argument or in a print.
+outcome is only tested; an `||` as a side of an `&&`, as in
+`(a > 9 || b > 0) && 7`, which needs a `first` that is a side of a `last`;
+a side of several slots; a side whose own `&&` does not plan; and an `||`
+under an operator, in a cell, in a call argument or in a print. The gate's
+slice is where both nestings arrive, since each needs one of those two.
 
 Pinned by `TestPlanGoldenFirstConditions`, `TestPlanRouterRejections` and
 `TestPlanFirstReleasesLastSideWhereItRan`, on hand-built plans by `pir`'s
 `TestElaborate`, `TestValidateAccepts`, `TestValidateFirstSideRejects` and
 `TestRenderFirst`, and at run time by `cond/logical_ops`
-(`FirstLastRanAndFailed`, `FirstLastFallbackTested`) and the statements the
+(`FirstLastRanAndFailed`, `FirstLastFallbackTested`, `FirstLastDiscarded`)
+and the statements the
 fixtures already held, among them `cond/value_cond_expr`,
 `numeric/divide_checked` and `array/oob_fallback`.
 

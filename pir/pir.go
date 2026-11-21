@@ -52,8 +52,8 @@ const (
 	// An eval's mappings say in OnSkip what each target then holds, and a
 	// check's gate rejects the statement.
 	SkipOutcome
-	// UseFallback: the eval is a side of a first with a side after it, which
-	// runs where an access fails.
+	// UseFallback: the node is in a side of a first that a fallback follows,
+	// which runs where an access fails.
 	UseFallback
 )
 
@@ -213,7 +213,8 @@ func supplier(node Node) Supplier {
 // Fallible reports a node a failure can keep from yielding, so that a
 // fallback after it has something to resolve: an eval where it holds a
 // checked access, and a check or a last always, a comparison being able not
-// to hold.
+// to hold. It is asked about a side of a first and a last's final side, and
+// about no other node.
 func Fallible(node Node) bool {
 	if ev, isEval := node.(*Eval); isEval {
 		return ev.MayFail()
