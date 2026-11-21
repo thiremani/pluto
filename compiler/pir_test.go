@@ -2019,9 +2019,7 @@ hc`)
 // A last's final side runs only where the checks before it held, so what it
 // built is released in the block a branch on the bit that says it ran admits
 // (plan §8), whether it feeds a `_`, failed a read after building, or failed
-// its comparison: where it never ran, its memory holds nothing to release. A
-// final side that cannot fail ran wherever the last yielded, so that bit is
-// the last's own.
+// its comparison: where it never ran, its memory holds nothing to release.
 func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2029,7 +2027,7 @@ func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 		ran       string
 		staged    string
 	}{
-		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_yielded", "%discard"},
+		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_ran", "%discard"},
 		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free"},
 		{"FailedCheck", `s = n > 9 && MkStr(n) > "a"`, "%last_ran", "%temp_free"},
 	}
@@ -2074,8 +2072,8 @@ a, b, s`)
 	require.NotEqual(t, -1, parted, "expected the fallback side's own block")
 	require.Less(t, cleared, parted, "the bit must be cleared before the sides part")
 
-	require.Contains(t, irBlock(ir, "last_next_cont"), "store i1 %last_ran, ptr %first_side_ran.mem",
-		"the last must record whether its final side ran")
+	require.Contains(t, irBlock(ir, "last_next_if"), "store i1 true, ptr %first_side_ran.mem",
+		"the final side must set the first's own bit where it stages its value")
 	require.Contains(t, irBlock(ir, "first_fallback_cont"), "%first_side_ran = load i1, ptr %first_side_ran.mem",
 		"the bit must be read where every path reaches it")
 	require.Contains(t, ir, "br i1 %first_side_ran, label %ran_if")
