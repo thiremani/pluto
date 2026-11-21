@@ -816,6 +816,9 @@ func TestValidateFirstSideRejects(t *testing.T) {
 		{"MappedNodeInsideNestedLast", firstLastPlan, func(p *AssignPlan) {
 			p.Commit[0].Outcome.Outcome = 2
 		}, "commit references %t2, which sits inside first %t0"},
+		{"MappedNestedLastItself", firstLastPlan, func(p *AssignPlan) {
+			p.Commit[0].Outcome.Outcome = NoOutcome
+		}, "commit references unknown outcome %t-1"},
 		{"GateAsSide", firstLastPlan, func(p *AssignPlan) {
 			firstAt(p, 0).Sides[0] = &Gate{Cond: 1}
 		}, "side 1 of first %t0 is *pir.Gate, which is no eval, check or last"},

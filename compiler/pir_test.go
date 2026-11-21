@@ -210,8 +210,9 @@ fx = x > 9 || arr[9] || 1
 fa = x > 2 && 10 || 7
 fq = x > 2 < 9 && 10 || 7
 fg = x > 2 || x < 9 13
+fl = (x > 9 || x > 0) && 7
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fm, fn`)
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fl, fm, fn`)
 
 	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa"}, planLabels(plans))
 }
@@ -1778,8 +1779,6 @@ a, s, c, g, p, q, r, w`)
 `, plans[15].Render(false))
 }
 
-// A gate reads whether its check yielded and takes nothing, so what the check
-// built is released before the gate's region runs (plan §8).
 // Plan §4, §12: a side of a first takes its kind from the side itself, as a
 // last's sides do — a comparison is a check, a value-position && is a last
 // that binds no outcome, and any other side is an eval. A fallback resolves a
@@ -1806,12 +1805,13 @@ d = arr[9] > 0 && 1 || -1
 s = sarr[9] > "a" || h
 t = MkStr(a) > "a" && MkStr(b) || h
 p, q = a > 0 && 11 || 13, 5
+g = a > 0 && sarr[9] || b > 0 && sarr[1]
 x, n, z, u, c, d, p, q
-s, t, h`)
+s, t, h, g`)
 
 	require.Equal(t, []string{"assign sarr", "assign arr", "assign h", "assign a", "assign b", "assign x",
 		"assign n", "assign n", "assign z", "assign u", "assign c", "assign d", "assign s", "assign t",
-		"assign p, q"}, planLabels(plans))
+		"assign p, q", "assign g"}, planLabels(plans))
 
 	// A check side yields its left operand; the last side always yields, so
 	// the mapping always commits.
@@ -1974,8 +1974,34 @@ s, t, h`)
         p = %t0
         q = %t4
 `, plans[14].Render(false))
+	// A fallback resolves a failed read anywhere in the side before it, its
+	// nested last's own sides included, and the side no fallback follows
+	// skips the outcome from there just as a side of its own would.
+	require.Equal(t, `assign g
+    source "g = (((a > 0) && sarr[9]) || ((b > 0) && sarr[1]))"
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check I64 a > 0
+                next
+                    %t2 = eval owned Str sarr[9] [on-oob=fallback]
+            fallback
+                last Str
+                    %t3 = check I64 b > 0
+                next
+                    %t4 = eval owned Str sarr[1] [on-oob=skip]
+
+    commit
+        g = %t0 [move] [on-skip=zero]
+        drop %t2 [on-fallback]
+        drop %t4 [on-skip]
+`, plans[15].Render(true))
 }
 
+// A gate reads whether its check yielded and takes nothing, so what the check
+// built is released before the gate's region runs (plan §8).
 func TestPlanGateReleasesCheckFirst(t *testing.T) {
 	ir, _ := compileScriptAndCodeIR(t, "planGateRelease", `s = MkStr(x)
     s = "s-x"

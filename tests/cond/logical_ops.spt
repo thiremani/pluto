@@ -658,3 +658,9 @@ fsL = "left"
 fsR = "right"
 fsHeap = fsL > "zzz" || (fsL ⊕ "?") > "a" && fsR
 "FirstLastFallbackTested: -fsHeap"
+
+# A first whose fallback side is an && that builds a string the statement
+# discards: the bit that says that side ran is cleared before the sides part,
+# so the release reads it where the mappings land and frees what it built.
+_ = sl > "zzz" || a > 0 && (sl ⊕ "?")
+"FirstLastDiscarded: -sl"
