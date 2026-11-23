@@ -697,3 +697,19 @@ func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 	}
 	return nil, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Label, ref.Outcome)
 }
+
+// word names a node's kind as the text view spells it. A plan's values are
+// the only nodes it names, and Values unwraps a gate, so a gate has no word.
+func word(node Node) string {
+	switch node.(type) {
+	case *Eval:
+		return "eval"
+	case *Check:
+		return "check"
+	case *First:
+		return "first"
+	case *Last:
+		return "last"
+	}
+	panic(fmt.Sprintf("internal: no word for %T", node))
+}

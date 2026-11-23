@@ -271,21 +271,6 @@ func outcomeSlotType(node Node, i int) (t Type, inRange bool) {
 	return nil, false
 }
 
-// word names a node's kind as the text view spells it.
-func word(node Node) string {
-	switch node.(type) {
-	case *Eval:
-		return "eval"
-	case *Check:
-		return "check"
-	case *First:
-		return "first"
-	case *Last:
-		return "last"
-	}
-	return "gate"
-}
-
 type TargetKind int
 
 const (
