@@ -744,8 +744,9 @@ sit one level in, so a block literal reads as it is laid out (decided
 spans, dedented to the one it starts on, each cut before a comment that line
 ends with. So the parens the ast adds to spell out its own nesting are absent
 (`d = Twice(d) + 1`, not `d = (Twice(d) + 1)`), and an implicit
-multiplication reads as it was typed (`imp = 5a`). A statement no file spells
-— one a caller built — falls back to the ast's rendering. Within a line,
+multiplication reads as it was typed (`imp = 5a`). Every statement a plan is
+built from comes from a file, and validation rejects a plan whose head carries
+no source, so there is nothing to fall back to. Within a line,
 everything a reader could not otherwise see is
 escaped — a tab, a control, and every rune Unicode calls unprintable, the
 format and separator characters among them — so a source never breaks the

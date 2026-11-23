@@ -100,8 +100,8 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) 
 // the line that opens its execute region. The source prints as the lines its
 // file spells the statement with, one level in, so a literal that spans lines
 // reads as it is laid out, with every character a reader cannot see still
-// escaped; a statement no file spells carries the ast's rendering instead. A
-// node's operand stays one line, line breaks escaped with it (plan §12).
+// escaped. A node's operand stays one line, line breaks escaped with it
+// (plan §12).
 func writeHead(b *strings.Builder, head Head) {
 	fmt.Fprintf(b, "%s\n", head.Label)
 	b.WriteString("    source\n")

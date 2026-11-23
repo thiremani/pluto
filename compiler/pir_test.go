@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
-	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -821,18 +820,6 @@ copy, other, text`)
 `, plans[3].Render(true))
 	require.True(t, plans[3].Commit[0].Target.TypeOwnsHeap)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
-}
-
-// Plan §12: a plan quotes the source its file spells the statement with, and
-// falls back to the ast's rendering for a statement no file spells.
-func TestPlanSourceFallsBackToTheAst(t *testing.T) {
-	stmt := &ast.LetStatement{
-		Token: token.Token{Type: token.ASSIGN, Literal: "="},
-		Name:  []*ast.Identifier{{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"}},
-		Value: []ast.Expression{&ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5}},
-	}
-	require.Equal(t, "x = 5", spelling("", stmt))
-	require.Equal(t, "x = 5 # as the file has it", spelling("x = 5 # as the file has it", stmt))
 }
 
 // Plan §12: a multiline string literal is one eval operand on one line, its
