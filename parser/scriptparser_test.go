@@ -58,7 +58,7 @@ func TestAssign(t *testing.T) {
 // typed, a comment the line ends with is cut, and a statement of several
 // lines keeps its own shape dedented to its first line.
 func TestStatementSpelling(t *testing.T) {
-	const script = `b = a + 2 * 3
+	const script = `b = ((a))
 n = -a
 imp = 5a
 f = -8 >> 1 # arithmetic right shift
@@ -75,7 +75,7 @@ world"
 "out: -b -n"
 `
 	want := []string{
-		"b = a + 2 * 3",
+		"b = ((a))",
 		"n = -a",
 		"imp = 5a",
 		"f = -8 >> 1",
@@ -154,6 +154,9 @@ func TestStatementSpellingInBody(t *testing.T) {
     t = x * 2 # doubled
     s = "line one
 line two"
+    u =
+# flush left
+        x + 1
     r = t + 1
 `
 	l := lexer.New("TestStatementSpellingInBody", code)
@@ -171,7 +174,7 @@ line two"
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n\n    x + 1", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {

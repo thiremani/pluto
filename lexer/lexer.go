@@ -129,14 +129,21 @@ func (l *Lexer) lines() []string {
 // dedent is how far Text may move a span's lines left: the indentation of the
 // line it starts on, or the least a line in the span has where that is less,
 // as a table's hanging `:` header is. A line a string literal runs into holds
-// content rather than layout, so it neither moves nor counts.
-func (l *Lexer) dedent(lines []string, startLine, startColumn, endLine int) int {
+// content rather than layout, and a line its comment leaves blank holds
+// nothing, so neither counts. The span's lines come with their comments
+// already cut, since a comment may sit at any column and would otherwise
+// measure as the whole statement's indentation.
+func (l *Lexer) dedent(span [][]rune, startLine, startColumn int) int {
 	dedent := startColumn - 1
-	for n := startLine; n <= endLine && dedent > 0; n++ {
-		if l.stringBreaks[n-1] || strings.TrimSpace(lines[n-1]) == "" {
+	for i, runes := range span {
+		if dedent == 0 {
+			break
+		}
+		line := string(runes)
+		if l.stringBreaks[startLine+i-1] || strings.TrimSpace(line) == "" {
 			continue
 		}
-		dedent = min(dedent, len(lines[n-1])-len(strings.TrimLeft(lines[n-1], " ")))
+		dedent = min(dedent, len(line)-len(strings.TrimLeft(line, " ")))
 	}
 	return dedent
 }
@@ -154,21 +161,26 @@ func (l *Lexer) Text(startLine, startColumn, endLine int) string {
 		return ""
 	}
 
-	dedent := l.dedent(lines, startLine, startColumn, endLine)
-	spelled := make([]string, 0, endLine-startLine+1)
+	span := make([][]rune, 0, endLine-startLine+1)
 	for n := startLine; n <= endLine; n++ {
 		runes := []rune(lines[n-1])
 		if column, commented := l.comments[n]; commented {
 			runes = runes[:min(column-1, len(runes))]
 		}
-		if !l.stringBreaks[n-1] {
+		span = append(span, runes)
+	}
+
+	dedent := l.dedent(span, startLine, startColumn)
+	spelled := make([]string, len(span))
+	for i, runes := range span {
+		if !l.stringBreaks[startLine+i-1] {
 			runes = runes[min(dedent, len(runes)):]
 		}
 		line := string(runes)
-		if !l.stringBreaks[n] {
+		if !l.stringBreaks[startLine+i] {
 			line = strings.TrimRight(line, " \t")
 		}
-		spelled = append(spelled, line)
+		spelled[i] = line
 	}
 	return strings.Join(spelled, "\n")
 }

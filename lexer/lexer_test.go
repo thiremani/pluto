@@ -1428,6 +1428,8 @@ func TestText(t *testing.T) {
 	const str = "w = \"hello   \n \nworld\"\n"
 	const bodyStr = "r = G(x)\n    s = \"line one\nline two\"\n"
 	const hanging = "r = G(x)\n    t = [\n   : Name Score\n     \"Ada\" 1\n    ]\n"
+	const flushComment = "r = G(x)\n    m = [\n# flush left\n      2 3\n    ]\n"
+	const tabComment = "r = G(x)\n    m = [\n\t# tabbed\n      2 3\n    ]\n"
 	cases := []struct {
 		name                            string
 		src                             string
@@ -1440,6 +1442,8 @@ func TestText(t *testing.T) {
 		{"StringContentKeepsItsSpaces", str, 1, 1, 3, "w = \"hello   \n \nworld\""},
 		{"StringContentIsNotMovedLeft", bodyStr, 2, 5, 3, "s = \"line one\nline two\""},
 		{"HangingHeaderKeepsItsColon", hanging, 2, 5, 5, " t = [\n: Name Score\n  \"Ada\" 1\n ]"},
+		{"AFlushLeftCommentDoesNotHoldTheSpanBack", flushComment, 2, 5, 5, "m = [\n\n  2 3\n]"},
+		{"ATabbedCommentDoesNotHoldTheSpanBack", tabComment, 2, 5, 5, "m = [\n\n  2 3\n]"},
 		{"BeforeTheInput", script, 0, 1, 1, ""},
 		{"PastTheInput", script, 1, 1, 99, ""},
 		{"BeforeTheFirstColumn", script, 1, 0, 1, ""},
