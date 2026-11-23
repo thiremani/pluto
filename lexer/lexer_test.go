@@ -1477,3 +1477,36 @@ func TestTextLineEndings(t *testing.T) {
 		})
 	}
 }
+
+// Every token a source spells carries the runes that spell it, so a caller
+// can quote any span of the input from its tokens alone. A layout token
+// spells nothing and says so with a zero length.
+func TestTokenExtents(t *testing.T) {
+	const src = "a = 5 # one\nm = [\n  2 3\n]\ns = \"x\ny\"\nimp = 5a\n"
+	l := New("TestTokenExtents", src)
+	runes := []rune(src)
+	for {
+		tok, err := l.NextToken()
+		if tok.Type == token.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		switch tok.Type {
+		case token.INDENT, token.DEINDENT, token.NEWLINE:
+			continue
+		}
+		if tok.Len <= 0 {
+			t.Fatalf("token %q (type %d) at %d:%d spells no source", tok.Literal, int(tok.Type), tok.Line, tok.Column)
+		}
+		spelled := string(runes[tok.Pos : tok.Pos+tok.Len])
+		want := tok.Literal
+		if tok.Type == token.STRING {
+			want = `"` + tok.Literal + `"`
+		}
+		if spelled != want {
+			t.Fatalf("token at %d:%d spells %q, want %q", tok.Line, tok.Column, spelled, want)
+		}
+	}
+}

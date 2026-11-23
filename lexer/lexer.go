@@ -185,7 +185,9 @@ func (l *Lexer) Text(startLine, startColumn, endLine int) string {
 	return strings.Join(spelled, "\n")
 }
 
-// tokenAt makes a token at column on the line being read.
+// tokenAt makes a token at column on the line being read. Len stays zero:
+// the layout tokens this makes on their own spell no source, and lex measures
+// the ones that do once they are whole.
 func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) token.Token {
 	return token.Token{
 		FileName: l.FileName,
@@ -193,6 +195,7 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 		Literal:  literal,
 		Line:     l.lineOffset,
 		Column:   column,
+		Pos:      l.position,
 	}
 }
 
@@ -208,7 +211,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		return next.tok, &token.CompileError{Token: next.tok, Msg: next.msg}
 	}
 
-	tok, err := l.lex()
+	tok, err := l.measured()
 	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
 	}
@@ -281,7 +284,7 @@ func (l *Lexer) closes(column int) bool {
 // the error about it. A token carries one error, and lex reports none about
 // either character, so one from lex here would be a lexer bug.
 func (l *Lexer) queueLexed(msg string) {
-	tok, err := l.lex()
+	tok, err := l.measured()
 	if err != nil {
 		panic("internal: lex reported an error on the ']' or ':' that starts a line")
 	}
@@ -376,6 +379,15 @@ func (l *Lexer) dedentTo(n, column int, first rune) {
 		l.blocks = l.blocks[:len(l.blocks)-1]
 		l.pending.push(lexed{tok: at})
 	}
+}
+
+// measured lexes the next token and gives it the runes that spell it: lex
+// leaves the input just past a token it returns, so its length is how far the
+// position moved. Every token a source spells comes from here.
+func (l *Lexer) measured() (token.Token, *token.CompileError) {
+	tok, err := l.lex()
+	tok.Len = l.position - tok.Pos
+	return tok, err
 }
 
 func (l *Lexer) lex() (token.Token, *token.CompileError) {
