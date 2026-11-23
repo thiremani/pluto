@@ -96,10 +96,12 @@ type StmtParser struct {
 	l      *lexer.Lexer
 	errors []*token.CompileError
 
-	curToken    token.Token
-	peekToken   token.Token
-	stmtStart   token.Token   // the first token of the statement being parsed
-	savedTokens []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
+	curToken     token.Token
+	peekToken    token.Token
+	stmtStart    token.Token   // the first token of the statement being parsed
+	stmtEnd      token.Token   // the last token of it a source spells
+	stmtLiterals []token.Token // the string literals it spans
+	savedTokens  []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
 
 	prefixParseFns  map[string]prefixParseFn
 	infixParseFns   map[string]infixParseFn
@@ -178,6 +180,7 @@ func New(l *lexer.Lexer) *StmtParser {
 func (p *StmtParser) nextToken() {
 	// always advance current token
 	p.curToken = p.peekToken
+	p.noteSpelled(p.curToken)
 
 	// get new peek token from queue or lexer
 	if len(p.savedTokens) > 0 {
@@ -421,11 +424,25 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	return program
 }
 
+// noteSpelled keeps what a statement's spelling needs of the token now
+// current: the last one a source spells, since the layout token a statement
+// ends on reaches past it, and the string literals it spans, whose characters
+// are the string's own rather than the file's layout.
+func (p *StmtParser) noteSpelled(tok token.Token) {
+	if tok.Len == 0 {
+		return
+	}
+	p.stmtEnd = tok
+	if tok.Type == token.STRING {
+		p.stmtLiterals = append(p.stmtLiterals, tok)
+	}
+}
+
 // spell gives stmt the source its file spells it with, from the token the
-// statement started at to the one it ended on. A plan quotes that rather than
-// the ast's own rendering, so what a reader sees is what they wrote.
+// statement started at to the last one it spells. A plan quotes that rather
+// than the ast's own rendering, so what a reader sees is what they wrote.
 func (p *StmtParser) spell(stmt ast.Statement) {
-	src := p.l.Text(p.stmtStart.Line, p.stmtStart.Column, p.curToken.Line)
+	src := p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
 		s.Src = src
@@ -440,6 +457,9 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	}
 	firstToken := p.curToken
 	p.stmtStart = firstToken
+	p.stmtEnd = firstToken
+	p.stmtLiterals = p.stmtLiterals[:0]
+	p.noteSpelled(firstToken)
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its

@@ -115,6 +115,7 @@ func TestSpellingReparses(t *testing.T) {
 		"long =\n    a + 1\n",
 		"w = \"hello   \n \n\t\nworld\"\n",
 		"s = \"a\nb\"\n\"out: -s\"\n",
+		"u =\n# a comment the statement runs past\n    1 + 1\n",
 	}
 	for i, script := range scripts {
 		t.Run(fmt.Sprintf("script%d", i), func(t *testing.T) {
@@ -174,7 +175,7 @@ line two"
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n\n    x + 1", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {

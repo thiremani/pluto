@@ -18,10 +18,6 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
-	src          []string     // the input's physical lines, read on demand
-	comments     map[int]int  // the column a line's comment starts at, by line
-	stringBreaks map[int]bool // the lines a string literal runs past the end of
-
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
@@ -96,93 +92,70 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	return tok
 }
 
-// noteComment records where the comment on the line being read starts, so
-// that quoting a statement can stop before it.
-func (l *Lexer) noteComment() {
-	if l.comments == nil {
-		l.comments = make(map[int]int)
-	}
-	l.comments[l.lineOffset] = l.column
-}
-
-// noteStringBreak records that a string literal runs past the end of the line
-// being read, so that quoting a statement leaves the next line's own
-// characters alone: they are the string's content, not the file's layout.
-func (l *Lexer) noteStringBreak() {
-	if l.stringBreaks == nil {
-		l.stringBreaks = make(map[int]bool)
-	}
-	l.stringBreaks[l.lineOffset] = true
-}
-
-// lines returns the source as its physical lines, each terminator the
-// language counts as one — LF, CRLF and CR alike, as LogicalRune reads them —
-// ending exactly one line.
-func (l *Lexer) lines() []string {
-	if l.src == nil {
-		text := strings.ReplaceAll(strings.ReplaceAll(string(l.input), "\r\n", "\n"), "\r", "\n")
-		l.src = strings.Split(text, "\n")
-	}
-	return l.src
-}
-
-// dedent is how far Text may move a span's lines left: the indentation of the
-// line it starts on, or the least a line in the span has where that is less,
-// as a table's hanging `:` header is. A line a string literal runs into holds
-// content rather than layout, and a line its comment leaves blank holds
-// nothing, so neither counts. The span's lines come with their comments
-// already cut, since a comment may sit at any column and would otherwise
-// measure as the whole statement's indentation.
-func (l *Lexer) dedent(span [][]rune, startLine, startColumn int) int {
-	dedent := startColumn - 1
-	for i, runes := range span {
-		if dedent == 0 {
-			break
-		}
-		line := string(runes)
-		if l.stringBreaks[startLine+i-1] || strings.TrimSpace(line) == "" {
-			continue
-		}
-		dedent = min(dedent, len(line)-len(strings.TrimLeft(line, " ")))
-	}
-	return dedent
-}
-
-// Text is the source a statement is spelled with: the lines it spans, each cut
-// before any comment that line ends with, moved left to the indentation of the
-// line it starts on, and with trailing space dropped. A line a string literal
-// runs into keeps its own characters, since they are what the string holds.
-// Lines and columns are the ones a token carries, counted from one; a span
-// naming no line of this input is empty. A comment is cut only on a line the
-// lexer has already read.
-func (l *Lexer) Text(startLine, startColumn, endLine int) string {
-	lines := l.lines()
-	if startLine < 1 || startColumn < 1 || startLine > endLine || endLine > len(lines) {
+// Spelling is the source a statement is spelled with: the input from first's
+// own start to the end of last, so a comment the statement does not reach is
+// never in it. Every line after the first moves left by the indentation first
+// stands at, or by its own leading spaces where it has fewer, so nothing it
+// spells is ever cut. A line a string literal runs into keeps its characters
+// as they are, since those are what the string holds; literals are the string
+// tokens the statement spans. A statement either token spells no source has
+// no spelling.
+func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
+	if first.Len == 0 || last.Len == 0 || first.Pos > last.Pos {
 		return ""
 	}
 
-	span := make([][]rune, 0, endLine-startLine+1)
-	for n := startLine; n <= endLine; n++ {
-		runes := []rune(lines[n-1])
-		if column, commented := l.comments[n]; commented {
-			runes = runes[:min(column-1, len(runes))]
+	dedent := first.Column - 1
+	spelled := make([]string, 0, 4)
+	for i, line := range spanLines(l.input, first.Pos, last.Pos+last.Len) {
+		text := line.text
+		if i > 0 && !inLiteral(literals, line.pos) {
+			text = text[min(dedent, len(text)-len(strings.TrimLeft(text, " "))):]
 		}
-		span = append(span, runes)
-	}
-
-	dedent := l.dedent(span, startLine, startColumn)
-	spelled := make([]string, len(span))
-	for i, runes := range span {
-		if !l.stringBreaks[startLine+i-1] {
-			runes = runes[min(dedent, len(runes)):]
+		if !inLiteral(literals, line.end) {
+			text = strings.TrimRight(text, " \t")
 		}
-		line := string(runes)
-		if !l.stringBreaks[startLine+i] {
-			line = strings.TrimRight(line, " \t")
-		}
-		spelled[i] = line
+		spelled = append(spelled, text)
 	}
 	return strings.Join(spelled, "\n")
+}
+
+// spanLine is one line of a span: its text, and where in the input it starts
+// and ends. A line a literal runs into starts inside one; a line a literal
+// runs out of ends inside one.
+type spanLine struct {
+	text string
+	pos  int
+	end  int
+}
+
+// spanLines splits the input from pos to end into lines, each terminator the
+// language counts as one — LF, CRLF and CR alike, as LogicalRune reads them —
+// ending exactly one line.
+func spanLines(input []rune, pos, end int) []spanLine {
+	lines := []spanLine{}
+	for start := pos; ; {
+		i := start
+		for i < end && input[i] != '\n' && input[i] != '\r' {
+			i++
+		}
+		lines = append(lines, spanLine{text: string(input[start:i]), pos: start, end: i})
+		if i >= end {
+			return lines
+		}
+		_, start = LogicalRune(input, i)
+	}
+}
+
+// inLiteral reports whether pos falls inside one of the string literals,
+// where the characters are the string's own rather than the file's layout.
+func inLiteral(literals []token.Token, pos int) bool {
+	for _, lit := range literals {
+		if pos > lit.Pos && pos < lit.Pos+lit.Len {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenAt makes a token at column on the line being read. Len stays zero:
@@ -397,7 +370,6 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
-		l.noteComment()
 		l.skipComment()
 	}
 
@@ -522,7 +494,6 @@ func (l *Lexer) nextLine() (column int, first rune, tab int) {
 		case '\n': // a blank line
 			l.skipWhitespace()
 		case '#': // a comment line
-			l.noteComment()
 			l.skipComment()
 		default:
 			return column, first, tab
@@ -634,9 +605,6 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	}
 
 	for l.curr != '"' && !l.atEOF() {
-		if l.curr == '\n' {
-			l.noteStringBreak()
-		}
 		if l.curr == 0 {
 			setError("NUL character is not allowed in string literals")
 			l.readRune()

@@ -740,9 +740,13 @@ as in the source with each of its line breaks escaped the same way
 A plan's `source` follows the opposite rule, since it is the whole statement
 rather than an operand: the label stands alone and the statement's own lines
 sit one level in, so a block literal reads as it is laid out (decided
-2026-11-23). What it renders is the file's own text: the lines the statement
-spans, dedented to the one it starts on, each cut before a comment that line
-ends with. So the parens the ast adds to spell out its own nesting are absent
+2026-11-23). What it renders is the file's own text, from the statement's
+first token to its last: a comment the statement does not reach is never in
+it, while one between two of its own tokens is. Every line after the first
+moves left to where the first stands, or by its own leading spaces where it
+has fewer, so nothing a line spells is ever cut, and a line a string literal
+runs through keeps the characters the string holds. So the parens the ast adds
+to spell out its own nesting are absent
 (`d = Twice(d) + 1`, not `d = (Twice(d) + 1)`), and an implicit
 multiplication reads as it was typed (`imp = 5a`). Every statement a plan is
 built from comes from a file, and validation rejects a plan whose head carries

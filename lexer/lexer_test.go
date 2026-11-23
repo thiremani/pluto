@@ -1419,60 +1419,81 @@ func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
 	}
 }
 
-// Text quotes a statement as its file spells it: lines dedented to the one it
-// starts on, each cut before a comment, with LF, CRLF and CR all ending one
-// line. A span naming no line of the input is empty.
-func TestText(t *testing.T) {
-	const script = "a = 1 # one\nm = [\n  # a row\n  2 3\n]\n"
-	const body = "r = G(x)\n    m = [\n      2 3\n    ]\n"
-	const str = "w = \"hello   \n \nworld\"\n"
-	const bodyStr = "r = G(x)\n    s = \"line one\nline two\"\n"
-	const hanging = "r = G(x)\n    t = [\n   : Name Score\n     \"Ada\" 1\n    ]\n"
-	const flushComment = "r = G(x)\n    m = [\n# flush left\n      2 3\n    ]\n"
-	const tabComment = "r = G(x)\n    m = [\n\t# tabbed\n      2 3\n    ]\n"
+// spellAll quotes every token of src as one span, as a parser does for a
+// statement: from the first token a source spells to the last, with the
+// string literals between them.
+func spellAll(t *testing.T, src string) string {
+	t.Helper()
+	l := New("spellAll", src)
+	var first, last token.Token
+	var literals []token.Token
+	for {
+		tok, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Len == 0 {
+			continue
+		}
+		if first.Len == 0 {
+			first = tok
+		}
+		last = tok
+		if tok.Type == token.STRING {
+			literals = append(literals, tok)
+		}
+	}
+	return l.Spelling(first, last, literals)
+}
+
+// Spelling quotes a statement as its file spells it: from its first token to
+// its last, so a comment it does not reach is never in it, with every later
+// line moved left to where the first stands and a line a string literal runs
+// through left as the string holds it.
+func TestSpelling(t *testing.T) {
 	cases := []struct {
-		name                            string
-		src                             string
-		startLine, startColumn, endLine int
-		want                            string
+		name string
+		src  string
+		want string
 	}{
-		{"OneLineCutsItsComment", script, 1, 1, 1, "a = 1"},
-		{"LinesKeepTheirShape", script, 2, 1, 5, "m = [\n\n  2 3\n]"},
-		{"DedentedToItsFirstLine", body, 2, 5, 4, "m = [\n  2 3\n]"},
-		{"StringContentKeepsItsSpaces", str, 1, 1, 3, "w = \"hello   \n \nworld\""},
-		{"StringContentIsNotMovedLeft", bodyStr, 2, 5, 3, "s = \"line one\nline two\""},
-		{"HangingHeaderKeepsItsColon", hanging, 2, 5, 5, " t = [\n: Name Score\n  \"Ada\" 1\n ]"},
-		{"AFlushLeftCommentDoesNotHoldTheSpanBack", flushComment, 2, 5, 5, "m = [\n\n  2 3\n]"},
-		{"ATabbedCommentDoesNotHoldTheSpanBack", tabComment, 2, 5, 5, "m = [\n\n  2 3\n]"},
-		{"BeforeTheInput", script, 0, 1, 1, ""},
-		{"PastTheInput", script, 1, 1, 99, ""},
-		{"BeforeTheFirstColumn", script, 1, 0, 1, ""},
-		{"Backwards", script, 3, 1, 2, ""},
+		{"OneLineLeavesItsComment", "a = 1 # one\n", "a = 1"},
+		{"LinesKeepTheirShape", "m = [\n  2 3\n]\n", "m = [\n  2 3\n]"},
+		{"AnInteriorCommentStays", "m = [\n  # a row\n  2 3\n]\n", "m = [\n  # a row\n  2 3\n]"},
+		{"StringContentKeepsItsSpaces", "w = \"hello   \n \nworld\"\n", "w = \"hello   \n \nworld\""},
+		{"ADeeperLineKeepsItsShape", "long =\n    a + 1\n", "long =\n    a + 1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			l := New("TestText", tc.src)
-			for {
-				tok, _ := l.NextToken()
-				if tok.Type == token.EOF {
-					break
-				}
-			}
-			if got := l.Text(tc.startLine, tc.startColumn, tc.endLine); got != tc.want {
-				t.Fatalf("Text(%d, %d, %d) = %q, want %q", tc.startLine, tc.startColumn, tc.endLine, got, tc.want)
+			if got := spellAll(t, tc.src); got != tc.want {
+				t.Fatalf("Spelling = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// Text reads a terminator the same however the file spells it, as the lexer
-// itself does.
-func TestTextLineEndings(t *testing.T) {
-	for name, src := range map[string]string{"LF": "a = 1\nb = 2\n", "CRLF": "a = 1\r\nb = 2\r\n", "CR": "a = 1\rb = 2\r"} {
+// A statement either token spells no source has no spelling, so a caller that
+// hands over a layout token gets nothing rather than a slice of the input.
+func TestSpellingWantsSpelledTokens(t *testing.T) {
+	l := New("TestSpellingWantsSpelledTokens", "a = 1\n")
+	first, _ := l.NextToken()
+	if got := l.Spelling(first, token.Token{}, nil); got != "" {
+		t.Fatalf("Spelling with an unspelled last = %q, want %q", got, "")
+	}
+	if got := l.Spelling(token.Token{}, first, nil); got != "" {
+		t.Fatalf("Spelling with an unspelled first = %q, want %q", got, "")
+	}
+}
+
+// Spelling reads a terminator the same however the file spells it, as the
+// lexer itself does.
+func TestSpellingLineEndings(t *testing.T) {
+	for name, src := range map[string]string{"LF": "m = [\n  2\n]\n", "CRLF": "m = [\r\n  2\r\n]\r\n", "CR": "m = [\r  2\r]\r"} {
 		t.Run(name, func(t *testing.T) {
-			l := New("TestTextLineEndings", src)
-			if got, want := l.Text(1, 1, 2), "a = 1\nb = 2"; got != want {
-				t.Fatalf("Text = %q, want %q", got, want)
+			if got, want := spellAll(t, src), "m = [\n  2\n]"; got != want {
+				t.Fatalf("Spelling = %q, want %q", got, want)
 			}
 		})
 	}
