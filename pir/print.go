@@ -207,9 +207,9 @@ func renderPayload(expr ast.Expression) string {
 }
 
 // logicalNewlines rewrites every line terminator Pluto counts as one — LF,
-// CRLF and CR alike (README, "Source files are UTF-8") — to LF, so a
-// terminator reads the same however a file spells it and never collides with
-// the `\r` an escape in the source asks for.
+// CRLF and CR alike, as lexer.LogicalRune reads them — to LF, so a terminator
+// reads the same however a file spells it and never collides with the `\r` an
+// escape in the source asks for.
 func logicalNewlines(s string) string {
 	if !strings.ContainsRune(s, '\r') {
 		return s

@@ -745,8 +745,10 @@ file's bytes, so an operator root carries the pair it wraps itself in
 (`d = (Twice(d) + 1)`) and a block literal's rows carry the ast's own
 indentation. Within a line, everything a reader could not otherwise see is
 escaped — a tab, a control, and every rune Unicode calls unprintable, the
-format and separator characters among them — so no two statements render
-alike and a source never breaks the layout. Only a line terminator becomes a
+format and separator characters among them — so a source never breaks the
+layout. Two statements still render alike where they hold the same text, a
+physical tab and a `\t` escape among them; what these rules rule out is two
+statements that differ. Only a line terminator becomes a
 line, and LF, CRLF and CR all count as one (README), so a terminator reads the
 same however a file spells it and never collides with the `\r` a source asks
 for by escape. A multi-line string literal is the one place the two rules
