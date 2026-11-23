@@ -51,6 +51,77 @@ func TestAssign(t *testing.T) {
 	}
 }
 
+// Plan §12: a statement carries the source its file spells it with, so a
+// plan quotes what its author wrote rather than the ast's own rendering: the
+// parens the ast adds are absent, an implicit multiplication reads as it was
+// typed, a comment the line ends with is cut, and a statement of several
+// lines keeps its own shape dedented to its first line.
+func TestStatementSpelling(t *testing.T) {
+	const script = `b = a + 2 * 3
+n = -a
+imp = 5a
+f = -8 >> 1 # arithmetic right shift
+m = [
+  1 2
+  3 4
+]
+long =
+    a + 1
+"out: -b -n"
+`
+	want := []string{
+		"b = a + 2 * 3",
+		"n = -a",
+		"imp = 5a",
+		"f = -8 >> 1",
+		"m = [\n  1 2\n  3 4\n]",
+		"long =\n    a + 1",
+		`"out: -b -n"`,
+	}
+
+	l := lexer.New("TestStatementSpelling", script)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+	require.Len(t, program.Statements, len(want))
+
+	for i, stmt := range program.Statements {
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			require.Equal(t, want[i], s.Src, "statement %d", i)
+		case *ast.PrintStatement:
+			require.Equal(t, want[i], s.Src, "statement %d", i)
+		default:
+			t.Fatalf("statement %d is %T", i, stmt)
+		}
+	}
+}
+
+// Plan §12: a statement inside a function body is spelled dedented to its own
+// first line, so a plan can place it at its own level.
+func TestStatementSpellingInBody(t *testing.T) {
+	const code = `r = G(x)
+    t = x * 2 # doubled
+    r = t + 1
+`
+	l := lexer.New("TestStatementSpellingInBody", code)
+	cp := NewCodeParser(l)
+	parsed := cp.Parse()
+	require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
+
+	var spelled []string
+	for _, stmt := range parsed.Statements {
+		fn, isFunc := stmt.(*ast.FuncStatement)
+		if !isFunc {
+			continue
+		}
+		for _, inner := range fn.Body.Statements {
+			spelled = append(spelled, inner.(*ast.LetStatement).Src)
+		}
+	}
+	require.Equal(t, []string{"t = x * 2", "r = t + 1"}, spelled)
+}
+
 func TestInvalidAssignment(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -145,6 +145,7 @@ type LetStatement struct {
 	Name      []*Identifier
 	Value     []Expression
 	Condition []Expression
+	Src       string // the source the file spells it with; String() where a caller built it
 }
 
 func (ls *LetStatement) statementNode()   {}
@@ -175,6 +176,7 @@ func (ls *LetStatement) String() string {
 type PrintStatement struct {
 	Token      token.Token // the first token of the expression
 	Expression *CallExpression
+	Src        string // the source the file spells it with; String() where a caller built it
 }
 
 func (ps *PrintStatement) statementNode()   {}

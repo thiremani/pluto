@@ -1418,3 +1418,51 @@ func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
 		}
 	}
 }
+
+// Text quotes a statement as its file spells it: lines dedented to the one it
+// starts on, each cut before a comment, with LF, CRLF and CR all ending one
+// line. A span naming no line of the input is empty.
+func TestText(t *testing.T) {
+	const script = "a = 1 # one\nm = [\n  # a row\n  2 3\n]\n"
+	const body = "r = G(x)\n    m = [\n      2 3\n    ]\n"
+	cases := []struct {
+		name                            string
+		src                             string
+		startLine, startColumn, endLine int
+		want                            string
+	}{
+		{"OneLineCutsItsComment", script, 1, 1, 1, "a = 1"},
+		{"LinesKeepTheirShape", script, 2, 1, 5, "m = [\n\n  2 3\n]"},
+		{"DedentedToItsFirstLine", body, 2, 5, 4, "m = [\n  2 3\n]"},
+		{"BeforeTheInput", script, 0, 1, 1, ""},
+		{"PastTheInput", script, 1, 1, 99, ""},
+		{"Backwards", script, 3, 1, 2, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := New("TestText", tc.src)
+			for {
+				tok, _ := l.NextToken()
+				if tok.Type == token.EOF {
+					break
+				}
+			}
+			if got := l.Text(tc.startLine, tc.startColumn, tc.endLine); got != tc.want {
+				t.Fatalf("Text(%d, %d, %d) = %q, want %q", tc.startLine, tc.startColumn, tc.endLine, got, tc.want)
+			}
+		})
+	}
+}
+
+// Text reads a terminator the same however the file spells it, as the lexer
+// itself does.
+func TestTextLineEndings(t *testing.T) {
+	for name, src := range map[string]string{"LF": "a = 1\nb = 2\n", "CRLF": "a = 1\r\nb = 2\r\n", "CR": "a = 1\rb = 2\r"} {
+		t.Run(name, func(t *testing.T) {
+			l := New("TestTextLineEndings", src)
+			if got, want := l.Text(1, 1, 2), "a = 1\nb = 2"; got != want {
+				t.Fatalf("Text = %q, want %q", got, want)
+			}
+		})
+	}
+}

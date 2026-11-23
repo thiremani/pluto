@@ -98,6 +98,7 @@ type StmtParser struct {
 
 	curToken    token.Token
 	peekToken   token.Token
+	stmtStart   token.Token   // the first token of the statement being parsed
 	savedTokens []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
 
 	prefixParseFns  map[string]prefixParseFn
@@ -409,6 +410,7 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	program.Statements = []ast.Statement{}
 	for !p.curTokenIs(token.EOF) {
 		if stmt := p.parseStatement(); stmt != nil {
+			p.spell(stmt)
 			program.Statements = append(program.Statements, stmt)
 		} else {
 			p.skipLine()
@@ -419,11 +421,25 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	return program
 }
 
+// spell gives stmt the source its file spells it with, from the token the
+// statement started at to the one it ended on. A plan quotes that rather than
+// the ast's own rendering, so what a reader sees is what they wrote.
+func (p *StmtParser) spell(stmt ast.Statement) {
+	src := p.l.Text(p.stmtStart.Line, p.stmtStart.Column, p.curToken.Line)
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		s.Src = src
+	case *ast.PrintStatement:
+		s.Src = src
+	}
+}
+
 func (p *StmtParser) parseStatement() ast.Statement {
 	if p.skipIndented() {
 		return nil
 	}
 	firstToken := p.curToken
+	p.stmtStart = firstToken
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its
@@ -1675,6 +1691,7 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
 		if stmt := p.parseStatement(); stmt != nil {
+			p.spell(stmt)
 			block.Statements = append(block.Statements, stmt)
 		} else {
 			p.skipLine()

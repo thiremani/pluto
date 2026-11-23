@@ -18,6 +18,9 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
+	lines    []string    // the input's physical lines, read on demand
+	comments map[int]int // the column a line's comment starts at, by line
+
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
@@ -90,6 +93,53 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	tok := l.tokenAt(tokenType, literal, l.column)
 	tok.HadSpace = hadSpace
 	return tok
+}
+
+// noteComment records where the comment on the line being read starts, so
+// that quoting a statement can stop before it.
+func (l *Lexer) noteComment() {
+	if l.comments == nil {
+		l.comments = make(map[int]int)
+	}
+	l.comments[l.lineOffset] = l.column
+}
+
+// Lines returns the source as its physical lines, each terminator the
+// language counts as one — LF, CRLF and CR alike, as LogicalRune reads them —
+// ending exactly one line.
+func (l *Lexer) Lines() []string {
+	if l.lines == nil {
+		text := strings.ReplaceAll(strings.ReplaceAll(string(l.input), "\r\n", "\n"), "\r", "\n")
+		l.lines = strings.Split(text, "\n")
+	}
+	return l.lines
+}
+
+// Text is the source a statement is spelled with: the lines it spans, each
+// cut before any comment that line ends with, dedented by the indentation of
+// the line it starts on, and with trailing space dropped. Lines and columns
+// are the ones a token carries, counted from one. It is empty where the span
+// names no line of this input.
+func (l *Lexer) Text(startLine, startColumn, endLine int) string {
+	lines := l.Lines()
+	if startLine < 1 || startLine > endLine || endLine > len(lines) {
+		return ""
+	}
+
+	spelled := make([]string, 0, endLine-startLine+1)
+	for n := startLine; n <= endLine; n++ {
+		runes := []rune(lines[n-1])
+		if column, commented := l.comments[n]; commented {
+			runes = runes[:min(column-1, len(runes))]
+		}
+		if dedent := startColumn - 1; dedent < len(runes) {
+			runes = runes[dedent:]
+		} else {
+			runes = nil
+		}
+		spelled = append(spelled, strings.TrimRight(string(runes), " \t"))
+	}
+	return strings.Join(spelled, "\n")
 }
 
 // tokenAt makes a token at column on the line being read.
@@ -292,6 +342,7 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
+		l.noteComment()
 		l.skipComment()
 	}
 
@@ -416,6 +467,7 @@ func (l *Lexer) nextLine() (column int, first rune, tab int) {
 		case '\n': // a blank line
 			l.skipWhitespace()
 		case '#': // a comment line
+			l.noteComment()
 			l.skipComment()
 		default:
 			return column, first, tab
