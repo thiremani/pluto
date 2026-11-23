@@ -1425,6 +1425,9 @@ func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
 func TestText(t *testing.T) {
 	const script = "a = 1 # one\nm = [\n  # a row\n  2 3\n]\n"
 	const body = "r = G(x)\n    m = [\n      2 3\n    ]\n"
+	const str = "w = \"hello   \n \nworld\"\n"
+	const bodyStr = "r = G(x)\n    s = \"line one\nline two\"\n"
+	const hanging = "r = G(x)\n    t = [\n   : Name Score\n     \"Ada\" 1\n    ]\n"
 	cases := []struct {
 		name                            string
 		src                             string
@@ -1434,8 +1437,12 @@ func TestText(t *testing.T) {
 		{"OneLineCutsItsComment", script, 1, 1, 1, "a = 1"},
 		{"LinesKeepTheirShape", script, 2, 1, 5, "m = [\n\n  2 3\n]"},
 		{"DedentedToItsFirstLine", body, 2, 5, 4, "m = [\n  2 3\n]"},
+		{"StringContentKeepsItsSpaces", str, 1, 1, 3, "w = \"hello   \n \nworld\""},
+		{"StringContentIsNotMovedLeft", bodyStr, 2, 5, 3, "s = \"line one\nline two\""},
+		{"HangingHeaderKeepsItsColon", hanging, 2, 5, 5, " t = [\n: Name Score\n  \"Ada\" 1\n ]"},
 		{"BeforeTheInput", script, 0, 1, 1, ""},
 		{"PastTheInput", script, 1, 1, 99, ""},
+		{"BeforeTheFirstColumn", script, 1, 0, 1, ""},
 		{"Backwards", script, 3, 1, 2, ""},
 	}
 	for _, tc := range cases {

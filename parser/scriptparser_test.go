@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -67,6 +68,10 @@ m = [
 ]
 long =
     a + 1
+w = "hello   
+ 
+	
+world"
 "out: -b -n"
 `
 	want := []string{
@@ -76,6 +81,7 @@ long =
 		"f = -8 >> 1",
 		"m = [\n  1 2\n  3 4\n]",
 		"long =\n    a + 1",
+		"w = \"hello   \n \n\t\nworld\"",
 		`"out: -b -n"`,
 	}
 
@@ -97,11 +103,57 @@ long =
 	}
 }
 
+// A statement's spelling holds everything the statement does, so parsing it
+// on its own gives the same statement back. That catches a span that dropped
+// or added a character where no golden names it.
+func TestSpellingReparses(t *testing.T) {
+	scripts := []string{
+		"b = a + 2 * 3\n",
+		"imp = 5a\n",
+		"f = -8 >> 1 # arithmetic right shift\n",
+		"m = [\n  1 2\n  3 4\n]\n",
+		"long =\n    a + 1\n",
+		"w = \"hello   \n \n\t\nworld\"\n",
+		"s = \"a\nb\"\n\"out: -s\"\n",
+	}
+	for i, script := range scripts {
+		t.Run(fmt.Sprintf("script%d", i), func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestSpellingReparses", script))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			for _, stmt := range program.Statements {
+				src, ok := spelled(stmt)
+				require.True(t, ok, "statement %T carries no spelling", stmt)
+
+				again := NewScriptParser(lexer.New("TestSpellingReparses", src+"\n"))
+				reparsed := again.Parse()
+				require.Empty(t, again.Errors(), "reparsing %q: %v", src, again.Errors())
+				require.Len(t, reparsed.Statements, 1, "reparsing %q", src)
+				require.Equal(t, stmt.String(), reparsed.Statements[0].String(), "reparsing %q", src)
+			}
+		})
+	}
+}
+
+// spelled returns the source a statement carries, where it carries one.
+func spelled(stmt ast.Statement) (string, bool) {
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		return s.Src, true
+	case *ast.PrintStatement:
+		return s.Src, true
+	}
+	return "", false
+}
+
 // Plan §12: a statement inside a function body is spelled dedented to its own
 // first line, so a plan can place it at its own level.
 func TestStatementSpellingInBody(t *testing.T) {
 	const code = `r = G(x)
     t = x * 2 # doubled
+    s = "line one
+line two"
     r = t + 1
 `
 	l := lexer.New("TestStatementSpellingInBody", code)
@@ -119,7 +171,7 @@ func TestStatementSpellingInBody(t *testing.T) {
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {

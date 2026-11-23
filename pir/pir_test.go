@@ -1551,8 +1551,8 @@ func TestRenderSkip(t *testing.T) {
 	}
 }
 
-// Plan §12: a plan's source prints as the ast's own lines, one level in, so a
-// literal that spans lines reads as it is laid out. Every character a reader
+// Plan §12: a plan's source prints as the lines it was given, one level in,
+// so a literal that spans lines reads as it is laid out. Every character a reader
 // could not otherwise see is escaped, a line of spaces keeps its own
 // indentation at either level, and only an empty line stays bare, since those
 // separate a plan's sections.
