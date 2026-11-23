@@ -3,7 +3,6 @@ package pir
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -98,10 +97,20 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) 
 }
 
 // writeHead writes what every plan opens with: its header, its source, and
-// the line that opens its execute region.
+// the line that opens its execute region. The source prints as the
+// statement's own lines, one level in, so a literal that spans lines reads as
+// it was written, and every other control character is still escaped. A
+// node's operand stays one line, line breaks escaped with it (plan §12).
 func writeHead(b *strings.Builder, head Head) {
 	fmt.Fprintf(b, "%s\n", head.Label)
-	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
+	b.WriteString("    source\n")
+	for _, line := range strings.Split(head.Source, "\n") {
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		fmt.Fprintf(b, "        %s\n", escapeControls(line))
+	}
 	b.WriteString("\n    execute\n")
 }
 

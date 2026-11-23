@@ -844,7 +844,8 @@ func TestRenderFirst(t *testing.T) {
 	p := firstPlan()
 	Elaborate(p)
 	want := `assign s
-    source "s = sarr[9] || h"
+    source
+        s = sarr[9] || h
 
     execute
         %t0 =
@@ -860,7 +861,8 @@ func TestRenderFirst(t *testing.T) {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `assign s
-    source "s = sarr[9] || h"
+    source
+        s = sarr[9] || h
 
     execute
         %t0 =
@@ -884,7 +886,8 @@ func TestRenderFirst(t *testing.T) {
 		t.Fatalf("chain plan rejected: %v", err)
 	}
 	want = `assign n, z, m
-    source "n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7"
+    source
+        n, z, m = 5, sarr[9] || sarr[8] || sarr[7], 7
 
     execute
         %t0 = eval I64 5
@@ -918,7 +921,8 @@ func TestRenderFirst(t *testing.T) {
 		t.Fatalf("plan with a last for a side rejected: %v", err)
 	}
 	want = `assign t
-    source "t = MkStr(a) > \"a\" && MkStr(b) || h"
+    source
+        t = MkStr(a) > "a" && MkStr(b) || h
 
     execute
         %t0 =
@@ -997,7 +1001,8 @@ func TestRenderGate(t *testing.T) {
 	p := gatePlan()
 	Elaborate(p)
 	want := `assign s
-    source "s = sarr[1] > \"m\" sarr[9]"
+    source
+        s = sarr[1] > "m" sarr[9]
 
     execute
         %t0 = check Str sarr[1] > "m" [on-oob=skip]
@@ -1011,7 +1016,8 @@ func TestRenderGate(t *testing.T) {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `assign s
-    source "s = sarr[1] > \"m\" sarr[9]"
+    source
+        s = sarr[1] > "m" sarr[9]
 
     execute
         %t0 = check owned Str sarr[1] > "m" [on-oob=skip]
@@ -1092,7 +1098,8 @@ func TestRenderLast(t *testing.T) {
 	gated := lastGatePlan()
 	Elaborate(gated)
 	want := `assign s
-    source "s = sarr[1] > \"m\" && t > \"a\" u"
+    source
+        s = sarr[1] > "m" && t > "a" u
 
     execute
         %t0 =
@@ -1113,7 +1120,8 @@ func TestRenderLast(t *testing.T) {
 	value := lastValuePlan()
 	Elaborate(value)
 	want = `assign s
-    source "s = sarr[1] > \"m\" && sarr[9]"
+    source
+        s = sarr[1] > "m" && sarr[9]
 
     execute
         %t0 =
@@ -1163,7 +1171,8 @@ func TestRenderCheck(t *testing.T) {
 	p := checkPlan()
 	Elaborate(p)
 	want := `assign s
-    source "s = MkStr(n) > \"a\""
+    source
+        s = MkStr(n) > "a"
 
     execute
         %t0 = check Str MkStr(n) > "a"
@@ -1175,7 +1184,8 @@ func TestRenderCheck(t *testing.T) {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `assign s
-    source "s = MkStr(n) > \"a\""
+    source
+        s = MkStr(n) > "a"
 
     execute
         %t0 = check owned Str MkStr(n) > "a"
@@ -1240,7 +1250,8 @@ func TestValidatePrint(t *testing.T) {
 func TestRenderPrint(t *testing.T) {
 	p := printPlan()
 	want := `print
-    source "\"x: -x\", s, Pair(n)"
+    source
+        "x: -x", s, Pair(n)
 
     execute
         %t0 = eval Str s
@@ -1251,7 +1262,8 @@ func TestRenderPrint(t *testing.T) {
 		t.Fatalf("print render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	wantExpanded := `print
-    source "\"x: -x\", s, Pair(n)"
+    source
+        "x: -x", s, Pair(n)
 
     execute
         %t0 = eval borrowed Str s
@@ -1277,7 +1289,8 @@ func TestRenderConcise(t *testing.T) {
 		},
 	}
 	want := `assign x, _
-    source "x, _ = 5, 7"
+    source
+        x, _ = 5, 7
 
     execute
         %t0 = eval I64 5
@@ -1310,7 +1323,8 @@ func TestRenderMultiOutput(t *testing.T) {
 		t.Fatalf("multi-output plan rejected: %v", err)
 	}
 	want := `assign a, b
-    source "a, b = Pair(x)"
+    source
+        a, b = Pair(x)
 
     execute
         %t0 = eval I64, Str Pair(x)
@@ -1323,7 +1337,8 @@ func TestRenderMultiOutput(t *testing.T) {
 		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	wantExpanded := `assign a, b
-    source "a, b = Pair(x)"
+    source
+        a, b = Pair(x)
 
     execute
         %t0 = eval I64, owned Str Pair(x)
@@ -1348,7 +1363,8 @@ func TestRenderFunctionOutput(t *testing.T) {
 	}
 
 	want := `    assign res
-        source "res = a ⊕ b"
+        source
+            res = a ⊕ b
 
         execute
             %t0 = eval Str a ⊕ b
@@ -1360,7 +1376,8 @@ func TestRenderFunctionOutput(t *testing.T) {
 		t.Fatalf("function output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	wantExpanded := `    assign res
-        source "res = a ⊕ b"
+        source
+            res = a ⊕ b
 
         execute
             %t0 = eval owned Str a ⊕ b
@@ -1414,7 +1431,8 @@ func TestRenderExpanded(t *testing.T) {
 	Elaborate(p)
 	got := p.Render(true)
 	want := `assign a, b
-    source "a, b = b, a"
+    source
+        a, b = b, a
 
     execute
         %t0 = eval I64 b
@@ -1434,7 +1452,8 @@ func TestRenderExpanded(t *testing.T) {
 // release, and the replaced value's release after the mappings.
 func TestRenderExpandedOwnership(t *testing.T) {
 	want := `assign a, b
-    source "a, b = b, a"
+    source
+        a, b = b, a
 
     execute
         %t0 = eval borrowed Str b
@@ -1450,7 +1469,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
 		t.Fatalf("heap swap render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `assign x, _
-    source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
+    source
+        x, _ = x ⊕ "!", "a" ⊕ "b"
 
     execute
         %t0 = eval owned Str x ⊕ "!"
@@ -1469,7 +1489,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
 	}
 	// The concise view omits every derived decision.
 	want = `assign x, _
-    source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
+    source
+        x, _ = x ⊕ "!", "a" ⊕ "b"
 
     execute
         %t0 = eval Str x ⊕ "!"
@@ -1491,7 +1512,8 @@ func TestRenderSkip(t *testing.T) {
 	p := skipPlan()
 	Elaborate(p)
 	want := `assign kept, fresh, _
-    source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
+    source
+        kept, fresh, _ = sarr[9], sarr[0], sarr[1]
 
     execute
         %t0 = eval Str sarr[9] [on-oob=skip]
@@ -1507,7 +1529,8 @@ func TestRenderSkip(t *testing.T) {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `assign kept, fresh, _
-    source "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"
+    source
+        kept, fresh, _ = sarr[9], sarr[0], sarr[1]
 
     execute
         %t0 = eval owned Str sarr[9] [on-oob=skip]
@@ -1548,7 +1571,7 @@ func TestRenderEscapesControls(t *testing.T) {
 		evalAt(p, 0).Slots[0].Type = testType("Str")
 		p.Commit = p.Commit[:1]
 		got := p.Render(false)
-		if !strings.Contains(got, "        "+tc.want+"\n") || strings.Count(got, "\n") != 8 {
+		if !strings.Contains(got, "        "+tc.want+"\n") || strings.Count(got, "\n") != 9 {
 			t.Fatalf("render mismatch:\n%s", got)
 		}
 	}

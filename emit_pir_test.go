@@ -116,7 +116,8 @@ func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, [][]pir.Plan{emitPIRTestPlans("")}, parsedEmitPIRMode(t, "-emit-pir")))
 	require.Equal(t, `assign x
-    source "x = 5"
+    source
+        x = 5
 
     execute
         %t0 = eval I64 5
@@ -125,7 +126,8 @@ func TestEmitPIRConcise(t *testing.T) {
         x = %t0
 
 assign y
-    source "y = x"
+    source
+        y = x
 
     execute
         %t0 = eval I64 x
@@ -155,7 +157,8 @@ func TestEmitPIRFunctionBody(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, bodies, parsedEmitPIRMode(t, "-emit-pir")))
 	require.Equal(t, `assign x
-    source "x = 5"
+    source
+        x = 5
 
     execute
         %t0 = eval I64 5
@@ -165,7 +168,8 @@ func TestEmitPIRFunctionBody(t *testing.T) {
 
 function I64 = F(I64)
     assign x
-        source "x = 5"
+        source
+            x = 5
 
         execute
             %t0 = eval I64 5
@@ -174,7 +178,8 @@ function I64 = F(I64)
             x = %t0
 
     assign y
-        source "y = x"
+        source
+            y = x
 
         execute
             %t0 = eval I64 x
@@ -183,7 +188,8 @@ function I64 = F(I64)
             y = %t0
 
     print
-        source "\"y:\", y"
+        source
+            "y:", y
 
         execute
             %t0 = eval I64 y
@@ -204,7 +210,8 @@ func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, [][]pir.Plan{{plan}}, parsedEmitPIRMode(t, "-emit-pir=expanded")))
 	require.Equal(t, `assign y
-    source "y = x"
+    source
+        y = x
 
     execute
         %t0 = eval borrowed Str x
