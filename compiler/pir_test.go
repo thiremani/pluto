@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -96,7 +97,7 @@ s`)
 
 	require.Equal(t, `assign b
     source
-        b = (a + (2 * 3))
+        b = a + 2 * 3
 
     execute
         %t0 = eval I64 a + (2 * 3)
@@ -412,7 +413,7 @@ func TestPlanGoldenPrefix(t *testing.T) {
 	require.Equal(t, []string{"assign a", "assign n"}, planLabels(plans))
 	require.Equal(t, `assign n
     source
-        n = (-a)
+        n = -a
 
     execute
         %t0 = eval I64 -a
@@ -485,7 +486,7 @@ h1, h2`)
 	require.Equal(t, []string{"assign h1", "assign h2", "assign h1, h2"}, planLabels(plans))
 	require.Equal(t, `assign h1
     source
-        h1 = ("foo" ⊕ "bar")
+        h1 = "foo" ⊕ "bar"
 
     execute
         %t0 = eval owned Str "foo" ⊕ "bar"
@@ -551,7 +552,7 @@ x, y`)
 	require.Equal(t, []string{"assign x", "assign x", "assign _", "assign _", "assign y", "assign x, y"}, planLabels(plans))
 	require.Equal(t, `assign x
     source
-        x = (x ⊕ "!")
+        x = x ⊕ "!"
 
     execute
         %t0 = eval owned Str x ⊕ "!"
@@ -562,7 +563,7 @@ x, y`)
 `, plans[1].Render(true))
 	require.Equal(t, `assign _
     source
-        _ = (x ⊕ "?")
+        _ = x ⊕ "?"
 
     execute
         %t0 = eval owned Str x ⊕ "?"
@@ -583,7 +584,7 @@ x, y`)
 `, plans[3].Render(true))
 	require.Equal(t, `assign x, y
     source
-        x, y = (y ⊕ "!"), x
+        x, y = y ⊕ "!", x
 
     execute
         %t0 = eval owned Str y ⊕ "!"
@@ -787,7 +788,7 @@ copy, other, text`)
 	require.Equal(t, []string{"assign text", "assign text, other", "assign copy", "assign other"}, planLabels(plans))
 	require.Equal(t, `assign text, other
     source
-        text, other = (text ⊕ "!"), text
+        text, other = text ⊕ "!", text
 
     execute
         %t0 = eval owned Str text ⊕ "!"
@@ -820,6 +821,18 @@ copy, other, text`)
 `, plans[3].Render(true))
 	require.True(t, plans[3].Commit[0].Target.TypeOwnsHeap)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
+}
+
+// Plan §12: a plan quotes the source its file spells the statement with, and
+// falls back to the ast's rendering for a statement no file spells.
+func TestPlanSourceFallsBackToTheAst(t *testing.T) {
+	stmt := &ast.LetStatement{
+		Token: token.Token{Type: token.ASSIGN, Literal: "="},
+		Name:  []*ast.Identifier{{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"}},
+		Value: []ast.Expression{&ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5}},
+	}
+	require.Equal(t, "x = 5", spelling("", stmt))
+	require.Equal(t, "x = 5 # as the file has it", spelling("x = 5 # as the file has it", stmt))
 }
 
 // Plan §12: a multiline string literal is one eval operand on one line, its
@@ -906,7 +919,7 @@ d, l, r, n, copied.age, tag`)
 	require.Equal(t, []string{"assign d", "assign d", "assign l, r", "assign l, _, n", "assign copied, tag"}, planLabels(plans))
 	require.Equal(t, `assign d
     source
-        d = (Twice(d) + 1)
+        d = Twice(d) + 1
 
     execute
         %t0 = eval I64 Twice(d) + 1
@@ -1011,7 +1024,7 @@ n, o, k, p, q, one, acc`)
 	// level in.
 	require.Equal(t, `    assign t
         source
-            t = (a + 1)
+            t = a + 1
 
         execute
             %t0 = eval I64 a + 1
@@ -1022,7 +1035,7 @@ n, o, k, p, q, one, acc`)
 	// Row 14: a direct scalar output is a plain store.
 	require.Equal(t, `    assign res
         source
-            res = (t * 2)
+            res = t * 2
 
         execute
             %t0 = eval I64 t * 2
@@ -1033,7 +1046,7 @@ n, o, k, p, q, one, acc`)
 	// Row 14i: a heap output takes an owned outcome and releases what it held.
 	require.Equal(t, `    assign out
         source
-            out = (s ⊕ "!")
+            out = s ⊕ "!"
 
         execute
             %t0 = eval owned Str s ⊕ "!"
@@ -1069,7 +1082,7 @@ n, o, k, p, q, one, acc`)
 	// Row 14a: a rejected gate leaves an output holding what it held.
 	require.Equal(t, `    assign out
         source
-            out = (n > 0) (s ⊕ "?")
+            out = n > 0 s ⊕ "?"
 
         execute
             %t0 = check I64 n > 0
@@ -1119,7 +1132,7 @@ x, fresh, t, u, hc, bc`)
 	// An existing target keeps its value where the gate rejects.
 	require.Equal(t, `assign x
     source
-        x = (n > 0) 5
+        x = n > 0 5
 
     execute
         %t0 = check I64 n > 0
@@ -1132,7 +1145,7 @@ x, fresh, t, u, hc, bc`)
 	// A fresh target holds zero there, and has no old value to release.
 	require.Equal(t, `assign fresh
     source
-        fresh = (n > 9) t
+        fresh = n > 9 t
 
     execute
         %t0 = check I64 n > 9
@@ -1146,7 +1159,7 @@ x, fresh, t, u, hc, bc`)
 	// owner's old value.
 	require.Equal(t, `assign t, u
     source
-        t, u = (n > 0) u, t
+        t, u = n > 0 u, t
 
     execute
         %t0 = check I64 n > 0
@@ -1162,7 +1175,7 @@ x, fresh, t, u, hc, bc`)
 	// region like any value.
 	require.Equal(t, `assign x
     source
-        x = (arr[1] > (-1)) (arr[9] || 8)
+        x = arr[1] > -1 arr[9] || 8
 
     execute
         %t0 = check I64 arr[1] > (-1) [on-oob=skip]
@@ -1179,7 +1192,7 @@ x, fresh, t, u, hc, bc`)
 	// The gate only tests the check, so the string the check built is released.
 	require.Equal(t, `assign hc
     source
-        hc = (MkStr(n) > "a") 7
+        hc = MkStr(n) > "a" 7
 
     execute
         %t0 = check owned Str MkStr(n) > "a"
@@ -1193,7 +1206,7 @@ x, fresh, t, u, hc, bc`)
 	// A binding the check read stays its owner's.
 	require.Equal(t, `assign bc
     source
-        bc = (t > "abc") 1
+        bc = t > "abc" 1
 
     execute
         %t0 = check borrowed(t) Str t > "abc"
@@ -1207,7 +1220,7 @@ x, fresh, t, u, hc, bc`)
 	// built is released where the gate admitted it.
 	require.Equal(t, `assign _
     source
-        _ = (n > 0) MkStr(n)
+        _ = n > 0 MkStr(n)
 
     execute
         %t0 = check I64 n > 0
@@ -1282,7 +1295,7 @@ x, three, t, u, lb`)
 	// built is released.
 	require.Equal(t, `assign three
     source
-        three = (n > 0) && (MkStr(n) > "a") && (MkStr(x) > "a") 7
+        three = n > 0 && MkStr(n) > "a" && MkStr(x) > "a" 7
 
     execute
         %t0 =
@@ -1304,7 +1317,7 @@ x, three, t, u, lb`)
 	// is only tested.
 	require.Equal(t, `assign t
     source
-        t = ((MkStr(n) > "a") && MkStr(x))
+        t = MkStr(n) > "a" && MkStr(x)
 
     execute
         %t0 =
@@ -1322,7 +1335,7 @@ x, three, t, u, lb`)
 	// old value: where a gate moves both strings of a swap, this copies both.
 	require.Equal(t, `assign t, u
     source
-        t, u = ((n > 0) && u), t
+        t, u = n > 0 && u, t
 
     execute
         %t0 =
@@ -1342,7 +1355,7 @@ x, three, t, u, lb`)
 	// skips it where the read fails.
 	require.Equal(t, `assign x
     source
-        x = (((n > 0) && (n > 1)) && arr[9])
+        x = n > 0 && n > 1 && arr[9]
 
     execute
         %t0 =
@@ -1359,7 +1372,7 @@ x, three, t, u, lb`)
 	// A last in a gate's region is numbered after the gate's check.
 	require.Equal(t, `assign x
     source
-        x = (n > 0) ((n > 2) && 10)
+        x = n > 0 n > 2 && 10
 
     execute
         %t0 = check I64 n > 0
@@ -1376,7 +1389,7 @@ x, three, t, u, lb`)
 	// A discard keeps nothing: what the final side built is released.
 	require.Equal(t, `assign _
     source
-        _ = ((n > 0) && MkStr(n))
+        _ = n > 0 && MkStr(n)
 
     execute
         %t0 =
@@ -1393,7 +1406,7 @@ x, three, t, u, lb`)
 	// what the check built is released where it failed.
 	require.Equal(t, `assign lb
     source
-        lb = ((n > 0) && (MkStr(n) > "a"))
+        lb = n > 0 && MkStr(n) > "a"
 
     execute
         %t0 =
@@ -1437,7 +1450,7 @@ x, g, s`)
 
 	require.Equal(t, `assign x
     source
-        x = (a > 2)
+        x = a > 2
 
     execute
         %t0 = check I64 a > 2
@@ -1447,7 +1460,7 @@ x, g, s`)
 `, plans[3].Render(false))
 	require.Equal(t, `assign g
     source
-        g = (n > 0) (a > 2)
+        g = n > 0 a > 2
 
     execute
         %t0 = check I64 n > 0
@@ -1459,7 +1472,7 @@ x, g, s`)
 `, plans[4].Render(false))
 	require.Equal(t, `assign s
     source
-        s = (MkStr(a) > "zzz")
+        s = MkStr(a) > "zzz"
 
     execute
         %t0 = check owned Str MkStr(a) > "zzz"
@@ -1530,7 +1543,7 @@ m`)
 	// The invocation reads a binding's heap value and takes a temporary's.
 	require.Equal(t, `print
     source
-        h, (h ⊕ "!")
+        h, h ⊕ "!"
 
     execute
         %t0 = eval borrowed Str h
@@ -1548,7 +1561,7 @@ m`)
 `, plans[5].Render(true))
 	require.Equal(t, `print
     source
-        ([1 2] ⊕ [3])
+        [1 2] ⊕ [3]
 
     execute
         %t0 = eval owned [I64] [1 2] ⊕ [3]
@@ -1610,7 +1623,7 @@ keep, fresh, s, h1, h2, r`)
 	// An existing target keeps its value.
 	require.Equal(t, `assign keep
     source
-        keep = (keep * arr[5])
+        keep = keep * arr[5]
 
     execute
         %t0 = eval I64 keep * arr[5] [on-oob=skip]
@@ -1623,7 +1636,7 @@ keep, fresh, s, h1, h2, r`)
 	// (tests/cond/value_cond_expr pins that at run time).
 	require.Equal(t, `assign fresh
     source
-        fresh = (Loud(1) + arr[9])
+        fresh = Loud(1) + arr[9]
 
     execute
         %t0 = eval I64 Loud(1) + arr[9] [on-oob=skip]
@@ -1635,7 +1648,7 @@ keep, fresh, s, h1, h2, r`)
 	// the mapping replaced it.
 	require.Equal(t, `assign s
     source
-        s = (s ⊕ sarr[9])
+        s = s ⊕ sarr[9]
 
     execute
         %t0 = eval owned Str s ⊕ sarr[9] [on-oob=skip]
@@ -1740,7 +1753,7 @@ a, s, c, g, p, q, r, w`)
 	// A fresh target and an existing one read alike: the first always yields.
 	require.Equal(t, `assign a
     source
-        a = (arr[9] || (-1))
+        a = arr[9] || -1
 
     execute
         %t0 =
@@ -1756,7 +1769,7 @@ a, s, c, g, p, q, r, w`)
 	// built is released where the fallback ran.
 	require.Equal(t, `assign s
     source
-        s = (sarr[9] || h)
+        s = sarr[9] || h
 
     execute
         %t0 =
@@ -1773,7 +1786,7 @@ a, s, c, g, p, q, r, w`)
 	// A chain is one first, however it is grouped.
 	require.Equal(t, `assign c
     source
-        c = ((arr[9] || arr[8]) || (-3))
+        c = arr[9] || arr[8] || -3
 
     execute
         %t0 =
@@ -1791,7 +1804,7 @@ a, s, c, g, p, q, r, w`)
 	// value.
 	require.Equal(t, `assign g
     source
-        g = (arr[9] || arr[8])
+        g = arr[9] || arr[8]
 
     execute
         %t0 =
@@ -1806,7 +1819,7 @@ a, s, c, g, p, q, r, w`)
 	// A discard releases each owned side where it ran.
 	require.Equal(t, `assign _
     source
-        _ = (sarr[9] || (h ⊕ "?"))
+        _ = sarr[9] || (h ⊕ "?")
 
     execute
         %t0 =
@@ -1823,7 +1836,7 @@ a, s, c, g, p, q, r, w`)
 	// The eval after a first takes the ID after its sides.
 	require.Equal(t, `assign p, q
     source
-        p, q = (arr[9] || (-1)), 5
+        p, q = arr[9] || -1, 5
 
     execute
         %t0 =
@@ -1840,7 +1853,7 @@ a, s, c, g, p, q, r, w`)
 	// A side may wrap its read, and fails where the read does.
 	require.Equal(t, `assign w
     source
-        w = ((arr[9] + 1) || (-1))
+        w = (arr[9] + 1) || -1
 
     execute
         %t0 =
@@ -1854,7 +1867,7 @@ a, s, c, g, p, q, r, w`)
 `, plans[13].Render(false))
 	require.Equal(t, `    assign res
         source
-            res = (v[i] || (-1))
+            res = v[i] || -1
 
         execute
             %t0 =
@@ -1906,7 +1919,7 @@ s, t, h, g`)
 	// the mapping always commits.
 	require.Equal(t, `assign x
     source
-        x = ((a > 2) || 7)
+        x = a > 2 || 7
 
     execute
         %t0 =
@@ -1921,7 +1934,7 @@ s, t, h, g`)
 	// A check as the last side can fail, so the binding keeps its value.
 	require.Equal(t, `assign n
     source
-        n = ((a > 9) || (a > 1))
+        n = a > 9 || a > 1
 
     execute
         %t0 =
@@ -1938,7 +1951,7 @@ s, t, h, g`)
 	// the first's outcome.
 	require.Equal(t, `assign z
     source
-        z = (((a > 0) && 11) || 13)
+        z = a > 0 && 11 || 13
 
     execute
         %t0 =
@@ -1957,7 +1970,7 @@ s, t, h, g`)
 	// sides. Where no side yields, a fresh binding holds its zero.
 	require.Equal(t, `assign u
     source
-        u = (((a > 9) && 1) || ((b > 0) && 2))
+        u = a > 9 && 1 || b > 0 && 2
 
     execute
         %t0 =
@@ -1979,7 +1992,7 @@ s, t, h, g`)
 	// nested last's final eval included.
 	require.Equal(t, `assign c
     source
-        c = (((1 < 2) && arr[9]) || (-1))
+        c = 1 < 2 && arr[9] || -1
 
     execute
         %t0 =
@@ -1998,7 +2011,7 @@ s, t, h, g`)
 	// gives, as the last's final eval does.
 	require.Equal(t, `assign d
     source
-        d = (((arr[9] > 0) && 1) || (-1))
+        d = arr[9] > 0 && 1 || -1
 
     execute
         %t0 =
@@ -2017,7 +2030,7 @@ s, t, h, g`)
 	// comparison does, and what it built is released where the fallback ran.
 	require.Equal(t, `assign s
     source
-        s = ((sarr[9] > "a") || h)
+        s = sarr[9] > "a" || h
 
     execute
         %t0 =
@@ -2035,7 +2048,7 @@ s, t, h, g`)
 	// what it built is released once it is compared.
 	require.Equal(t, `assign t
     source
-        t = (((MkStr(a) > "a") && MkStr(b)) || h)
+        t = MkStr(a) > "a" && MkStr(b) || h
 
     execute
         %t0 =
@@ -2055,7 +2068,7 @@ s, t, h, g`)
 	// nested last's own sides included.
 	require.Equal(t, `assign p, q
     source
-        p, q = (((a > 0) && 11) || 13), 5
+        p, q = a > 0 && 11 || 13, 5
 
     execute
         %t0 =
@@ -2077,7 +2090,7 @@ s, t, h, g`)
 	// skips the outcome from there just as a side of its own would.
 	require.Equal(t, `assign g
     source
-        g = (((a > 0) && sarr[9]) || ((b > 0) && sarr[1]))
+        g = a > 0 && sarr[9] || b > 0 && sarr[1]
 
     execute
         %t0 =

@@ -271,6 +271,15 @@ func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 	return true
 }
 
+// spelling is the source a plan quotes: what the file gave the statement,
+// falling back to the ast's own rendering for a statement no file spells.
+func spelling(src string, stmt ast.Statement) string {
+	if src != "" {
+		return src
+	}
+	return stmt.String()
+}
+
 // planOOBScope gives a node's index reads their scope (plan §9): a failed
 // read runs the fallback that follows its side of a first, and skips the
 // outcome otherwise. The router admits a read only in those two places.
@@ -380,7 +389,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 		nameParts[i] = ident.Value
 	}
 	plan := &pir.AssignPlan{
-		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: stmt.String()},
+		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: spelling(stmt.Src, stmt)},
 		Commit: make([]pir.Mapping, 0, len(stmt.Name)),
 	}
 
@@ -529,7 +538,7 @@ func (c *Compiler) mapNextTarget(plan *pir.AssignPlan, stmt *ast.LetStatement, o
 // string literal as itself, since print formats it in place, and any other
 // argument as the outcome of its eval.
 func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.PrintPlan {
-	plan := &pir.PrintPlan{Head: pir.Head{Label: "print", Func: fn, Source: stmt.String()}}
+	plan := &pir.PrintPlan{Head: pir.Head{Label: "print", Func: fn, Source: spelling(stmt.Src, stmt)}}
 	for _, expr := range stmt.Expression.Arguments {
 		if lit, isLit := expr.(*ast.StringLiteral); isLit {
 			plan.Args = append(plan.Args, pir.PrintArg{Literal: lit})

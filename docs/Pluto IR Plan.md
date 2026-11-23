@@ -740,10 +740,12 @@ as in the source with each of its line breaks escaped the same way
 A plan's `source` follows the opposite rule, since it is the whole statement
 rather than an operand: the label stands alone and the statement's own lines
 sit one level in, so a block literal reads as it is laid out (decided
-2026-11-23). What it renders is the ast's spelling of the statement, not the
-file's bytes, so an operator root carries the pair it wraps itself in
-(`d = (Twice(d) + 1)`) and a block literal's rows carry the ast's own
-indentation. Within a line, everything a reader could not otherwise see is
+2026-11-23). What it renders is the file's own text: the lines the statement
+spans, dedented to the one it starts on, each cut before a comment that line
+ends with. So the parens the ast adds to spell out its own nesting are absent
+(`d = Twice(d) + 1`, not `d = (Twice(d) + 1)`), and an implicit
+multiplication reads as it was typed (`imp = 5a`). A statement no file spells
+— one a caller built — falls back to the ast's rendering. Within a line, everything a reader could not otherwise see is
 escaped — a tab, a control, and every rune Unicode calls unprintable, the
 format and separator characters among them — so a source never breaks the
 layout. Two statements still render alike where they hold the same text, a
@@ -761,7 +763,7 @@ section's indent, and the operand beside it is exact.
 ```text
 assign x
     source
-        x = ((data[i] || other[j]) || (-1))
+        x = data[i] || other[j] || -1
 
     execute
         %t0 =
@@ -786,7 +788,7 @@ transfer (decided 2026-11-20).
 ```text
 assign v
     source
-        v = ((n > 2) && 10)
+        v = n > 2 && 10
 
     execute
         %t0 =
@@ -809,7 +811,7 @@ whatever the condition.
 ```text
 assign x
     source
-        x = (n > 0) 5
+        x = n > 0 5
 
     execute
         %t0 = check I64 n > 0
@@ -1432,7 +1434,7 @@ in source order.
 ```text
 print
     source
-        "n: -n", h, (h ⊕ "!")
+        "n: -n", h, h ⊕ "!"
 
     execute
         %t0 = eval borrowed Str h
@@ -1541,7 +1543,7 @@ freshness.
 ```text
 assign skeep
     source
-        skeep = (skeep ⊕ sarr[9])
+        skeep = skeep ⊕ sarr[9]
 
     execute
         %t0 = eval owned Str skeep ⊕ sarr[9] [on-oob=skip]
@@ -1626,7 +1628,7 @@ either way.
 ```text
 assign s
     source
-        s = (sarr[9] || h)
+        s = sarr[9] || h
 
     execute
         %t0 =
@@ -1742,7 +1744,7 @@ that outcome and holds the statement's values in its region.
 ```text
 assign s
     source
-        s = (MkStr(n) > "a") t
+        s = MkStr(n) > "a" t
 
     execute
         %t0 = check owned Str MkStr(n) > "a"
@@ -1808,7 +1810,7 @@ before the final one is a comparison, a `check` that is only tested, and the
 ```text
 assign t
     source
-        t = ((MkStr(n) > "a") && MkStr(x))
+        t = MkStr(n) > "a" && MkStr(x)
 
     execute
         %t0 =
@@ -1876,7 +1878,7 @@ where the comparison holds; where it fails, the binding carries
 ```text
 assign s
     source
-        s = (MkStr(a) > "zzz")
+        s = MkStr(a) > "zzz"
 
     execute
         %t0 = check owned Str MkStr(a) > "zzz"
@@ -1938,7 +1940,7 @@ and any other side is an `eval`.
 ```text
 assign t
     source
-        t = ((MkStr(a) > "a") && MkStr(b)) || h
+        t = MkStr(a) > "a" && MkStr(b) || h
 
     execute
         %t0 =
