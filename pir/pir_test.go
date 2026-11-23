@@ -1551,18 +1551,66 @@ func TestRenderSkip(t *testing.T) {
 	}
 }
 
+// Plan §12: a plan's source prints as the ast's own lines, one level in, so a
+// literal that spans lines reads as it is laid out. Every character a reader
+// could not otherwise see is escaped, a line of spaces keeps its own
+// indentation at either level, and only an empty line stays bare, since those
+// separate a plan's sections.
+func TestRenderSource(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		fn     string
+		want   string
+	}{
+		{"OneLine", "a, b = b, a", "", "        a, b = b, a"},
+		{"Lines", "m = [\n  1 2\n  3 4\n]", "", "        m = [\n          1 2\n          3 4\n        ]"},
+		{"EmptyLine", "s = \"a\n\nb\"", "", "        s = \"a\n\n        b\""},
+		{"SpaceOnlyLine", "s = \"a\n \nb\"", "", "        s = \"a\n         \n        b\""},
+		{"TabOnlyLine", "s = \"a\n\t\nb\"", "", "        s = \"a\n        \\t\n        b\""},
+		{"Controls", "s = \"a\x01b\x7fc\td\"", "", "        s = \"a\\x01b\\x7fc\\td\""},
+		{"Invisible", "s = \"x\u200by\"", "", "        s = \"x\\u200by\""},
+		{"QuoteAndBackslash", `s = "a\"b\\c"`, "", "        s = \"a\\\"b\\\\c\""},
+		{"CRLFIsOneBreak", "s = \"a\r\nb\"", "", "        s = \"a\n        b\""},
+		{"CRIsOneBreak", "s = \"a\rb\"", "", "        s = \"a\n        b\""},
+		{"LinesInFunctionBody", "m = [\n  1 2\n]", "I64 = F(I64)", "            m = [\n              1 2\n            ]"},
+		{"EmptyLineInFunctionBody", "s = \"a\n\nb\"", "I64 = F(I64)", "            s = \"a\n\n            b\""},
+		{"SpaceOnlyLineInFunctionBody", "s = \"a\n \nb\"", "I64 = F(I64)", "            s = \"a\n             \n            b\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := swapPlan()
+			p.Source = tc.source
+			p.Func = tc.fn
+			head := "assign a, b\n    source\n"
+			if tc.fn != "" {
+				head = "    assign a, b\n        source\n"
+			}
+			got := p.Render(false)
+			if want := head + tc.want + "\n\n"; !strings.HasPrefix(got, want) {
+				t.Fatalf("source mismatch:\ngot:\n%q\nwant prefix:\n%q", got, want)
+			}
+		})
+	}
+}
+
 // Plan §12: control characters and Unicode line breaks inside string
 // literals never break the one-operation-per-line format, at the root or
-// nested under an operator; ordinary non-ASCII stays raw.
+// nested under an operator; ordinary non-ASCII stays raw. A terminator the
+// file spells CR is one line break, so it renders as the escape a source
+// asks for with `\r` does not.
 func TestRenderEscapesControls(t *testing.T) {
 	multi := strLit("a\nb\tc\rd\x01e\x7f")
 	cases := []struct {
 		expr ast.Expression
 		want string
 	}{
-		{multi, `%t0 = eval Str "a\nb\tc\rd\x01e\x7f"`},
-		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\rd\x01e\x7f" ⊕ "z"`},
+		{multi, `%t0 = eval Str "a\nb\tc\nd\x01e\x7f"`},
+		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\nd\x01e\x7f" ⊕ "z"`},
+		{strLit("a\r\nb"), `%t0 = eval Str "a\nb"`},
+		{strLit(`a\rb`), `%t0 = eval Str "a\rb"`},
 		{strLit("π\u0085x\u2028y\u2029z\u009f"), `%t0 = eval Str "π\u0085x\u2028y\u2029z\u009f"`},
+		{strLit("x\u200by\U000e0001z"), `%t0 = eval Str "x\u200by\U000e0001z"`},
 	}
 	for _, tc := range cases {
 		p := swapPlan()
