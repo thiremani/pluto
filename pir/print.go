@@ -68,10 +68,11 @@ func (p *PrintPlan) argStrings(expanded bool) []string {
 	return parts
 }
 
-// executeIndent is the level of an execute region's own lines. The labels of
-// a first, first and fallback, and of a last, last and next, sit one level
-// further in and their sides two; a gate's region sits one level in from the
-// gate.
+// executeIndent is the level of an execute region's own lines. A selection
+// that binds an outcome prints that on a line of its own, so its labels —
+// first and fallback, last and next — sit one level further in and its sides
+// two; the labels of a selection that binds none sit at its own level. A
+// gate's region sits one level in from the gate.
 const executeIndent = "        "
 
 // level is one step of indentation.
@@ -84,11 +85,11 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) 
 		case *Eval:
 			writeEval(b, indent, n, expanded)
 		case *First:
-			writeFirst(b, indent, n, expanded)
+			writeSelection(b, indent, selection{id: n.Result, word: "first", clause: "fallback", t: n.Type, sides: n.Sides}, expanded)
 		case *Check:
 			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.OnOOB, expanded))
 		case *Last:
-			writeLast(b, indent, n, expanded)
+			writeSelection(b, indent, selection{id: n.Result, word: "last", clause: "next", t: n.Type, sides: n.Sides}, expanded)
 		case *Gate:
 			fmt.Fprintf(b, "%sgate %%t%d\n", indent, n.Cond)
 			writeNodes(b, indent+level, n.Body, expanded)
@@ -120,25 +121,35 @@ func outcomeLine(id OutcomeID, word string, slots []Slot, expr ast.Expression, s
 	return line
 }
 
-func writeFirst(b *strings.Builder, indent string, f *First, expanded bool) {
-	fmt.Fprintf(b, "%s%%t%d =\n", indent, f.Result)
-	fmt.Fprintf(b, "%s%sfirst %s\n", indent, level, f.Type.String())
-	for i, side := range f.Sides {
-		if i > 0 {
-			fmt.Fprintf(b, "%s%sfallback\n", indent, level)
-		}
-		writeEval(b, indent+level+level, side, expanded)
-	}
+// selection is what a first and a last print alike: the outcome each binds,
+// the word that names it, the word that labels each side after the first, the
+// type of the whole selection, and its sides.
+type selection struct {
+	id     OutcomeID
+	word   string
+	clause string
+	t      Type
+	sides  []Node
 }
 
-func writeLast(b *strings.Builder, indent string, l *Last, expanded bool) {
-	fmt.Fprintf(b, "%s%%t%d =\n", indent, l.Result)
-	fmt.Fprintf(b, "%s%slast %s\n", indent, level, l.Type.String())
-	for i, side := range l.Sides {
+// writeSelection writes a first or a last: the line that binds its outcome
+// where it binds one, then the head line naming the selection and its type,
+// each side one level further in, and the clause word before every side after
+// the first. A selection that binds no outcome prints its head where the
+// outcome line would have gone, so its sides stay one level in from it.
+func writeSelection(b *strings.Builder, indent string, sel selection, expanded bool) {
+	head := indent
+	if sel.id != NoOutcome {
+		fmt.Fprintf(b, "%s%%t%d =\n", indent, sel.id)
+		head = indent + level
+	}
+
+	fmt.Fprintf(b, "%s%s %s\n", head, sel.word, sel.t.String())
+	for i, side := range sel.sides {
 		if i > 0 {
-			fmt.Fprintf(b, "%s%snext\n", indent, level)
+			fmt.Fprintf(b, "%s%s\n", head, sel.clause)
 		}
-		writeNodes(b, indent+level+level, []Node{side}, expanded)
+		writeNodes(b, head+level, []Node{side}, expanded)
 	}
 }
 
@@ -352,34 +363,32 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	}
 }
 
-// failure is what the failure of the eval or check whose outcome is id does:
-// an eval's accesses name it, and a failed check skips its outcome.
+// failure is what the failure of the node whose outcome is id does, which its
+// position says: a fallback runs where a side of a first that one follows
+// fails, and every other failure reaches the commit and skips the outcome.
 func (p *AssignPlan) failure(id OutcomeID) OOBScope {
-	if ev := p.eval(id); ev != nil {
-		return ev.OnOOB
+	for _, node := range p.Values() {
+		first, isFirst := node.(*First)
+		if !isFirst {
+			continue
+		}
+		for _, side := range first.Sides[:len(first.Sides)-1] {
+			if sup, _ := result(supplier(side)); sup == id {
+				return UseFallback
+			}
+		}
 	}
 	return SkipOutcome
 }
 
-// eval finds the eval whose outcome is id, a side of a first or a last
-// included; it is nil when id names a first, a last or a check.
+// eval finds the eval whose outcome is id among the values, the only place a
+// multi-slot outcome is bound: it is nil for an outcome bound inside a first
+// or a last, each of whose nodes yields one slot, and for a first, a last or
+// a check, which yield one too.
 func (p *AssignPlan) eval(id OutcomeID) *Eval {
 	for _, node := range p.Values() {
-		switch n := node.(type) {
-		case *Eval:
-			if n.Result == id {
-				return n
-			}
-		case *First:
-			for _, side := range n.Sides {
-				if side.Result == id {
-					return side
-				}
-			}
-		case *Last:
-			if side, isEval := n.final().(*Eval); isEval && side.Result == id {
-				return side
-			}
+		if ev, isEval := node.(*Eval); isEval && ev.Result == id {
+			return ev
 		}
 	}
 	return nil

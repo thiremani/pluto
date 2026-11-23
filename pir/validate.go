@@ -28,35 +28,32 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	for _, node := range p.Values() {
 		switch n := node.(type) {
 		case *Eval:
-			if err := validateEval(p.Label, next, n); err != nil {
+			if err := validateEval(p.Label, next, n, false); err != nil {
 				return err
 			}
-			if n.OnOOB == UseFallback {
-				return fmt.Errorf("plan %s: eval %%t%d falls back, but is no side of a first", p.Label, next)
-			}
-			next++
 			slots += len(n.Slots)
+		case *Check:
+			if err := validateCheck(p.Label, next, n, false); err != nil {
+				return err
+			}
+			slots++
 		case *First:
 			if err := validateFirst(p.Label, next, n, compatible); err != nil {
 				return err
 			}
-			next += 1 + len(n.Sides)
-			slots++
-		case *Check:
-			if err := validateCheck(p.Label, next, n); err != nil {
-				return err
-			}
-			next++
 			slots++
 		case *Last:
-			if err := validateLast(p.Label, next, n, compatible); err != nil {
+			if err := validateDense(p.Label, "last", n.Result, next); err != nil {
 				return err
 			}
-			next += 1 + len(n.Sides)
+			if err := validateLast(p.Label, fmt.Sprintf("last %%t%d", next), next+1, n, compatible, false); err != nil {
+				return err
+			}
 			slots++
 		default:
 			return fmt.Errorf("plan %s: unknown execute node %T", p.Label, node)
 		}
+		next += Outcomes(node)
 	}
 
 	if len(p.Commit) != slots {
@@ -97,23 +94,25 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 		return 0, fmt.Errorf("plan %s: gate follows %d nodes and takes one condition", p.Label, len(before))
 	}
 
-	next := 1
 	switch cond := before[0].(type) {
 	case *Check:
-		if err := validateCheck(p.Label, 0, cond); err != nil {
+		if err := validateCheck(p.Label, 0, cond, false); err != nil {
 			return 0, err
 		}
 	case *Last:
-		if err := validateLast(p.Label, 0, cond, compatible); err != nil {
+		if err := validateDense(p.Label, "last", cond.Result, 0); err != nil {
+			return 0, err
+		}
+		if err := validateLast(p.Label, "last %t0", 1, cond, compatible, false); err != nil {
 			return 0, err
 		}
 		if _, isCheck := cond.final().(*Check); !isCheck {
 			return 0, fmt.Errorf("plan %s: last %%t0 ends in %T, and a gate's condition ends in a check", p.Label, cond.final())
 		}
-		next += len(cond.Sides)
 	default:
 		return 0, fmt.Errorf("plan %s: gate follows %T, which is no condition", p.Label, before[0])
 	}
+	next := Outcomes(before[0])
 
 	if bound, _ := result(before[0]); gate.Cond != bound {
 		return 0, fmt.Errorf("plan %s: gate takes %%t%d where its condition binds %%t%d", p.Label, gate.Cond, bound)
@@ -125,82 +124,102 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 }
 
 // validateCheck checks a check whose outcome is id: one well-formed slot, and
-// a scope for its accesses that skips, since no fallback follows a check.
-func validateCheck(plan string, id int, ch *Check) error {
-	if ch.Result != OutcomeID(id) {
-		return fmt.Errorf("plan %s: check has result ID %d where %d is next; IDs must be dense in execution order", plan, ch.Result, id)
+// a scope for its accesses that matches where it sits. fallbackFollows says a
+// fallback follows the side of a first it belongs to.
+func validateCheck(plan string, id int, ch *Check, fallbackFollows bool) error {
+	if err := validateDense(plan, "check", ch.Result, id); err != nil {
+		return err
 	}
 	if len(ch.Slots) != 1 {
 		return fmt.Errorf("plan %s: check %%t%d has %d slots", plan, id, len(ch.Slots))
 	}
-	if ch.OnOOB == UseFallback {
-		return fmt.Errorf("plan %s: check %%t%d falls back, but is no side of a first", plan, id)
-	}
 
 	node := fmt.Sprintf("check %%t%d", id)
+	if err := validateScope(plan, node, ch.OnOOB, fallbackFollows); err != nil {
+		return err
+	}
 	if err := validateSlots(plan, node, ch.Slots); err != nil {
 		return err
 	}
 	return validateAccesses(plan, node, ch.Expr, ch.OnOOB)
 }
 
-// validateLast checks a last whose outcome is id: at least two sides of one
-// slot each, numbered after it. Every side before the final one is a check,
-// and the final one, a check or an eval, fits the last's type. No side falls
-// back, since nothing follows a failed side.
-func validateLast(plan string, id int, l *Last, compatible func(target, outcome Type) bool) error {
-	if l.Result != OutcomeID(id) {
-		return fmt.Errorf("plan %s: last has result ID %d where %d is next; IDs must be dense in execution order", plan, l.Result, id)
+// validateDense checks that the node word names binds the ID that follows
+// every node before it.
+func validateDense(plan, word string, id OutcomeID, next int) error {
+	if id != OutcomeID(next) {
+		return fmt.Errorf("plan %s: %s has result ID %d where %d is next; IDs must be dense in execution order", plan, word, id, next)
 	}
+	return nil
+}
+
+// validateScope checks plan §9: a node's out-of-bounds scope says what
+// resolves a failed access, which is where the node sits. A fallback resolves
+// it where one follows the node's side of a first, and the commit resolves it
+// everywhere else, as a skipped outcome.
+func validateScope(plan, node string, scope OOBScope, fallbackFollows bool) error {
+	if fallbackFollows && scope == SkipOutcome {
+		return fmt.Errorf("plan %s: %s skips a failed access, which the fallback after its side resolves", plan, node)
+	}
+	if !fallbackFollows && scope == UseFallback {
+		return fmt.Errorf("plan %s: %s falls back, but no fallback follows it", plan, node)
+	}
+	return nil
+}
+
+// validateLast checks a last, named as an error names it, whose sides start
+// at sideStart: at least two sides of one slot each, numbered in execution
+// order. Every side before the final one is a check, and the final one, a
+// check or an eval, fits the last's type. fallbackFollows says a fallback
+// follows the side of a first the last belongs to, which resolves a failed
+// access in any of its sides.
+func validateLast(plan, name string, sideStart int, l *Last, compatible func(target, outcome Type) bool, fallbackFollows bool) error {
 	if l.Type == nil {
-		return fmt.Errorf("plan %s: last %%t%d has no type", plan, id)
+		return fmt.Errorf("plan %s: %s has no type", plan, name)
 	}
 	if len(l.Sides) < 2 {
-		return fmt.Errorf("plan %s: last %%t%d has %d sides and needs a next", plan, id, len(l.Sides))
+		return fmt.Errorf("plan %s: %s has %d sides and needs a next", plan, name, len(l.Sides))
 	}
 
 	final := len(l.Sides) - 1
 	for i, side := range l.Sides {
-		sideID := id + 1 + i
+		sideID := sideStart + i
 		switch n := side.(type) {
 		case *Check:
-			if err := validateCheck(plan, sideID, n); err != nil {
+			if err := validateCheck(plan, sideID, n, fallbackFollows); err != nil {
 				return err
 			}
 			if i == final && !compatible(l.Type, n.Slots[0].Type) {
-				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit last %%t%d of type %s", plan, sideID, n.Slots[0].Type.String(), id, l.Type.String())
+				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit %s of type %s", plan, sideID, n.Slots[0].Type.String(), name, l.Type.String())
 			}
 		case *Eval:
 			if i < final {
-				return fmt.Errorf("plan %s: side %%t%d of last %%t%d is an eval before the final side, where a side is a check", plan, sideID, id)
+				return fmt.Errorf("plan %s: side %%t%d of %s is an eval before the final side, where a side is a check", plan, sideID, name)
 			}
-			if err := validateEval(plan, sideID, n); err != nil {
+			if err := validateEval(plan, sideID, n, fallbackFollows); err != nil {
 				return err
 			}
 			if len(n.Slots) != 1 {
-				return fmt.Errorf("plan %s: side %%t%d of last %%t%d has %d slots", plan, sideID, id, len(n.Slots))
-			}
-			if n.OnOOB == UseFallback {
-				return fmt.Errorf("plan %s: side %%t%d of last %%t%d falls back, but is no side of a first", plan, sideID, id)
+				return fmt.Errorf("plan %s: side %%t%d of %s has %d slots", plan, sideID, name, len(n.Slots))
 			}
 			if !compatible(l.Type, n.Slots[0].Type) {
-				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit last %%t%d of type %s", plan, sideID, n.Slots[0].Type.String(), id, l.Type.String())
+				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit %s of type %s", plan, sideID, n.Slots[0].Type.String(), name, l.Type.String())
 			}
 		default:
-			return fmt.Errorf("plan %s: side %%t%d of last %%t%d is %T, which is no check or eval", plan, sideID, id, side)
+			return fmt.Errorf("plan %s: side %%t%d of %s is %T, which is no check or eval", plan, sideID, name, side)
 		}
 	}
 
 	return nil
 }
 
-// validateFirst checks a first whose outcome is id: at least two sides of one
-// slot each, numbered after it, that fit its type. A side with a side after
-// it falls back where it fails, so it must be able to fail, and the last has
-// nothing to fall back to.
+// validateFirst checks a first whose outcome is id: at least two sides, each
+// yielding one slot that fits its type, numbered after it in execution order.
+// A side a fallback follows runs it where it fails, so it must be able to
+// fail, and the last side has nothing to fall back to.
 func validateFirst(plan string, id int, f *First, compatible func(target, outcome Type) bool) error {
-	if f.Result != OutcomeID(id) {
-		return fmt.Errorf("plan %s: first has result ID %d where %d is next; IDs must be dense in execution order", plan, f.Result, id)
+	if err := validateDense(plan, "first", f.Result, id); err != nil {
+		return err
 	}
 	if f.Type == nil {
 		return fmt.Errorf("plan %s: first %%t%d has no type", plan, id)
@@ -209,26 +228,60 @@ func validateFirst(plan string, id int, f *First, compatible func(target, outcom
 		return fmt.Errorf("plan %s: first %%t%d has %d sides and needs a fallback", plan, id, len(f.Sides))
 	}
 
-	last := len(f.Sides) - 1
+	sideID := id + 1
 	for i, side := range f.Sides {
-		sideID := id + 1 + i
-		if err := validateEval(plan, sideID, side); err != nil {
+		if err := validateFirstSide(plan, f, i, sideID, side, compatible); err != nil {
 			return err
 		}
-		if len(side.Slots) != 1 {
-			return fmt.Errorf("plan %s: side %%t%d of first %%t%d has %d slots", plan, sideID, id, len(side.Slots))
-		}
-		if !compatible(f.Type, side.Slots[0].Type) {
-			return fmt.Errorf("plan %s: side %%t%d of type %s does not fit first %%t%d of type %s", plan, sideID, side.Slots[0].Type.String(), id, f.Type.String())
-		}
-		if i < last && side.OnOOB != UseFallback {
-			return fmt.Errorf("plan %s: side %%t%d of first %%t%d has out-of-bounds scope %s; the fallback after it needs fallback", plan, sideID, id, side.OnOOB)
-		}
-		if i == last && side.OnOOB == UseFallback {
-			return fmt.Errorf("plan %s: the last side %%t%d of first %%t%d falls back to nothing", plan, sideID, id)
-		}
+		sideID += Outcomes(side)
 	}
+	return nil
+}
 
+// validateFirstSide checks side i of f, whose own nodes start at sideID: an
+// eval or a check of one slot fitting the first's type, or a last — an && of
+// its own, which binds no outcome, its value reaching a mapping through the
+// first's. A side a fallback follows must be able to fail. A message names a
+// side by the outcome it binds, and a nested last by its place.
+func validateFirstSide(plan string, f *First, i, sideID int, side Node, compatible func(target, outcome Type) bool) error {
+	fallbackFollows := i < len(f.Sides)-1
+	name := fmt.Sprintf("side %%t%d", sideID)
+	switch n := side.(type) {
+	case *Eval:
+		if err := validateEval(plan, sideID, n, fallbackFollows); err != nil {
+			return err
+		}
+		if len(n.Slots) != 1 {
+			return fmt.Errorf("plan %s: %s of first %%t%d has %d slots", plan, name, f.Result, len(n.Slots))
+		}
+		if fallbackFollows && !n.MayFail() {
+			return fmt.Errorf("plan %s: %s of first %%t%d cannot fail, so the fallback after it would never run", plan, name, f.Result)
+		}
+		return validateFirstSideType(plan, name, n.Slots[0].Type, f, compatible)
+	case *Check:
+		if err := validateCheck(plan, sideID, n, fallbackFollows); err != nil {
+			return err
+		}
+		return validateFirstSideType(plan, name, n.Slots[0].Type, f, compatible)
+	case *Last:
+		name = fmt.Sprintf("the last in side %d", i+1)
+		if n.Result != NoOutcome {
+			return fmt.Errorf("plan %s: %s of first %%t%d binds outcome %%t%d, and a side of a first binds none", plan, name, f.Result, n.Result)
+		}
+		if err := validateLast(plan, fmt.Sprintf("%s of first %%t%d", name, f.Result), sideID, n, compatible, fallbackFollows); err != nil {
+			return err
+		}
+		return validateFirstSideType(plan, name, n.Type, f, compatible)
+	}
+	return fmt.Errorf("plan %s: side %d of first %%t%d is %T, which is no eval, check or last", plan, i+1, f.Result, side)
+}
+
+// validateFirstSideType checks that a side's own type fits the first's, which
+// names the whole selection.
+func validateFirstSideType(plan, name string, side Type, f *First, compatible func(target, outcome Type) bool) error {
+	if !compatible(f.Type, side) {
+		return fmt.Errorf("plan %s: %s of type %s does not fit first %%t%d of type %s", plan, name, side.String(), f.Result, f.Type.String())
+	}
 	return nil
 }
 
@@ -244,7 +297,7 @@ func ValidatePrint(p *PrintPlan) error {
 		return fmt.Errorf("plan %s has no arguments", p.Label)
 	}
 	for i, ev := range p.Evals {
-		if err := validateEval(p.Label, i, ev); err != nil {
+		if err := validateEval(p.Label, i, ev, false); err != nil {
 			return err
 		}
 		if ev.MayFail() {
@@ -279,7 +332,9 @@ func validateHead(h Head) error {
 	return nil
 }
 
-func validateEval(plan string, i int, ev *Eval) error {
+// validateEval checks an eval whose outcome is i; fallbackFollows says a
+// fallback follows the side of a first it belongs to.
+func validateEval(plan string, i int, ev *Eval, fallbackFollows bool) error {
 	if ev.Result != OutcomeID(i) {
 		return fmt.Errorf("plan %s: eval %d has result ID %d; IDs must be dense in execution order", plan, i, ev.Result)
 	}
@@ -288,6 +343,9 @@ func validateEval(plan string, i int, ev *Eval) error {
 	}
 
 	node := fmt.Sprintf("eval %%t%d", i)
+	if err := validateScope(plan, node, ev.OnOOB, fallbackFollows); err != nil {
+		return err
+	}
 	if err := validateSlots(plan, node, ev.Slots); err != nil {
 		return err
 	}
@@ -621,52 +679,37 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 }
 
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
-// an eval, or the one slot of a check, a first or a last, never a side of a
-// first or a last.
+// an eval, or the one slot of a check, a first or a last, never a node inside
+// one of those.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 	for _, node := range p.Values() {
-		switch n := node.(type) {
-		case *Eval:
-			if n.Result != ref.Outcome {
-				continue
-			}
-			if ref.Slot < 0 || ref.Slot >= len(n.Slots) {
+		if bound, binds := result(node); binds && bound == ref.Outcome {
+			t, inRange := outcomeSlotType(node, ref.Slot)
+			if !inRange {
 				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
 			}
-			return n.Slots[ref.Slot].Type, nil
-		case *Check:
-			if n.Result != ref.Outcome {
-				continue
-			}
-			if ref.Slot != 0 {
-				return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
-			}
-			return n.Slots[0].Type, nil
-		case *First:
-			if n.Result == ref.Outcome {
-				if ref.Slot != 0 {
-					return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
-				}
-				return n.Type, nil
-			}
-			for _, side := range n.Sides {
-				if side.Result == ref.Outcome {
-					return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of first %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, n.Result)
-				}
-			}
-		case *Last:
-			if n.Result == ref.Outcome {
-				if ref.Slot != 0 {
-					return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
-				}
-				return n.Type, nil
-			}
-			for _, side := range n.Sides {
-				if bound, _ := result(side); bound == ref.Outcome {
-					return nil, fmt.Errorf("plan %s: commit references %%t%d, a side of last %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, n.Result)
-				}
-			}
+			return t, nil
+		}
+		if holds(node, ref.Outcome) {
+			bound, _ := result(node)
+			return nil, fmt.Errorf("plan %s: commit references %%t%d, which sits inside %s %%t%d, whose outcome a mapping takes instead", p.Label, ref.Outcome, word(node), bound)
 		}
 	}
 	return nil, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Label, ref.Outcome)
+}
+
+// word names a node's kind as the text view spells it. A plan's values are
+// the only nodes it names, and Values unwraps a gate, so a gate has no word.
+func word(node Node) string {
+	switch node.(type) {
+	case *Eval:
+		return "eval"
+	case *Check:
+		return "check"
+	case *First:
+		return "first"
+	case *Last:
+		return "last"
+	}
+	panic(fmt.Sprintf("internal: no word for %T", node))
 }

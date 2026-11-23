@@ -15,6 +15,11 @@ type Type interface {
 // order.
 type OutcomeID int
 
+// NoOutcome is the result of a first or a last that binds none: one nested as
+// a side of a first, whose value reaches a mapping through the first's own
+// outcome. Its name would be a name nothing could reference, so it has none.
+const NoOutcome OutcomeID = -1
+
 // Ownership is an outcome slot's annotation (plan §8).
 type Ownership int
 
@@ -47,8 +52,8 @@ const (
 	// An eval's mappings say in OnSkip what each target then holds, and a
 	// check's gate rejects the statement.
 	SkipOutcome
-	// UseFallback: the eval is a side of a first with a side after it, which
-	// runs where an access fails.
+	// UseFallback: the node is in a side of a first that a fallback follows,
+	// which runs where an access fails.
 	UseFallback
 )
 
@@ -71,28 +76,37 @@ func (ev *Eval) MaySkip() bool { return ev.OnOOB == SkipOutcome }
 // First is a value-position || (plan §4): its sides run in order until one
 // yields, and that side's value is its outcome. A side before the last falls
 // back to the next where it fails; where the last skips, the outcome skips.
-// Each side has one slot, and a chain of || is one First however it is
-// grouped. Its sides take the outcome IDs after Result.
+// A side is an eval, a check, or a last — an && of its own, which binds no
+// outcome. Each side yields one slot, and a chain of || is one First however
+// it is grouped. Its sides take the outcome IDs after Result.
 type First struct {
 	Result OutcomeID
 	Type   Type
-	Sides  []*Eval
+	Sides  []Node
 }
 
 // MaySkip reports a first whose last side may skip, when no side yields.
-func (f *First) MaySkip() bool { return f.Sides[len(f.Sides)-1].MaySkip() }
+func (f *First) MaySkip() bool { return f.last().(Outcome).MaySkip() }
+
+// last returns the side no fallback follows, whose failure skips the outcome.
+func (f *First) last() Node { return f.Sides[len(f.Sides)-1] }
 
 // Last is an && (plan §4), in value position or over a gate's conditions: its
 // sides run in order while each yields, and its outcome is its final side's,
 // yielding where every side did. A side before the final one is a check,
 // which is only tested, and the final one is a check or an eval. Each side
 // has one slot, and a chain of && is one Last however it is grouped. Its
-// sides take the outcome IDs after Result.
+// sides take the outcome IDs after Result, or the next IDs in execution order
+// where it is a side of a first and Result is NoOutcome.
 type Last struct {
 	Result OutcomeID
 	Type   Type
 	Sides  []Node
 }
+
+// MaySkip reports a last whose failure reaches the commit: every one, since
+// its checks may not hold and no fallback follows a last of its own.
+func (l *Last) MaySkip() bool { return true }
 
 // final returns the side whose outcome is the last's own.
 func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
@@ -113,7 +127,8 @@ type Check struct {
 func (ch *Check) MayFail() bool { return true }
 
 // MaySkip reports a check whose failure reaches the commit: every one, since
-// no fallback follows a check.
+// its comparison may not hold. A check that a fallback follows is a side of a
+// first, whose own MaySkip reads the side no fallback follows.
 func (ch *Check) MaySkip() bool { return true }
 
 // Supplier is a node whose value a mapping can take: an eval, or a check,
@@ -149,19 +164,111 @@ func (*Check) node() {}
 func (*Last) node()  {}
 func (*Gate) node()  {}
 
-// result returns the outcome a node binds; a gate binds none.
+// Outcome is a node whose outcome a mapping can take: an eval, a check, a
+// first or a last. A gate is no outcome, and a last nested as a side of a
+// first binds none, though its value still reaches a mapping.
+type Outcome interface {
+	Node
+	MaySkip() bool
+}
+
+// result returns the outcome a node binds: none for a gate, or for a last
+// that is a side of a first.
 func result(node Node) (OutcomeID, bool) {
 	switch n := node.(type) {
 	case *Eval:
 		return n.Result, true
-	case *First:
-		return n.Result, true
 	case *Check:
 		return n.Result, true
+	case *First:
+		return n.Result, n.Result != NoOutcome
 	case *Last:
-		return n.Result, true
+		return n.Result, n.Result != NoOutcome
 	}
-	return 0, false
+	return NoOutcome, false
+}
+
+// Outcomes counts the outcomes node binds, those of the nodes inside its
+// sides included, so that the node after it takes the next ID in execution
+// order. It is asked about a value, never about a gate, whose body holds the
+// values and is counted through them.
+func Outcomes(node Node) int {
+	total := 0
+	if _, binds := result(node); binds {
+		total = 1
+	}
+	for _, side := range sidesOf(node) {
+		total += Outcomes(side)
+	}
+	return total
+}
+
+// supplier returns the node whose value node hands on: an eval or a check
+// supplies its own, and a last supplies its final side's.
+func supplier(node Node) Supplier {
+	if l, isLast := node.(*Last); isLast {
+		return supplier(l.final())
+	}
+	return node.(Supplier)
+}
+
+// Fallible reports a node a failure can keep from yielding, so that a
+// fallback after it has something to resolve: an eval where it holds a
+// checked access, and a check or a last always, a comparison being able not
+// to hold. It is asked about a side of a first, and about no other node.
+func Fallible(node Node) bool {
+	if ev, isEval := node.(*Eval); isEval {
+		return ev.MayFail()
+	}
+	return true
+}
+
+// sidesOf returns the sides of a first or a last, and none for any other node.
+func sidesOf(node Node) []Node {
+	switch n := node.(type) {
+	case *First:
+		return n.Sides
+	case *Last:
+		return n.Sides
+	}
+	return nil
+}
+
+// holds reports whether id names a node inside node: one of its sides, or a
+// node inside one of those.
+func holds(node Node, id OutcomeID) bool {
+	for _, side := range sidesOf(node) {
+		if bound, binds := result(side); binds && bound == id {
+			return true
+		}
+		if holds(side, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// outcomeSlotType is the type of slot i of the outcome node binds; inRange is
+// false where node binds no such slot. Only an eval binds several.
+func outcomeSlotType(node Node, i int) (t Type, inRange bool) {
+	if ev, isEval := node.(*Eval); isEval {
+		if i < 0 || i >= len(ev.Slots) {
+			return nil, false
+		}
+		return ev.Slots[i].Type, true
+	}
+	if i != 0 {
+		return nil, false
+	}
+	switch n := node.(type) {
+	case *Check:
+		return n.Slots[0].Type, true
+	case *First:
+		return n.Type, true
+	case *Last:
+		return n.Type, true
+	}
+	return nil, false
 }
 
 type TargetKind int
@@ -307,8 +414,20 @@ func (p *AssignPlan) tests() []*Check {
 	}
 
 	for _, node := range p.Values() {
-		if l, isLast := node.(*Last); isLast {
-			checks = appendChecks(checks, l.Sides[:len(l.Sides)-1])
+		checks = appendTested(checks, node)
+	}
+	return checks
+}
+
+// appendTested adds the checks of node whose outcomes are only tested: those
+// before the final side of a last, wherever the last sits.
+func appendTested(checks []*Check, node Node) []*Check {
+	switch n := node.(type) {
+	case *Last:
+		return appendChecks(checks, n.Sides[:len(n.Sides)-1])
+	case *First:
+		for _, side := range n.Sides {
+			checks = appendTested(checks, side)
 		}
 	}
 	return checks
@@ -363,27 +482,29 @@ func (p *AssignPlan) sources(ref OutcomeRef) []source {
 	case *First:
 		sides := make([]source, len(n.Sides))
 		for i, side := range n.Sides {
-			sides[i] = source{ref: OutcomeRef{Outcome: side.Result}, node: side}
+			sides[i] = sourceOf(side)
 		}
 		return sides
 	case *Last:
-		final := n.final().(Supplier)
-		id, _ := result(final)
-		return []source{{ref: OutcomeRef{Outcome: id}, node: final}}
+		return []source{sourceOf(n)}
 	}
 	return nil
 }
 
-// maySkip reports a mapping whose own outcome may skip: it comes from a last,
-// whose checks can fail, or the last node that can supply its value may skip.
-// A gate's rejection is no skip of one mapping: it leaves every mapping of the
-// statement unapplied together.
+// sourceOf is the node a mapping takes node's value from, and the slot it
+// gives.
+func sourceOf(node Node) source {
+	sup := supplier(node)
+	id, _ := result(sup)
+	return source{ref: OutcomeRef{Outcome: id}, node: sup}
+}
+
+// maySkip reports a mapping whose own outcome may skip, which the node that
+// binds it answers: a first through the side no fallback follows, and a last
+// always, its checks being able to fail. A gate's rejection is no skip of one
+// mapping: it leaves every mapping of the statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
-	if _, isLast := p.value(m.Outcome.Outcome).(*Last); isLast {
-		return true
-	}
-	sources := p.sources(m.Outcome)
-	return sources[len(sources)-1].node.MaySkip()
+	return p.value(m.Outcome.Outcome).(Outcome).MaySkip()
 }
 
 // mayNotCommit reports a mapping that some path leaves unapplied, so that its
