@@ -218,9 +218,10 @@ func logicalNewlines(s string) string {
 }
 
 // escapeControls spells out what a reader would not otherwise see, so that an
-// operand stays on one physical line, a source line keeps its own, and no two
-// statements render alike: a line terminator, a tab, and every rune Unicode
-// calls unprintable, the format and separator characters among them.
+// operand stays on one physical line, a source line keeps its own, and two
+// statements that differ never render alike: a line terminator, a tab, and
+// every rune Unicode calls unprintable, the format and separator characters
+// among them.
 func escapeControls(s string) string {
 	var b strings.Builder
 	for _, r := range logicalNewlines(s) {
