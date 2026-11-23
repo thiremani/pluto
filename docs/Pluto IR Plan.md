@@ -737,14 +737,24 @@ two"`), and a block-layout array literal — rank-2 rows, a table — is spelled
 as in the source with each of its line breaks escaped the same way
 (`[\n    1 2\n    3 4\n]`; decided 2026-11-13, matrix rows 2c and 36).
 
-A plan's `source` follows the opposite rule, since it is the statement as
-written rather than an operand: the label stands alone and the statement's own
-lines sit one level in, so a block literal reads as its author laid it out
-(decided 2026-11-23). Within a line every control character is still escaped,
-so a source is never invisible and never breaks the layout; only a line break
-becomes a line. A multi-line string literal is the one place the two rules
-disagree about what the text holds, and the operand line settles it. `commit`
-and `advance` carry no mode keyword: both are always simultaneous (§14).
+A plan's `source` follows the opposite rule, since it is the whole statement
+rather than an operand: the label stands alone and the statement's own lines
+sit one level in, so a block literal reads as it is laid out (decided
+2026-11-23). What it renders is the ast's spelling of the statement, not the
+file's bytes, so an operator root carries the pair it wraps itself in
+(`d = (Twice(d) + 1)`) and a block literal's rows carry the ast's own
+indentation. Within a line, everything a reader could not otherwise see is
+escaped — a tab, a control, and every rune Unicode calls unprintable, the
+format and separator characters among them — so no two statements render
+alike and a source never breaks the layout. Only a line terminator becomes a
+line, and LF, CRLF and CR all count as one (README), so a terminator reads the
+same however a file spells it and never collides with the `\r` a source asks
+for by escape. A multi-line string literal is the one place the two rules
+disagree about what the text holds: the source shifts its continuation to the
+section's indent, and the operand beside it is exact.
+
+`commit` and `advance` carry no mode keyword: both are always simultaneous
+(§14).
 
 ```text
 assign x
