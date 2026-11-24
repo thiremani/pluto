@@ -282,7 +282,9 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 		return []token.Token{tok} // No split needed
 	}
 
-	// Split into matched part and remainder
+	// Split into matched part and remainder. Each piece keeps the runes of
+	// the run that spell it, so a token still says where its own source is.
+	matched := utf8.RuneCountInString(match)
 	result := []token.Token{
 		{
 			Type:     token.OPERATOR,
@@ -290,6 +292,8 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			FileName: tok.FileName,
 			Line:     tok.Line,
 			Column:   tok.Column,
+			Pos:      tok.Pos,
+			Len:      min(matched, tok.Len),
 			// Preserve source spacing so attached-prefix boundary checks still
 			// work after an operator run is split into parseable pieces.
 			HadSpace: tok.HadSpace,
@@ -303,7 +307,9 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			Literal:  remainder,
 			FileName: tok.FileName,
 			Line:     tok.Line,
-			Column:   tok.Column + utf8.RuneCountInString(match),
+			Column:   tok.Column + matched,
+			Pos:      tok.Pos + matched,
+			Len:      max(tok.Len-matched, 0),
 		})
 	}
 

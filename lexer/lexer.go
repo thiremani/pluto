@@ -94,39 +94,76 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 
 // Spelling is the source a statement is spelled with: the input from first's
 // own start to the end of last, so a comment the statement does not reach is
-// never in it. Every line after the first moves left by the indentation first
-// stands at, or by its own leading spaces where it has fewer, so nothing it
-// spells is ever cut. A line a string literal runs into keeps its characters
-// as they are, since those are what the string holds; literals are the string
-// tokens the statement spans. A statement either token spells no source has
-// no spelling.
+// never in it. Its lines keep the shape the file gives them, moved left
+// together by as much as all of them can spare, so a table's hanging header
+// still stands against its rows. A line a string literal runs into keeps its
+// characters as they are, since those are what the string holds; literals are
+// the string tokens the statement spans, in source order. A statement either
+// token spells no source, or whose span falls outside the input, has no
+// spelling.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
-	if first.Len == 0 || last.Len == 0 || first.Pos > last.Pos {
+	if first.Len <= 0 || last.Len <= 0 || first.Column < 1 || first.Pos < 0 ||
+		first.Pos > last.Pos || last.Pos+last.Len > len(l.input) {
 		return ""
 	}
 
-	dedent := first.Column - 1
-	spelled := make([]string, 0, 4)
-	for i, line := range spanLines(l.input, first.Pos, last.Pos+last.Len) {
+	lines := spanLines(l.input, first.Pos, last.Pos+last.Len)
+	markLiterals(lines, literals)
+	indent := first.Column - 1
+	dedent := margin(lines, indent)
+
+	spelled := make([]string, len(lines))
+	for i, line := range lines {
 		text := line.text
-		if i > 0 && !inLiteral(literals, line.pos) {
-			text = text[min(dedent, len(text)-len(strings.TrimLeft(text, " "))):]
+		switch {
+		case line.content:
+		case i == 0:
+			text = strings.Repeat(" ", indent-dedent) + text
+		default:
+			text = text[min(dedent, leading(text)):]
 		}
-		if !inLiteral(literals, line.end) {
+		if !line.open {
 			text = strings.TrimRight(text, " \t")
 		}
-		spelled = append(spelled, text)
+		spelled[i] = text
 	}
 	return strings.Join(spelled, "\n")
 }
 
-// spanLine is one line of a span: its text, and where in the input it starts
-// and ends. A line a literal runs into starts inside one; a line a literal
-// runs out of ends inside one.
+// margin is how far a span's lines move left together: the indentation its
+// first line stands at, or the least a later line of its own layout has where
+// that is less, so nothing a line spells is ever cut. A line a literal runs
+// into holds a string's characters, and a blank or comment-only line holds
+// nothing of the statement, so neither sets the margin.
+func margin(lines []spanLine, indent int) int {
+	for _, line := range lines[1:] {
+		if indent == 0 {
+			break
+		}
+		trimmed := strings.TrimLeft(line.text, " ")
+		if line.content || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent = min(indent, len(line.text)-len(trimmed))
+	}
+	return indent
+}
+
+// leading counts the spaces a line opens with.
+func leading(text string) int {
+	return len(text) - len(strings.TrimLeft(text, " "))
+}
+
+// spanLine is one line of a span: its text, where in the input it starts and
+// ends, and what a string literal does to it. content says one runs into the
+// line, so its characters are the string's; open says one runs out of it, so
+// what it ends with is the string's too.
 type spanLine struct {
-	text string
-	pos  int
-	end  int
+	text    string
+	pos     int
+	end     int
+	content bool
+	open    bool
 }
 
 // spanLines splits the input from pos to end into lines, each terminator the
@@ -147,15 +184,22 @@ func spanLines(input []rune, pos, end int) []spanLine {
 	}
 }
 
-// inLiteral reports whether pos falls inside one of the string literals,
-// where the characters are the string's own rather than the file's layout.
-func inLiteral(literals []token.Token, pos int) bool {
-	for _, lit := range literals {
-		if pos > lit.Pos && pos < lit.Pos+lit.Len {
-			return true
+// markLiterals says of each line what the string literals do to it. Lines and
+// literals are both in source order, so one pass over each settles every
+// line: a literal that ends before a line starts is behind every line after
+// it, and one that starts after a line ends is ahead of every line before it.
+func markLiterals(lines []spanLine, literals []token.Token) {
+	at := 0
+	for i := range lines {
+		for at < len(literals) && literals[at].Pos+literals[at].Len <= lines[i].pos {
+			at++
+		}
+		for j := at; j < len(literals) && literals[j].Pos < lines[i].end; j++ {
+			lit, stop := literals[j].Pos, literals[j].Pos+literals[j].Len
+			lines[i].content = lines[i].content || (lines[i].pos > lit && lines[i].pos < stop)
+			lines[i].open = lines[i].open || (lines[i].end > lit && lines[i].end < stop)
 		}
 	}
-	return false
 }
 
 // tokenAt makes a token at column on the line being read. Len stays zero:
@@ -432,12 +476,14 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 			tok = l.createToken(token.GEQ, token.SYM_GEQ, hadSpace)
 			l.readRune()
 		} else if l.peekRune() == '>' {
+			// The token starts at the first '>', so it is made before the
+			// rest of the run is read: a token carries where its spelling
+			// starts, and its column is reported from there.
+			tok = l.createToken(token.OPERATOR, token.SYM_ASR, hadSpace)
 			l.readRune()
 			if l.peekRune() == '>' {
-				tok = l.createToken(token.OPERATOR, token.SYM_SHR, hadSpace)
+				tok.Literal = token.SYM_SHR
 				l.readRune()
-			} else {
-				tok = l.createToken(token.OPERATOR, token.SYM_ASR, hadSpace)
 			}
 		} else {
 			tok = l.createToken(token.GTR, token.SYM_GTR, hadSpace)

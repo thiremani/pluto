@@ -158,6 +158,10 @@ line two"
     u =
 # flush left
         x + 1
+    v = [
+   : Name Score
+     "Ada" 1
+    ]
     r = t + 1
 `
 	l := lexer.New("TestStatementSpellingInBody", code)
@@ -175,7 +179,7 @@ line two"
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", " v = [\n: Name Score\n  \"Ada\" 1\n ]", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {

@@ -1474,16 +1474,50 @@ func TestSpelling(t *testing.T) {
 	}
 }
 
-// A statement either token spells no source has no spelling, so a caller that
-// hands over a layout token gets nothing rather than a slice of the input.
-func TestSpellingWantsSpelledTokens(t *testing.T) {
-	l := New("TestSpellingWantsSpelledTokens", "a = 1\n")
+// A span Spelling cannot stand behind has no spelling, so a caller that hands
+// over a layout token, a column before the first, or a reach past the input
+// gets nothing rather than a slice of whatever lies there.
+func TestSpellingWantsASpanItCanStandBehind(t *testing.T) {
+	l := New("TestSpellingWantsASpanItCanStandBehind", "a = 1\nb = 2\n")
 	first, _ := l.NextToken()
-	if got := l.Spelling(first, token.Token{}, nil); got != "" {
-		t.Fatalf("Spelling with an unspelled last = %q, want %q", got, "")
+	last := first
+	for {
+		tok, _ := l.NextToken()
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Len > 0 {
+			last = tok
+		}
 	}
-	if got := l.Spelling(token.Token{}, first, nil); got != "" {
-		t.Fatalf("Spelling with an unspelled first = %q, want %q", got, "")
+
+	past := last
+	past.Len = 99
+	before := first
+	before.Column = 0
+	negative := first
+	negative.Pos = -1
+	backwards := first
+	backwards.Pos = last.Pos + 1
+
+	cases := []struct {
+		name        string
+		first, last token.Token
+	}{
+		{"AnUnspelledLast", first, token.Token{}},
+		{"AnUnspelledFirst", token.Token{}, first},
+		{"ANegativeLength", first, token.Token{Pos: 1, Len: -1}},
+		{"AColumnBeforeTheFirst", before, last},
+		{"APositionBeforeTheInput", negative, last},
+		{"AReachPastTheInput", first, past},
+		{"ASpanThatRunsBackwards", backwards, first},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := l.Spelling(tc.first, tc.last, nil); got != "" {
+				t.Fatalf("Spelling = %q, want %q", got, "")
+			}
+		})
 	}
 }
 
@@ -1503,7 +1537,7 @@ func TestSpellingLineEndings(t *testing.T) {
 // can quote any span of the input from its tokens alone. A layout token
 // spells nothing and says so with a zero length.
 func TestTokenExtents(t *testing.T) {
-	const src = "a = 5 # one\nm = [\n  2 3\n]\ns = \"x\ny\"\nimp = 5a\n"
+	const src = "a = 5 # one\nm = [\n  2 3\n]\ns = \"x\ny\"\nimp = 5a\nf = -8 >> 1 >>> 2 << 3\ng = a == b != c <= d >= e\nh = .5\nt = [\n  : Name Score\n    \"Ada\" 1\n]\n"
 	l := New("TestTokenExtents", src)
 	runes := []rune(src)
 	for {
