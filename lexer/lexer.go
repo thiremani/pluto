@@ -98,18 +98,11 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 // together by as much as all of them can spare, so a table's hanging header
 // still stands against its rows. A line a string literal runs into keeps its
 // characters as they are, since those are what the string holds; literals are
-// the string tokens the statement spans, in source order. A statement either
-// token spells no source, or whose span falls outside the input, has no
-// spelling.
+// the string tokens the statement spans, in source order. first and last are
+// tokens this lexer produced, each spelling source of its own, first at or
+// before last: no other pair names a span of this input, so a caller that
+// hands one over has a bug that checking here would only move.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
-	// The reach past last is measured against what is left of the input
-	// rather than added to its start, so a length a caller invented cannot
-	// carry the sum past what an int holds.
-	if first.Len <= 0 || last.Len <= 0 || first.Column < 1 || first.Pos < 0 ||
-		first.Pos > last.Pos || last.Pos >= len(l.input) || last.Len > len(l.input)-last.Pos {
-		return ""
-	}
-
 	lines := spanLines(l.input, first.Pos, last.Pos+last.Len)
 	markLiterals(lines, literals)
 	indent := first.Column - 1

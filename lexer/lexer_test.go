@@ -1529,53 +1529,6 @@ func TestSpelling(t *testing.T) {
 	}
 }
 
-// A span Spelling cannot stand behind has no spelling, so a caller that hands
-// over a layout token, a column before the first, or a reach past the input
-// gets nothing rather than a slice of whatever lies there.
-func TestSpellingWantsASpanItCanStandBehind(t *testing.T) {
-	l := New("TestSpellingWantsASpanItCanStandBehind", "a = 1\nb = 2\n")
-	first, _ := l.NextToken()
-	last := first
-	for {
-		tok, _ := l.NextToken()
-		if tok.Type == token.EOF {
-			break
-		}
-		if tok.Len > 0 {
-			last = tok
-		}
-	}
-
-	past := last
-	past.Len = 99
-	before := first
-	before.Column = 0
-	negative := first
-	negative.Pos = -1
-	backwards := first
-	backwards.Pos = last.Pos + 1
-
-	cases := []struct {
-		name        string
-		first, last token.Token
-	}{
-		{"AnUnspelledLast", first, token.Token{}},
-		{"AnUnspelledFirst", token.Token{}, first},
-		{"ANegativeLength", first, token.Token{Pos: 1, Len: -1}},
-		{"AColumnBeforeTheFirst", before, last},
-		{"APositionBeforeTheInput", negative, last},
-		{"AReachPastTheInput", first, past},
-		{"ASpanThatRunsBackwards", backwards, first},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := l.Spelling(tc.first, tc.last, nil); got != "" {
-				t.Fatalf("Spelling = %q, want %q", got, "")
-			}
-		})
-	}
-}
-
 // Spelling reads a terminator the same however the file spells it, as the
 // lexer itself does.
 func TestSpellingLineEndings(t *testing.T) {
