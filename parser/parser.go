@@ -431,12 +431,17 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 }
 
 // noteSpelled keeps what a statement's spelling needs of the token now
-// current: the last one a source spells, since the layout token a statement
-// ends on reaches past it, and the string literals it spans, whose characters
-// are the string's own rather than the file's layout.
+// current: the first and last tokens a source spells, and the string literals
+// between them, whose characters are the string's own rather than the file's
+// layout. Both ends are taken from what a source spells, so neither the
+// layout token a statement ends on nor the illegal one a recovered statement
+// starts after can reach past it.
 func (p *StmtParser) noteSpelled(tok token.Token) {
 	if !p.spelling || tok.Len == 0 {
 		return
+	}
+	if p.stmtStart.Len == 0 {
+		p.stmtStart = tok
 	}
 	p.stmtEnd = tok
 	if tok.Type == token.STRING {
@@ -472,8 +477,8 @@ func (p *StmtParser) parseStatement() (stmt ast.Statement) {
 	}
 	firstToken := p.curToken
 	p.spelling = true
-	p.stmtStart = firstToken
-	p.stmtEnd = firstToken
+	p.stmtStart = token.Token{}
+	p.stmtEnd = token.Token{}
 	p.stmtLiterals = p.stmtLiterals[:0]
 	p.noteSpelled(firstToken)
 	defer func() { p.spell(stmt) }()
