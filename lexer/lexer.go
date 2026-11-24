@@ -111,13 +111,13 @@ func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string
 	for i, line := range lines {
 		text := line.text
 		switch {
-		case line.content:
+		case line.beginsInString:
 		case i == 0:
 			text = strings.Repeat(" ", indent-dedent) + text
 		default:
 			text = text[min(dedent, leading(text)):]
 		}
-		if !line.open {
+		if !line.endsInString {
 			text = strings.TrimRight(text, " \t")
 		}
 		spelled[i] = text
@@ -128,7 +128,7 @@ func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string
 // margin is how far a span's lines move left together: the indentation its
 // first line stands at, or the least a later line of its own layout has where
 // that is less, so nothing a line spells is ever cut. A line a literal runs
-// into holds a string's characters, and a blank or comment-only line holds
+// begins inside a string holds its characters, and a blank or comment-only line holds
 // nothing of the statement, so neither sets the margin.
 func margin(lines []spanLine, indent int) int {
 	for _, line := range lines[1:] {
@@ -138,7 +138,7 @@ func margin(lines []spanLine, indent int) int {
 		// A blank or comment line may be indented with tabs, which no line
 		// of the statement's own may be, so what it holds is read past both.
 		held := strings.TrimLeft(line.text, " \t")
-		if line.content || held == "" || strings.HasPrefix(held, "#") {
+		if line.beginsInString || held == "" || strings.HasPrefix(held, "#") {
 			continue
 		}
 		indent = min(indent, leading(line.text))
@@ -151,15 +151,17 @@ func leading(text string) int {
 	return len(text) - len(strings.TrimLeft(text, " "))
 }
 
-// spanLine is one line of a span: its text, and what a string literal does to
-// it. content says one runs into the line, so its characters are the
-// string's; open says one runs out of it, so what it ends with is too. Where
-// the line sits in the input is what decides those, and is wanted for nothing
-// else, so it stays inside spanLines.
+// spanLine is one line of a span: its text, and whether a string literal is
+// open at either end of it. A line that begins inside one opens with the
+// string's own characters, so moving it left would take them; a line that
+// ends inside one ends with them, so trimming it would. A middle line of a
+// literal of several lines does both. Where the line sits in the input is
+// what decides these, and is wanted for nothing else, so it stays inside
+// spanLines.
 type spanLine struct {
-	text    string
-	content bool
-	open    bool
+	text           string
+	beginsInString bool
+	endsInString   bool
 }
 
 // spanLines splits the input from pos to end into lines — each terminator the
@@ -182,8 +184,8 @@ func spanLines(input []rune, pos, end int, literals []token.Token) []spanLine {
 		}
 		for j := at; j < len(literals) && literals[j].Pos < i; j++ {
 			lit, stop := literals[j].Pos, literals[j].Pos+literals[j].Len
-			line.content = line.content || (start > lit && start < stop)
-			line.open = line.open || (i > lit && i < stop)
+			line.beginsInString = line.beginsInString || (start > lit && start < stop)
+			line.endsInString = line.endsInString || (i > lit && i < stop)
 		}
 		lines = append(lines, line)
 
