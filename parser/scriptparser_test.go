@@ -104,15 +104,16 @@ world"
 }
 
 // A statement the parser recovers is spelled from the first token a source
-// spells, not from whatever stood before it. An indent of tabs is reported
-// and lexed as a token of its own that spells nothing, and the statement that
-// follows it is still quoted as it was written.
+// spells, not from whatever stood before it. A tab in an indent is reported
+// and lexed as a token of its own that spells nothing and stands at the
+// tab's column, so a span begun there would open before the statement's own
+// line. Begun at x, it is that line as written, moved left past its spaces.
 func TestRecoveredStatementSpellsWhatItHas(t *testing.T) {
-	sp := NewScriptParser(lexer.New("TestRecoveredStatementSpellsWhatItHas", "\tx = 1\nx\n"))
+	sp := NewScriptParser(lexer.New("TestRecoveredStatementSpellsWhatItHas", "a = 2\n  \tx = 1\n"))
 	program := sp.Parse()
 	require.NotEmpty(t, sp.Errors(), "expected the tab indent to be reported")
 	require.Len(t, program.Statements, 2)
-	require.Equal(t, "x = 1", program.Statements[0].(*ast.LetStatement).Src)
+	require.Equal(t, "\tx = 1", program.Statements[1].(*ast.LetStatement).Src)
 }
 
 // A run of operator characters the parser splits gives each piece the runes

@@ -92,9 +92,10 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	return tok
 }
 
-// Spelling is the source a statement is spelled with: the input from first's
-// own start to the end of last, so a comment the statement does not reach is
-// never in it. Its lines keep the shape the file gives them, moved left
+// Spelling is the source a statement is spelled with: the input from the
+// start of first's line to the end of last, so every line holds the
+// indentation the file gives it and a comment the statement does not reach
+// is never in it. Its lines keep the shape the file gives them, moved left
 // together by as much as all of them can spare, so a table's hanging header
 // still stands against its rows. A line a string literal runs into keeps its
 // characters as they are, since those are what the string holds; literals are
@@ -103,18 +104,14 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 // before last: no other pair names a span of this input, so a caller that
 // hands one over has a bug that checking here would only move.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
-	lines := spanLines(l.input, first.Pos, last.Pos+last.Len, literals)
-	indent := first.Column - 1
-	dedent := margin(lines, indent)
+	lineStart := first.Pos - (first.Column - 1)
+	lines := spanLines(l.input, lineStart, last.Pos+last.Len, literals)
+	dedent := margin(lines)
 
 	spelled := make([]string, len(lines))
 	for i, line := range lines {
 		text := line.text
-		switch {
-		case line.beginsInString:
-		case i == 0:
-			text = strings.Repeat(" ", indent-dedent) + text
-		default:
+		if !line.beginsInString {
 			text = text[min(dedent, leading(text)):]
 		}
 		if !line.endsInString {
@@ -130,7 +127,8 @@ func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string
 // that is less, so nothing a line spells is ever cut. A line that begins
 // inside a string holds its characters, and a blank or comment-only line
 // holds nothing of the statement, so neither sets the margin.
-func margin(lines []spanLine, indent int) int {
+func margin(lines []spanLine) int {
+	indent := leading(lines[0].text)
 	for _, line := range lines[1:] {
 		if indent == 0 {
 			break
