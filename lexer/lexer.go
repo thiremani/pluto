@@ -127,9 +127,9 @@ func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string
 
 // margin is how far a span's lines move left together: the indentation its
 // first line stands at, or the least a later line of its own layout has where
-// that is less, so nothing a line spells is ever cut. A line a literal runs
-// begins inside a string holds its characters, and a blank or comment-only line holds
-// nothing of the statement, so neither sets the margin.
+// that is less, so nothing a line spells is ever cut. A line that begins
+// inside a string holds its characters, and a blank or comment-only line
+// holds nothing of the statement, so neither sets the margin.
 func margin(lines []spanLine, indent int) int {
 	for _, line := range lines[1:] {
 		if indent == 0 {
