@@ -513,8 +513,12 @@ func (p *StmtParser) parseStatement() (stmt ast.Statement) {
 	}
 
 	p.checkNoDuplicates(identList)
-	if stmt := p.parseLetStatement(identList); stmt != nil {
-		return stmt
+	// A nil *ast.LetStatement is not a nil ast.Statement, so the let is named
+	// and tested rather than returned straight through. It is not named stmt:
+	// this function returns one, and nothing should have to ask which the
+	// deferred spelling reads.
+	if let := p.parseLetStatement(identList); let != nil {
+		return let
 	}
 	return nil
 }

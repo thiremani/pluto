@@ -724,14 +724,31 @@ p = Person
 
 // A declaration is no statement a plan is built from, so parsing one keeps
 // none of its tokens: the recording runs for as long as parseStatement does
-// and no longer, where it once grew for the parser's whole life.
+// and no longer, where it once grew for the parser's whole life. Each case
+// puts a function first, so the recording has been on and has to have been
+// closed, and asks for the buffer's capacity rather than its length, since
+// emptying a slice leaves what it allocated behind. A statement that fails
+// to parse takes its own way out of parseStatement and closes the recording
+// just the same.
 func TestCodeDeclarationsKeepNoTokens(t *testing.T) {
-	var src strings.Builder
-	for i := 0; i < 100; i++ {
-		src.WriteString("k = \"v\"\n")
+	cases := []struct {
+		name  string
+		code  string
+		parse bool
+	}{
+		{"AfterABodyThatParsed", "r = F(x)\n    r = x\nk = \"decl\"\n", true},
+		{"AfterABodyThatDidNot", "r = F(x)\n    1 = x\nk = \"decl\"\n", false},
 	}
-	cp := NewCodeParser(lexer.New("TestCodeDeclarationsKeepNoTokens", src.String()))
-	cp.Parse()
-	require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
-	require.Empty(t, cp.p.stmtLiterals, "a declaration's tokens must not be kept")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New(tc.name, tc.code))
+			cp.Parse()
+			if tc.parse {
+				require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
+			} else {
+				require.NotEmpty(t, cp.Errors(), "expected the body to fail to parse")
+			}
+			require.Zero(t, cap(cp.p.stmtLiterals), "a declaration must leave no capture buffer")
+		})
+	}
 }
