@@ -1449,6 +1449,61 @@ func spellAll(t *testing.T, src string) string {
 	return l.Spelling(first, last, literals)
 }
 
+// spellFrom quotes the tokens of src from the first one on line from, as a
+// parser does for a statement a function body indents.
+func spellFrom(t *testing.T, src string, from int) string {
+	t.Helper()
+	l := New("spellFrom", src)
+	var first, last token.Token
+	var literals []token.Token
+	for {
+		tok, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Len == 0 || tok.Line < from {
+			continue
+		}
+		if first.Len == 0 {
+			first = tok
+		}
+		last = tok
+		if tok.Type == token.STRING {
+			literals = append(literals, tok)
+		}
+	}
+	return l.Spelling(first, last, literals)
+}
+
+// A span an indented statement makes moves left as one, by as much as all of
+// its lines can spare. A line holding nothing of the statement — blank or a
+// comment, however it is indented — neither sets that margin nor loses more
+// than it has.
+func TestSpellingMovesASpanAsOne(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"ABodyComesBackToItsOwnLevel", "r = G(x)\n    m = [\n      2 3\n    ]\n", "m = [\n  2 3\n]"},
+		{"AFlushLeftCommentHoldsNothingBack", "r = G(x)\n    m = [\n# flush left\n      2 3\n    ]\n", "m = [\n# flush left\n  2 3\n]"},
+		{"ATabbedCommentHoldsNothingBack", "r = G(x)\n    m = [\n\t# tabbed\n      2 3\n    ]\n", "m = [\n\t# tabbed\n  2 3\n]"},
+		{"ATabOnlyLineHoldsNothingBack", "r = G(x)\n    m = [\n\t\n      2 3\n    ]\n", "m = [\n\n  2 3\n]"},
+		{"AHangingHeaderStandsAgainstItsRows", "r = G(x)\n    t = [\n   : Name Score\n     \"Ada\" 1\n    ]\n", " t = [\n: Name Score\n  \"Ada\" 1\n ]"},
+		{"TwoLiteralsOnOneLine", "r = G(x)\n    s = \"a\" ⊕ \"b\n c\"\n", "s = \"a\" ⊕ \"b\n c\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := spellFrom(t, tc.src, 2); got != tc.want {
+				t.Fatalf("Spelling = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Spelling quotes a statement as its file spells it: from its first token to
 // its last, so a comment it does not reach is never in it, with every later
 // line moved left to where the first stands and a line a string literal runs
@@ -1550,6 +1605,9 @@ func TestTokenExtents(t *testing.T) {
 		}
 		switch tok.Type {
 		case token.INDENT, token.DEINDENT, token.NEWLINE:
+			if tok.Len != 0 {
+				t.Fatalf("layout token %q at %d:%d spells %d runes, want none", tok.Literal, tok.Line, tok.Column, tok.Len)
+			}
 			continue
 		}
 		if tok.Len <= 0 {

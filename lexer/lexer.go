@@ -102,8 +102,11 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 // token spells no source, or whose span falls outside the input, has no
 // spelling.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
+	// The reach past last is measured against what is left of the input
+	// rather than added to its start, so a length a caller invented cannot
+	// carry the sum past what an int holds.
 	if first.Len <= 0 || last.Len <= 0 || first.Column < 1 || first.Pos < 0 ||
-		first.Pos > last.Pos || last.Pos+last.Len > len(l.input) {
+		first.Pos > last.Pos || last.Pos >= len(l.input) || last.Len > len(l.input)-last.Pos {
 		return ""
 	}
 
@@ -140,11 +143,13 @@ func margin(lines []spanLine, indent int) int {
 		if indent == 0 {
 			break
 		}
-		trimmed := strings.TrimLeft(line.text, " ")
-		if line.content || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		// A blank or comment line may be indented with tabs, which no line
+		// of the statement's own may be, so what it holds is read past both.
+		held := strings.TrimLeft(line.text, " \t")
+		if line.content || held == "" || strings.HasPrefix(held, "#") {
 			continue
 		}
-		indent = min(indent, len(line.text)-len(trimmed))
+		indent = min(indent, leading(line.text))
 	}
 	return indent
 }

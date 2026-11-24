@@ -103,6 +103,29 @@ world"
 	}
 }
 
+// A run of operator characters the parser splits gives each piece the runes
+// of the run that spell it, so a token still says where its own source is.
+func TestSplitOperatorKeepsItsRunes(t *testing.T) {
+	const script = "x = 3\ny = √-x\n"
+	sp := NewScriptParser(lexer.New("TestSplitOperatorKeepsItsRunes", script))
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+	require.Len(t, program.Statements, 2)
+
+	root, isRoot := program.Statements[1].(*ast.LetStatement).Value[0].(*ast.PrefixExpression)
+	require.True(t, isRoot, "expected a prefix expression")
+	inner, isInner := root.Right.(*ast.PrefixExpression)
+	require.True(t, isInner, "expected a prefix expression under it")
+
+	runes := []rune(script)
+	for _, op := range []*ast.PrefixExpression{root, inner} {
+		tok := op.Tok()
+		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]),
+			"operator %q spells %q", tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
+	}
+	require.Equal(t, root.Tok().Pos+root.Tok().Len, inner.Tok().Pos, "the pieces must follow one another")
+}
+
 // A statement's spelling holds everything the statement does, so parsing it
 // on its own gives the same statement back. That catches a span that dropped
 // or added a character where no golden names it.
