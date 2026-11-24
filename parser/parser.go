@@ -98,6 +98,7 @@ type StmtParser struct {
 
 	curToken     token.Token
 	peekToken    token.Token
+	spelling     bool          // a statement is being parsed, so its tokens are kept
 	stmtStart    token.Token   // the first token of the statement being parsed
 	stmtEnd      token.Token   // the last token of it a source spells
 	stmtLiterals []token.Token // the string literals it spans
@@ -419,7 +420,6 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	program.Statements = []ast.Statement{}
 	for !p.curTokenIs(token.EOF) {
 		if stmt := p.parseStatement(); stmt != nil {
-			p.spell(stmt)
 			program.Statements = append(program.Statements, stmt)
 		} else {
 			p.skipLine()
@@ -435,7 +435,7 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 // ends on reaches past it, and the string literals it spans, whose characters
 // are the string's own rather than the file's layout.
 func (p *StmtParser) noteSpelled(tok token.Token) {
-	if tok.Len == 0 {
+	if !p.spelling || tok.Len == 0 {
 		return
 	}
 	p.stmtEnd = tok
@@ -445,9 +445,15 @@ func (p *StmtParser) noteSpelled(tok token.Token) {
 }
 
 // spell gives stmt the source its file spells it with, from the token the
-// statement started at to the last one it spells. A plan quotes that rather
-// than the ast's own rendering, so what a reader sees is what they wrote.
+// statement started at to the last one it spells, and closes the recording
+// noteSpelled does. A plan quotes that rather than the ast's own rendering,
+// so what a reader sees is what they wrote.
 func (p *StmtParser) spell(stmt ast.Statement) {
+	p.spelling = false
+	if stmt == nil {
+		return
+	}
+
 	src := p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
@@ -457,15 +463,20 @@ func (p *StmtParser) spell(stmt ast.Statement) {
 	}
 }
 
-func (p *StmtParser) parseStatement() ast.Statement {
+// parseStatement parses one statement and gives it the source its file
+// spells it with. The recording runs for exactly as long as this does, so a
+// caller that parses a declaration of its own keeps none of its tokens.
+func (p *StmtParser) parseStatement() (stmt ast.Statement) {
 	if p.skipIndented() {
 		return nil
 	}
 	firstToken := p.curToken
+	p.spelling = true
 	p.stmtStart = firstToken
 	p.stmtEnd = firstToken
 	p.stmtLiterals = p.stmtLiterals[:0]
 	p.noteSpelled(firstToken)
+	defer func() { p.spell(stmt) }()
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its
@@ -1717,7 +1728,6 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
 		if stmt := p.parseStatement(); stmt != nil {
-			p.spell(stmt)
 			block.Statements = append(block.Statements, stmt)
 		} else {
 			p.skipLine()

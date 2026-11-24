@@ -721,3 +721,17 @@ p = Person
 	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
 	require.IsType(t, &ast.StructStatement{}, code.Statements[1])
 }
+
+// A declaration is no statement a plan is built from, so parsing one keeps
+// none of its tokens: the recording runs for as long as parseStatement does
+// and no longer, where it once grew for the parser's whole life.
+func TestCodeDeclarationsKeepNoTokens(t *testing.T) {
+	var src strings.Builder
+	for i := 0; i < 100; i++ {
+		src.WriteString("k = \"v\"\n")
+	}
+	cp := NewCodeParser(lexer.New("TestCodeDeclarationsKeepNoTokens", src.String()))
+	cp.Parse()
+	require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
+	require.Empty(t, cp.p.stmtLiterals, "a declaration's tokens must not be kept")
+}
