@@ -103,8 +103,7 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 // before last: no other pair names a span of this input, so a caller that
 // hands one over has a bug that checking here would only move.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
-	lines := spanLines(l.input, first.Pos, last.Pos+last.Len)
-	markLiterals(lines, literals)
+	lines := spanLines(l.input, first.Pos, last.Pos+last.Len, literals)
 	indent := first.Column - 1
 	dedent := margin(lines, indent)
 
@@ -152,51 +151,46 @@ func leading(text string) int {
 	return len(text) - len(strings.TrimLeft(text, " "))
 }
 
-// spanLine is one line of a span: its text, where in the input it starts and
-// ends, and what a string literal does to it. content says one runs into the
-// line, so its characters are the string's; open says one runs out of it, so
-// what it ends with is the string's too.
+// spanLine is one line of a span: its text, and what a string literal does to
+// it. content says one runs into the line, so its characters are the
+// string's; open says one runs out of it, so what it ends with is too. Where
+// the line sits in the input is what decides those, and is wanted for nothing
+// else, so it stays inside spanLines.
 type spanLine struct {
 	text    string
-	pos     int
-	end     int
 	content bool
 	open    bool
 }
 
-// spanLines splits the input from pos to end into lines, each terminator the
-// language counts as one — LF, CRLF and CR alike, as LogicalRune reads them —
-// ending exactly one line.
-func spanLines(input []rune, pos, end int) []spanLine {
+// spanLines splits the input from pos to end into lines — each terminator the
+// language counts as one, LF, CRLF and CR alike, as LogicalRune reads them —
+// and says of each what the string literals do to it. It reads the lines in
+// source order and the literals arrive in it, so one cursor settles them all:
+// a literal that ends before a line starts is behind every line after it.
+func spanLines(input []rune, pos, end int, literals []token.Token) []spanLine {
 	lines := []spanLine{}
+	at := 0
 	for start := pos; ; {
 		i := start
 		for i < end && input[i] != '\n' && input[i] != '\r' {
 			i++
 		}
-		lines = append(lines, spanLine{text: string(input[start:i]), pos: start, end: i})
+
+		line := spanLine{text: string(input[start:i])}
+		for at < len(literals) && literals[at].Pos+literals[at].Len <= start {
+			at++
+		}
+		for j := at; j < len(literals) && literals[j].Pos < i; j++ {
+			lit, stop := literals[j].Pos, literals[j].Pos+literals[j].Len
+			line.content = line.content || (start > lit && start < stop)
+			line.open = line.open || (i > lit && i < stop)
+		}
+		lines = append(lines, line)
+
 		if i >= end {
 			return lines
 		}
 		_, start = LogicalRune(input, i)
-	}
-}
-
-// markLiterals says of each line what the string literals do to it. Lines and
-// literals are both in source order, so one pass over each settles every
-// line: a literal that ends before a line starts is behind every line after
-// it, and one that starts after a line ends is ahead of every line before it.
-func markLiterals(lines []spanLine, literals []token.Token) {
-	at := 0
-	for i := range lines {
-		for at < len(literals) && literals[at].Pos+literals[at].Len <= lines[i].pos {
-			at++
-		}
-		for j := at; j < len(literals) && literals[j].Pos < lines[i].end; j++ {
-			lit, stop := literals[j].Pos, literals[j].Pos+literals[j].Len
-			lines[i].content = lines[i].content || (lines[i].pos > lit && lines[i].pos < stop)
-			lines[i].open = lines[i].open || (lines[i].end > lit && lines[i].end < stop)
-		}
 	}
 }
 
