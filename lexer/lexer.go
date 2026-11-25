@@ -92,27 +92,26 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	return tok
 }
 
-// Spelling is the source a statement is spelled with: the input from the
-// start of first's line to the end of last, so every line holds the
-// indentation the file gives it and a comment the statement does not reach
-// is never in it. Its lines keep the shape the file gives them, moved left
-// together by as much as all of them can spare, so a table's hanging header
-// still stands against its rows. A line a string literal runs into keeps its
-// characters as they are, since those are what the string holds; literals are
-// the string tokens the statement spans, in source order. first and last are
-// tokens this lexer produced, each spelling source of its own, first at or
-// before last: no other pair names a span of this input, so a caller that
-// hands one over has a bug that checking here would only move.
+// Spelling is the source a statement is spelled with: the input from first
+// to the end of last, so a comment the statement does not reach is never in
+// it. Its lines keep the shape the file gives them: each later one loses the
+// indentation the statement stands at, which the layout rules give every
+// line of its own, and a blank or comment line loses what it has of that. A
+// line a string literal runs into keeps its characters as they are, since
+// those are what the string holds; literals are the string tokens the
+// statement spans, in source order. first and last are tokens this lexer
+// produced, each spelling source of its own, first at or before last: no
+// other pair names a span of this input, so a caller that hands one over has
+// a bug that checking here would only move.
 func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
-	lineStart := first.Pos - (first.Column - 1)
-	lines := spanLines(l.input, lineStart, last.Pos+last.Len, literals)
-	dedent := margin(lines)
+	indent := first.Column - 1
+	lines := spanLines(l.input, first.Pos, last.Pos+last.Len, literals)
 
 	spelled := make([]string, len(lines))
 	for i, line := range lines {
 		text := line.text
 		if !line.beginsInString {
-			text = text[min(dedent, leading(text)):]
+			text = text[min(indent, leading(text)):]
 		}
 		if !line.endsInString {
 			text = strings.TrimRight(text, " \t")
@@ -120,28 +119,6 @@ func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string
 		spelled[i] = text
 	}
 	return strings.Join(spelled, "\n")
-}
-
-// margin is how far a span's lines move left together: the indentation its
-// first line stands at, or the least a later line of its own layout has where
-// that is less, so nothing a line spells is ever cut. A line that begins
-// inside a string holds its characters, and a blank or comment-only line
-// holds nothing of the statement, so neither sets the margin.
-func margin(lines []spanLine) int {
-	indent := leading(lines[0].text)
-	for _, line := range lines[1:] {
-		if indent == 0 {
-			break
-		}
-		// A blank or comment line may be indented with tabs, which no line
-		// of the statement's own may be, so what it holds is read past both.
-		held := strings.TrimLeft(line.text, " \t")
-		if line.beginsInString || held == "" || strings.HasPrefix(held, "#") {
-			continue
-		}
-		indent = min(indent, leading(line.text))
-	}
-	return indent
 }
 
 // leading counts the spaces a line opens with.

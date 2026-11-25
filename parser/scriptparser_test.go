@@ -106,14 +106,24 @@ world"
 // A statement the parser recovers is spelled from the first token a source
 // spells, not from whatever stood before it. A tab in an indent is reported
 // and lexed as a token of its own that spells nothing and stands at the
-// tab's column, so a span begun there would open before the statement's own
-// line. Begun at x, it is that line as written, moved left past its spaces.
+// tab's column, so a span begun there would hold the tab. Begun at x, it is
+// the statement alone.
 func TestRecoveredStatementSpellsWhatItHas(t *testing.T) {
 	sp := NewScriptParser(lexer.New("TestRecoveredStatementSpellsWhatItHas", "a = 2\n  \tx = 1\n"))
 	program := sp.Parse()
 	require.NotEmpty(t, sp.Errors(), "expected the tab indent to be reported")
 	require.Len(t, program.Statements, 2)
-	require.Equal(t, "\tx = 1", program.Statements[1].(*ast.LetStatement).Src)
+	require.Equal(t, "x = 1", program.Statements[1].(*ast.LetStatement).Src)
+}
+
+// Nothing before a statement's first token on its line is spelled with it.
+// Only an error leaves text there: a NUL ends a comment early, and the
+// statement the parser recovers starts at the NUL.
+func TestRecoveredStatementExcludesEarlierComment(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestRecoveredStatementExcludesEarlierComment", "# ignored\t\x00 x = 1\n"))
+	program := sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected the NUL to be reported")
+	require.Equal(t, "\x00 x = 1", requireOnlyLetStmt(t, program).Src)
 }
 
 // A run of operator characters the parser splits gives each piece the runes

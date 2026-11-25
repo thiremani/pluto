@@ -742,10 +742,10 @@ rather than an operand: the label stands alone and the statement's own lines
 sit one level in, so a block literal reads as it is laid out (decided
 2026-11-23). What it renders is the file's own text, from the statement's
 first token to its last: a comment the statement does not reach is never in
-it, while one between two of its own tokens is. The lines move left together,
-by the least indentation they can all spare, so a table's header still hangs
-where it stood against its rows; a line holding nothing of the statement —
-blank, or a comment at any indentation — neither sets that margin nor loses
+it, while one between two of its own tokens is. Each later line loses the
+indentation the statement stands at, which the layout rules give every line
+of its own, so the lines keep the shape the file gives them; a line holding
+nothing of the statement — blank, or a comment at any indentation — loses no
 more than it has, and a line a string literal runs through keeps the
 characters the string holds. So the parens the ast adds
 to spell out its own nesting are absent

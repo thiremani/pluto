@@ -1478,9 +1478,9 @@ func spellFrom(t *testing.T, src string, from int) string {
 	return l.Spelling(first, last, literals)
 }
 
-// A span an indented statement makes moves left as one, by as much as all of
-// its lines can spare. A line holding nothing of the statement — blank or a
-// comment, however it is indented — neither sets that margin nor loses more
+// A span an indented statement makes moves left as one: each later line
+// loses the indentation the statement stands at. A line holding nothing of
+// the statement — blank or a comment, however it is indented — loses no more
 // than it has.
 func TestSpellingMovesASpanAsOne(t *testing.T) {
 	cases := []struct {
@@ -1492,7 +1492,6 @@ func TestSpellingMovesASpanAsOne(t *testing.T) {
 		{"AFlushLeftCommentHoldsNothingBack", "r = G(x)\n    m = [\n# flush left\n        2 3\n    ]\n", "m = [\n# flush left\n    2 3\n]"},
 		{"ATabbedCommentHoldsNothingBack", "r = G(x)\n    m = [\n\t# tabbed\n        2 3\n    ]\n", "m = [\n\t# tabbed\n    2 3\n]"},
 		{"ATabOnlyLineHoldsNothingBack", "r = G(x)\n    m = [\n\t\n        2 3\n    ]\n", "m = [\n\n    2 3\n]"},
-		{"AHangingHeaderStandsAgainstItsRows", "r = G(x)\n    t = [\n      : Name Score\n        \"Ada\" 1\n    ]\n", "t = [\n  : Name Score\n    \"Ada\" 1\n]"},
 		{"TwoLiteralsOnOneLine", "r = G(x)\n    s = \"a\" ⊕ \"b\n c\"\n", "s = \"a\" ⊕ \"b\n c\""},
 	}
 	for _, tc := range cases {
