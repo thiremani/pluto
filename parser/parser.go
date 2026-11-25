@@ -1262,8 +1262,8 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 }
 
 // parseBlockLiteral reads a literal whose '[' ends its line: an optional
-// header and the rows, as a block at any depth past the statement or row
-// holding its '[', then the ']' on its own line. It leaves curToken at the ']'.
+// header and the rows, as a block 4 spaces past the line holding its '[',
+// then the ']' on its own line. It leaves curToken at the ']'.
 func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	if p.peekTokenIs(token.RBRACK) {
 		p.nextToken()

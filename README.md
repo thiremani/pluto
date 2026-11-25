@@ -104,9 +104,9 @@ string literal produces a newline in the string's value -- the `\r` escape
 denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
-Indentation is significant. A block, such as a template's body or a struct
-definition, is indented 4 spaces past the line that opens it, while the rows
-of an array literal line up at any depth past it. Tabs are not allowed in
+Indentation is significant. A block, such as a template's body, a struct
+definition or an array literal's rows, is indented 4 spaces past the line
+that opens it. Tabs are not allowed in
 indentation. A struct's or table's header is written `: name ...`, its `:` 2
 spaces left of the values and one space after it, so its names line up with
 the values. Brackets don't join lines: a line that
@@ -298,7 +298,7 @@ where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
 has one row, however long, and a literal whose `[` ends its
-line is a block, with its rows lined up at any depth past the line that
+line is a block, with its rows 4 spaces past the line that
 holds the `[`, and `]` on its own line at that line's column, however many
 lines the statement spans. Array-valued cells stack
 recursively

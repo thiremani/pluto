@@ -63,8 +63,8 @@ n = -a
 imp = 5a
 f = -8 >> 1 # arithmetic right shift
 m = [
-  1 2
-  3 4
+    1 2
+    3 4
 ]
 long =
     a + 1
@@ -79,7 +79,7 @@ world"
 		"n = -a",
 		"imp = 5a",
 		"f = -8 >> 1",
-		"m = [\n  1 2\n  3 4\n]",
+		"m = [\n    1 2\n    3 4\n]",
 		"long =\n    a + 1",
 		"w = \"hello   \n \n\t\nworld\"",
 		`"out: -b -n"`,
@@ -147,7 +147,7 @@ func TestSpellingReparses(t *testing.T) {
 		"b = a + 2 * 3\n",
 		"imp = 5a\n",
 		"f = -8 >> 1 # arithmetic right shift\n",
-		"m = [\n  1 2\n  3 4\n]\n",
+		"m = [\n    1 2\n    3 4\n]\n",
 		"long =\n    a + 1\n",
 		"w = \"hello   \n \n\t\nworld\"\n",
 		"s = \"a\nb\"\n\"out: -s\"\n",
@@ -195,8 +195,8 @@ line two"
 # flush left
         x + 1
     v = [
-   : Name Score
-     "Ada" 1
+      : Name Score
+        "Ada" 1
     ]
     r = t + 1
 `
@@ -215,7 +215,7 @@ line two"
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", " v = [\n: Name Score\n  \"Ada\" 1\n ]", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "v = [\n  : Name Score\n    \"Ada\" 1\n]", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {
@@ -1802,14 +1802,15 @@ func TestLayoutKeepsStatements(t *testing.T) {
 	}{
 		{"nested block literals", "x = [\n    [\n        1 2\n    ]\n]", nil},
 		{"block literal", "m = [\n    1 2\n    3 4\n]", nil},
-		{"rows at any depth past the statement", "m = [\n  1 2\n  3 4\n]", nil},
+		{"rows 2 spaces past the statement", "m = [\n  1 2\n  3 4\n]", []string{name + "2:3:" + blockRowsErr}},
+		{"rows 8 spaces past the statement", "m = [\n        1 2\n        3 4\n]", []string{name + "2:9:" + blockRowsErr}},
 		{"rows under a '[' on a continued line", "x = f(1,\n    [\n        2 3\n    ])", nil},
-		{"rows of a '[' in the middle of its line", "x = f(1, [\n        2 3\n], a,\n    b)", nil},
-		{"']' aligned under a '[' in the middle of its line", "x = f(1, [\n               2 3\n           ],\n           a,\n           b)", []string{name + "3:12:" + blockCloseErr}},
+		{"rows of a '[' in the middle of its line", "x = f(1, [\n    2 3\n], a,\n    b)", nil},
+		{"']' aligned under a '[' in the middle of its line", "x = f(1, [\n    2 3\n           ],\n           a,\n           b)", []string{name + "3:12:" + blockCloseErr}},
 		{"empty literal's ']' on a continued line", "x = f(1,\n    [\n    ]0)", nil},
 		{"empty literal's ']' indented", "x = [\n        ]0", []string{name + "2:9:" + blockCloseErr}},
-		{"table header at its statement's column", "t = [\n: a b\n  1 2\n]", nil},
-		{"row left of the first row", "m = [\n        1 2\n    3 4\n]", []string{name + "3:5:" + lexer.INDENT_ERR + ". At char: 3"}},
+		{"table header at its statement's column", "t = [\n: a b\n  1 2\n]", []string{name + "2:1:" + blockRowsErr}},
+		{"row left of the first row", "m = [\n    1 2\n  3 4\n]", []string{name + "3:3:" + lexer.INDENT_ERR + ". At char: 3"}},
 		{"unclosed block literal", "x = [\n    1 2", []string{name + "3:1:" + blockCloseErr}},
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:" + blockCloseErr}},
 		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},

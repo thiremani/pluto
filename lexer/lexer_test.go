@@ -1488,11 +1488,11 @@ func TestSpellingMovesASpanAsOne(t *testing.T) {
 		src  string
 		want string
 	}{
-		{"ABodyComesBackToItsOwnLevel", "r = G(x)\n    m = [\n      2 3\n    ]\n", "m = [\n  2 3\n]"},
-		{"AFlushLeftCommentHoldsNothingBack", "r = G(x)\n    m = [\n# flush left\n      2 3\n    ]\n", "m = [\n# flush left\n  2 3\n]"},
-		{"ATabbedCommentHoldsNothingBack", "r = G(x)\n    m = [\n\t# tabbed\n      2 3\n    ]\n", "m = [\n\t# tabbed\n  2 3\n]"},
-		{"ATabOnlyLineHoldsNothingBack", "r = G(x)\n    m = [\n\t\n      2 3\n    ]\n", "m = [\n\n  2 3\n]"},
-		{"AHangingHeaderStandsAgainstItsRows", "r = G(x)\n    t = [\n   : Name Score\n     \"Ada\" 1\n    ]\n", " t = [\n: Name Score\n  \"Ada\" 1\n ]"},
+		{"ABodyComesBackToItsOwnLevel", "r = G(x)\n    m = [\n        2 3\n    ]\n", "m = [\n    2 3\n]"},
+		{"AFlushLeftCommentHoldsNothingBack", "r = G(x)\n    m = [\n# flush left\n        2 3\n    ]\n", "m = [\n# flush left\n    2 3\n]"},
+		{"ATabbedCommentHoldsNothingBack", "r = G(x)\n    m = [\n\t# tabbed\n        2 3\n    ]\n", "m = [\n\t# tabbed\n    2 3\n]"},
+		{"ATabOnlyLineHoldsNothingBack", "r = G(x)\n    m = [\n\t\n        2 3\n    ]\n", "m = [\n\n    2 3\n]"},
+		{"AHangingHeaderStandsAgainstItsRows", "r = G(x)\n    t = [\n      : Name Score\n        \"Ada\" 1\n    ]\n", "t = [\n  : Name Score\n    \"Ada\" 1\n]"},
 		{"TwoLiteralsOnOneLine", "r = G(x)\n    s = \"a\" ⊕ \"b\n c\"\n", "s = \"a\" ⊕ \"b\n c\""},
 	}
 	for _, tc := range cases {
@@ -1515,8 +1515,8 @@ func TestSpelling(t *testing.T) {
 		want string
 	}{
 		{"OneLineLeavesItsComment", "a = 1 # one\n", "a = 1"},
-		{"LinesKeepTheirShape", "m = [\n  2 3\n]\n", "m = [\n  2 3\n]"},
-		{"AnInteriorCommentStays", "m = [\n  # a row\n  2 3\n]\n", "m = [\n  # a row\n  2 3\n]"},
+		{"LinesKeepTheirShape", "m = [\n    2 3\n]\n", "m = [\n    2 3\n]"},
+		{"AnInteriorCommentStays", "m = [\n    # a row\n    2 3\n]\n", "m = [\n    # a row\n    2 3\n]"},
 		{"StringContentKeepsItsSpaces", "w = \"hello   \n \nworld\"\n", "w = \"hello   \n \nworld\""},
 		{"ADeeperLineKeepsItsShape", "long =\n    a + 1\n", "long =\n    a + 1"},
 	}
@@ -1532,9 +1532,9 @@ func TestSpelling(t *testing.T) {
 // Spelling reads a terminator the same however the file spells it, as the
 // lexer itself does.
 func TestSpellingLineEndings(t *testing.T) {
-	for name, src := range map[string]string{"LF": "m = [\n  2\n]\n", "CRLF": "m = [\r\n  2\r\n]\r\n", "CR": "m = [\r  2\r]\r"} {
+	for name, src := range map[string]string{"LF": "m = [\n    2\n]\n", "CRLF": "m = [\r\n    2\r\n]\r\n", "CR": "m = [\r    2\r]\r"} {
 		t.Run(name, func(t *testing.T) {
-			if got, want := spellAll(t, src), "m = [\n  2\n]"; got != want {
+			if got, want := spellAll(t, src), "m = [\n    2\n]"; got != want {
 				t.Fatalf("Spelling = %q, want %q", got, want)
 			}
 		})
@@ -1545,7 +1545,7 @@ func TestSpellingLineEndings(t *testing.T) {
 // can quote any span of the input from its tokens alone. A layout token
 // spells nothing and says so with a zero length.
 func TestTokenExtents(t *testing.T) {
-	const src = "a = 5 # one\nm = [\n  2 3\n]\ns = \"x\ny\"\nimp = 5a\nf = -8 >> 1 >>> 2 << 3\ng = a == b != c <= d >= e\nh = .5\nt = [\n  : Name Score\n    \"Ada\" 1\n]\n"
+	const src = "a = 5 # one\nm = [\n    2 3\n]\ns = \"x\ny\"\nimp = 5a\nf = -8 >> 1 >>> 2 << 3\ng = a == b != c <= d >= e\nh = .5\nt = [\n  : Name Score\n    \"Ada\" 1\n]\n"
 	l := New("TestTokenExtents", src)
 	runes := []rune(src)
 	for {

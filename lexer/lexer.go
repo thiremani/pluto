@@ -27,9 +27,9 @@ type Lexer struct {
 // block is an indented block. Its lines start at level, and the INDENT that
 // opens it spells out how far that is past the block around it, which the
 // parser requires to be 4 spaces for a body or a struct definition. A block
-// that opens after a line ending in '[' holds that literal's rows, at any
-// depth past base, the column of the line holding the '[', and only such a
-// block closes, at a ']' line at base.
+// that opens after a line ending in '[' holds that literal's rows, 4 spaces
+// past base, the column of the line holding the '[', and only such a block
+// closes, at a ']' line at base.
 type block struct {
 	level     int
 	holdsRows bool
@@ -73,7 +73,7 @@ const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
 	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, at the column of the line holding its '['"
-	BLOCK_ROWS_ERR   = "a block literal's rows are indented past the line holding its '['"
+	BLOCK_ROWS_ERR   = "a block literal's rows are indented 4 spaces past the line holding its '[', and a table's header ':' 2"
 	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -358,7 +358,7 @@ func (l *Lexer) placeLine(level, column int, first rune) {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
 		rows := l.last == token.LBRACK
 		var msg string
-		if rows && level <= l.line {
+		if rows && level != l.line+4 {
 			msg = BLOCK_ROWS_ERR
 		}
 		l.blocks = append(l.blocks, block{level, rows, l.line})
