@@ -149,6 +149,24 @@ func TestSplitOperatorKeepsItsRunes(t *testing.T) {
 	require.Equal(t, root.Tok().Pos+root.Tok().Len, inner.Tok().Pos, "the pieces must follow one another")
 }
 
+// The first split of a longer run leaves a remainder of several runes, which
+// the next split measures its own pieces from. Every prefix operator is one
+// rune, so the pieces a parse ends with are all one rune long and cannot show
+// a length taken from the wrong piece; the first split of "√--" does. On a
+// file's first line a piece's column is one past its position.
+func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
+	const script = "√--x\n"
+	p := New(lexer.New("TestSplitOperatorPlacesItsRemainder", script))
+	pieces := p.splitOperator(p.curToken, PrefixOp)
+	require.Len(t, pieces, 2)
+
+	runes := []rune(script)
+	for _, tok := range pieces {
+		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
+		require.Equal(t, tok.Pos+1, tok.Column, "operator %q", tok.Literal)
+	}
+}
+
 // A statement's spelling holds everything the statement does, so parsing it
 // on its own gives the same statement back. That catches a span that dropped
 // or added a character where no golden names it.
