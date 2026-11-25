@@ -753,7 +753,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	if !p.peekTokenIs(token.INDENT) {
 		return stmt
 	}
-	p.checkBlockIndent(p.peekToken)
+	p.checkBlockIndent(p.peekToken, blockIndentErr)
 	p.nextToken() // consume INDENT
 	p.nextToken() // move to first token in the struct body
 	if !p.parseStructBody(stmt.Value) {
@@ -1203,7 +1203,7 @@ const (
 	blockIndentErr = "indent a body or a struct definition by 4 spaces, and a struct's header ':' by 2, with one space after it"
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
-	blockRowsErr   = lexer.BLOCK_ROWS_ERR
+	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line holding its '[', and a table's header ':' 2"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma or '=', onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
@@ -1273,6 +1273,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: blockRowsErr})
 		return false
 	}
+	p.checkBlockIndent(p.peekToken, blockRowsErr)
 	p.nextToken() // the line break after '['
 	p.nextToken() // the rows' INDENT
 
@@ -1327,11 +1328,11 @@ func (p *StmtParser) skipLine() {
 	}
 }
 
-// checkBlockIndent reports a block that its INDENT says is not indented 4
-// spaces past the line that opens it.
-func (p *StmtParser) checkBlockIndent(indent token.Token) {
+// checkBlockIndent reports, with msg, a block that its INDENT says is not
+// indented 4 spaces past the line it hangs from.
+func (p *StmtParser) checkBlockIndent(indent token.Token, msg string) {
 	if indent.Literal != blockIndent {
-		p.errors = append(p.errors, &token.CompileError{Token: indent, Msg: blockIndentErr})
+		p.errors = append(p.errors, &token.CompileError{Token: indent, Msg: msg})
 	}
 }
 
@@ -1726,7 +1727,7 @@ func (p *StmtParser) lineUp(continued *int) {
 // assumes current token is token.NEWLINE
 func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 	if p.peekTokenIs(token.INDENT) {
-		p.checkBlockIndent(p.peekToken)
+		p.checkBlockIndent(p.peekToken, blockIndentErr)
 	} else {
 		p.peekError(token.INDENT)
 	}

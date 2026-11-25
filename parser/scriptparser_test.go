@@ -1836,6 +1836,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"table closed on its header's line", "t = [\n  : a b]", []string{name + "2:8:" + blockCloseErr}},
 		{"block literal's ']' at its rows' column", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
 		{"rows at the column of the line holding '['", "x = f(1,\n    [\n    2 3\n    ])", []string{name + "3:5:" + blockRowsErr}},
+		{"rows left of the line holding '['", "x = f(1,\n        [\n    2 3\n        ])", []string{name + "3:5:" + blockRowsErr}},
 		{"nested call's continued arguments", "x = f(a,\n    g(b,\n        c),\n    d)", nil},
 		{"call continued after '='", "x =\n    f(a,\n        b)", nil},
 		{"calls joined by an operator", "x = f(a,\n    b) + g(c,\n        d)", nil},
@@ -2081,9 +2082,10 @@ func statementStrings(stmts []ast.Statement) []string {
 	return strs
 }
 
-// An index bracket keeps its expression on its line.
+// An index bracket keeps its expression on its line. The line after it is no
+// literal's rows, so how far it is indented is not judged.
 func TestIndexStaysOnOneLine(t *testing.T) {
-	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
+	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n  i]"))
 	sp.Parse()
 	require.Equal(t, []string{"TestIndexStaysOnOneLine:1:14:" + lineBreakErr}, sp.Errors())
 }

@@ -1017,7 +1017,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "        ", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.INT, "2", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 10},
 			{token.DEINDENT, "]", "", 4, 5},
@@ -1028,7 +1028,7 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a block literal's rows and ']' are reported away from the line holding its '['", func(t *testing.T) {
+	t.Run("rows at the column of the line holding their '[' spell no indentation, and a ']' elsewhere is reported", func(t *testing.T) {
 		checkInput(t, "x = f(1,\n    [\n    2\n])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
@@ -1038,7 +1038,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "    ", "3:5:" + BLOCK_ROWS_ERR, 3, 5},
+			{token.INDENT, "", "", 3, 5},
 			{token.INT, "2", "", 3, 5},
 			{token.NEWLINE, "\n", "", 3, 6},
 			{token.DEINDENT, "]", "", 4, 1},
@@ -1080,7 +1080,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "        ", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.INT, "2", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 10},
 			{token.DEINDENT, "]", "", 4, 5},
