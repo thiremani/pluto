@@ -294,7 +294,7 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			Line:     tok.Line,
 			Column:   tok.Column,
 			Pos:      tok.Pos,
-			Len:      min(matched, tok.Len),
+			Len:      matched,
 			// Preserve source spacing so attached-prefix boundary checks still
 			// work after an operator run is split into parseable pieces.
 			HadSpace: tok.HadSpace,
@@ -310,7 +310,7 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			Line:     tok.Line,
 			Column:   tok.Column + matched,
 			Pos:      tok.Pos + matched,
-			Len:      max(tok.Len-matched, 0),
+			Len:      tok.Len - matched,
 		})
 	}
 
