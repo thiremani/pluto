@@ -325,6 +325,82 @@ func checkPlan() *AssignPlan {
 	}
 }
 
+// firstGatePlan is `s = sarr[9] > "a" || t > "b" u` over heap strings, before
+// elaboration: the gate takes a first of two checks, the first of which reads
+// a copy, and the region reads a binding.
+func firstGatePlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = sarr[9] > "a" || t > "b" u`},
+		Execute: []Node{
+			&First{Result: 0, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Check{Result: 2, Expr: greater(ident("t"), strLit("b")), Slots: []Slot{borrowedSlot(str, "t")}},
+			}},
+			&Gate{Cond: 0, Body: []Node{
+				&Eval{Result: 3, Expr: ident("u"), Slots: []Slot{borrowedSlot(str, "u")}},
+			}},
+		},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 3}, OnSkip: KeepOnSkip}},
+	}
+}
+
+// testedFirstPlan is `x = (sarr[9] || MkStr(b) > "a") && 7`, before
+// elaboration: a first of strings that a last of an integer only tests, its
+// own sides an eval and a check.
+func testedFirstPlan() *AssignPlan {
+	i64, str := testType("I64"), testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign x", Source: `x = (sarr[9] || MkStr(b) > "a") && 7`},
+		Execute: []Node{&Last{Result: 0, Type: i64, Sides: []Node{
+			&First{Result: NoOutcome, Type: str, Sides: []Node{
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Check{Result: 2, Expr: greater(call("MkStr", ident("b")), strLit("a")), Slots: []Slot{ownedSlot(str)}},
+			}},
+			&Eval{Result: 3, Expr: intLit(7), Slots: []Slot{unmanagedSlot(i64)}},
+		}}},
+		Commit: []Mapping{{Target: local("x", i64), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+	}
+}
+
+// nestedFirstPlan is `s = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h` over
+// heap strings, before elaboration: a first in a last in a first, the inner
+// one the last's final side, so three nodes can supply the value.
+func nestedFirstPlan() *AssignPlan {
+	i64, str := testType("I64"), testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h`},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+			&Last{Result: NoOutcome, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(ident("n"), intLit(0)), Slots: []Slot{unmanagedSlot(i64)}},
+				&First{Result: NoOutcome, Type: str, Sides: []Node{
+					&Check{Result: 2, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+					&Check{Result: 3, Expr: greater(read("sarr", 8), strLit("b")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				}},
+			}},
+			&Eval{Result: 4, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+		}}},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
+	}
+}
+
+// finalFirstPlan is `s = n > 0 && (sarr[9] > "a" || sarr[8] > "b")` over heap
+// strings, before elaboration: a value last whose final side is a first, with
+// no fallback after the last itself.
+func finalFirstPlan() *AssignPlan {
+	p := nestedFirstPlan()
+	last := sideLastAt(p, 0, 0)
+	last.Result = 0
+	p.Head.Source = `s = n > 0 && (sarr[9] > "a" || sarr[8] > "b")`
+	p.Execute = []Node{last}
+	p.Commit[0].OnSkip = KeepOnSkip
+	return p
+}
+
+// lastFirstAt is side j, a first, of the last that is node i of p's execute
+// region.
+func lastFirstAt(p *AssignPlan, i, j int) *First { return lastAt(p, i).Sides[j].(*First) }
+
 // lastAt is node i of p's execute region, a last.
 func lastAt(p *AssignPlan, i int) *Last { return p.Execute[i].(*Last) }
 
@@ -357,12 +433,15 @@ func TestValidateAccepts(t *testing.T) {
 	Elaborate(firstCheck)
 	firstLast := firstLastPlan()
 	Elaborate(firstLast)
+	testedFirst := testedFirstPlan()
+	Elaborate(testedFirst)
 	for name, p := range map[string]*AssignPlan{
 		"scalar swap":    scalarSwap,
 		"heap swap":      heapSwap,
 		"replace + drop": replace,
 		"check side":     firstCheck,
 		"&& side":        firstLast,
+		"tested || side": testedFirst,
 	} {
 		if err := Validate(p, sameSpelling); err != nil {
 			t.Fatalf("%s: valid plan rejected: %v", name, err)
@@ -506,6 +585,28 @@ func TestElaborate(t *testing.T) {
 			[][]Transfer{{Copy}}, Releases{Tested: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"s"}}},
 		{"a value last moves its final side and releases the side it only tested", lastValuePlan(),
 			[][]Transfer{{Move}}, Releases{Tested: []OutcomeRef{{Outcome: 1}}, Skipped: []OutcomeRef{{Outcome: 2}}, Replaced: []string{"s"}}},
+		{"a gate's first releases what each of its checks built", firstGatePlan(),
+			[][]Transfer{{Copy}}, Releases{Tested: []OutcomeRef{{Outcome: 1}}, Replaced: []string{"s"}}},
+		{"a first a last only tests releases what its eval and its check built", testedFirstPlan(),
+			[][]Transfer{{Store}}, Releases{Tested: []OutcomeRef{{Outcome: 1}, {Outcome: 2}}}},
+		{"a last takes a final first's value from either side, and releases each where it failed", finalFirstPlan(),
+			[][]Transfer{{Move, Move}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}}, Replaced: []string{"s"}}},
+		{"a first takes a last side's value from each node its final first holds", nestedFirstPlan(),
+			[][]Transfer{{Move, Move, Copy}}, Releases{Skipped: []OutcomeRef{{Outcome: 2}, {Outcome: 3}}, Replaced: []string{"s"}}},
+		{"a check is only tested in a last however deep the last sits", &AssignPlan{
+			Head: Head{Label: "assign s", Source: `s = n > 0 && (MkStr(a) > "a" && h || sarr[8] > "b")`},
+			Execute: []Node{&Last{Result: 0, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(ident("n"), intLit(0)), Slots: []Slot{unmanagedSlot(testType("I64"))}},
+				&First{Result: NoOutcome, Type: str, Sides: []Node{
+					&Last{Result: NoOutcome, Type: str, Sides: []Node{
+						&Check{Result: 2, Expr: greater(call("MkStr", ident("a")), strLit("a")), Slots: []Slot{ownedSlot(str)}},
+						&Eval{Result: 3, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
+					}},
+					&Check{Result: 4, Expr: greater(read("sarr", 8), strLit("b")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				}},
+			}}},
+			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+		}, [][]Transfer{{Copy, Move}}, Releases{Tested: []OutcomeRef{{Outcome: 2}}, Skipped: []OutcomeRef{{Outcome: 4}}, Replaced: []string{"s"}}},
 		{"a borrow under a last takes nothing: its checks may fail", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: "a, b = n > 0 && b, a"},
 			Execute: []Node{
@@ -992,6 +1093,173 @@ func TestRenderFirst(t *testing.T) {
 	}
 }
 
+// Plan §4, §14: what a first must be as a gate's condition and as a side of a
+// last, broken on `s = sarr[9] > "a" || t > "b" u`, whose gate takes a first,
+// on `x = (sarr[9] || MkStr(b) > "a") && 7`, whose last only tests one, and on
+// `s = n > 0 && (sarr[9] > "a" || sarr[8] > "b")`, whose last ends in one.
+func TestValidateNestedFirstRejects(t *testing.T) {
+	str := testType("Str")
+	cases := []struct {
+		name    string
+		plan    func() *AssignPlan
+		mutate  func(*AssignPlan)
+		wantErr string
+	}{
+		{"ConditionUnvalidated", firstGatePlan, func(p *AssignPlan) {
+			firstAt(p, 0).Sides = firstAt(p, 0).Sides[:1]
+		}, "first %t0 has 1 sides and needs a fallback"},
+		{"ConditionCannotFail", firstGatePlan, func(p *AssignPlan) {
+			firstAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
+		}, "first %t0 cannot fail, so the gate that takes it would never reject"},
+		{"TestedConditionNeverReleased", firstGatePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which is only tested, is never released"},
+		{"ValueIDRepeatsASide", firstGatePlan, func(p *AssignPlan) { p.Gate().Body[0].(*Eval).Result = 2 }, "eval 3 has result ID 2; IDs must be dense"},
+		{"NestedFirstBindsOutcome", testedFirstPlan, func(p *AssignPlan) {
+			lastFirstAt(p, 0, 0).Result = 1
+		}, "the first in side 1 of last %t0 binds outcome %t1, and a side of a last binds none"},
+		{"NestedFirstUnvalidated", testedFirstPlan, func(p *AssignPlan) {
+			f := lastFirstAt(p, 0, 0)
+			f.Sides = f.Sides[1:]
+		}, "the first in side 1 of last %t0 has 1 sides and needs a fallback"},
+		{"SideAfterNestedFirst", testedFirstPlan, func(p *AssignPlan) {
+			lastAt(p, 0).Sides[1].(*Eval).Result = 2
+		}, "eval 3 has result ID 2; IDs must be dense"},
+		{"TestedEvalNeverReleased", testedFirstPlan, func(p *AssignPlan) {
+			p.Tested = p.Tested[1:]
+		}, "owned outcome %t1 slot 0, which is only tested, is never released"},
+		{"FinalFirstOfAnotherType", finalFirstPlan, func(p *AssignPlan) {
+			lastAt(p, 0).Type = testType("I64")
+		}, "the first in side 2 of last %t0 has type Str, which does not fit the last's type I64"},
+		{"TransferPerSideOfFinalFirst", finalFirstPlan, func(p *AssignPlan) {
+			p.Commit[0].Transfers = []Transfer{Move}
+		}, "has 1 transfers for the 2 nodes that can supply it"},
+		{"LastAsSideOfLast", finalFirstPlan, func(p *AssignPlan) {
+			lastAt(p, 0).Sides[1] = &Last{Result: NoOutcome, Type: str}
+		}, "side 2 of last %t0 is *pir.Last, which is no check, eval or first"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.plan()
+			Elaborate(p)
+			tc.mutate(p)
+			err := Validate(p, sameSpelling)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// Plan §12: a gate takes a first's own outcome, and a first that is a side of
+// a last binds none, as a last in a first does. What resolves a failure is the
+// nearest fallback that follows a side holding the node, however deep, and a
+// release carries that word; what a node that is only tested built is dropped
+// without one.
+func TestRenderNestedFirst(t *testing.T) {
+	gated := firstGatePlan()
+	Elaborate(gated)
+	want := `assign s
+    source
+        s = sarr[9] > "a" || t > "b" u
+
+    execute
+        %t0 =
+            first Str
+                %t1 = check owned Str sarr[9] > "a" [on-oob=fallback]
+            fallback
+                %t2 = check borrowed(t) Str t > "b"
+        gate %t0
+            %t3 = eval borrowed Str u
+
+    commit
+        s = %t3 [copy] [on-skip=keep]
+        drop %t1
+        drop s [old]
+`
+	if got := gated.Render(true); got != want {
+		t.Fatalf("gate render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+
+	final := finalFirstPlan()
+	Elaborate(final)
+	want = `assign s
+    source
+        s = n > 0 && (sarr[9] > "a" || sarr[8] > "b")
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                first Str
+                    %t2 = check owned Str sarr[9] > "a" [on-oob=fallback]
+                fallback
+                    %t3 = check owned Str sarr[8] > "b" [on-oob=skip]
+
+    commit
+        s = %t0 [move] [on-skip=keep]
+        drop %t2 [on-fallback]
+        drop %t3 [on-skip]
+        drop s [old]
+`
+	if got := final.Render(true); got != want {
+		t.Fatalf("final first render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+
+	nested := nestedFirstPlan()
+	Elaborate(nested)
+	want = `assign s
+    source
+        s = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check I64 n > 0
+                next
+                    first Str
+                        %t2 = check owned Str sarr[9] > "a" [on-oob=fallback]
+                    fallback
+                        %t3 = check owned Str sarr[8] > "b" [on-oob=fallback]
+            fallback
+                %t4 = eval borrowed Str h
+
+    commit
+        s = %t0 [move %t2] [move %t3] [copy %t4]
+        drop %t2 [on-fallback]
+        drop %t3 [on-fallback]
+        drop s [old]
+`
+	if got := nested.Render(true); got != want {
+		t.Fatalf("nested render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+
+	tested := testedFirstPlan()
+	Elaborate(tested)
+	want = `assign x
+    source
+        x = (sarr[9] || MkStr(b) > "a") && 7
+
+    execute
+        %t0 =
+            last I64
+                first Str
+                    %t1 = eval owned Str sarr[9] [on-oob=fallback]
+                fallback
+                    %t2 = check owned Str MkStr(b) > "a"
+            next
+                %t3 = eval I64 7
+
+    commit
+        x = %t0 [on-skip=keep]
+        drop %t1
+        drop %t2
+`
+	if got := tested.Render(true); got != want {
+		t.Fatalf("tested first render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // Plan §4, §9, §14: a gate's invariants, each broken on
 // `s = sarr[1] > "m" sarr[9]`.
 func TestValidateGateRejects(t *testing.T) {
@@ -1022,11 +1290,11 @@ func TestValidateGateRejects(t *testing.T) {
 			p.Gate().Body[0] = &Eval{Result: 1, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
 			p.Commit[0].OnSkip = NoSkipPolicy
 		}, "target s = %t1 slot 0 has skip policy none; its outcome and target require keep"},
-		{"TestedNeverReleased", func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t0 slot 0, which a check only tested, is never released"},
+		{"TestedNeverReleased", func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t0 slot 0, which is only tested, is never released"},
 		{"TestedDroppedTwice", func(p *AssignPlan) { p.Tested = []OutcomeRef{{Outcome: 0}, {Outcome: 0}} }, "tested %t0 slot 0 dropped twice"},
 		{"TestedDropOfBorrow", func(p *AssignPlan) {
 			p.Condition().(*Check).Slots[0] = borrowedSlot(str, "x")
-		}, "drop of %t0 slot 0, which is not an owned outcome a check only tested"},
+		}, "drop of %t0 slot 0, which is not an owned outcome that is only tested"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1097,8 +1365,8 @@ func TestValidateLastRejects(t *testing.T) {
 		{"OneSide", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides = lastAt(p, 0).Sides[1:] }, "last %t0 has 1 sides and needs a next"},
 		{"EvalBeforeFinal", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[0] = &Eval{Result: 1, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
-		}, "side %t1 of last %t0 is an eval before the final side, where a side is a check"},
-		{"SideIsNoCheckOrEval", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[0] = &Gate{} }, "side %t1 of last %t0 is *pir.Gate, which is no check or eval"},
+		}, "side %t1 of last %t0 is an eval before the final side, where a side is a check or a first"},
+		{"SideIsNoCheckEvalOrFirst", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[0] = &Gate{} }, "side 1 of last %t0 is *pir.Gate, which is no check, eval or first"},
 		{"CheckSideUnvalidated", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[0].(*Check).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "check %t1 has 2 slots"},
@@ -1114,15 +1382,12 @@ func TestValidateLastRejects(t *testing.T) {
 			p.Commit[0].Transfers, p.Skipped = []Transfer{Copy}, nil
 			p.Commit[0].OnSkip = NoSkipPolicy
 		}, "target s = %t0 slot 0 has skip policy none; its outcome and target require keep"},
-		{"TestedSideNeverReleased", lastValuePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which a check only tested, is never released"},
-		{"ConditionEndsInEval", lastGatePlan, func(p *AssignPlan) {
-			lastAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
-		}, "last %t0 ends in *pir.Eval, and a gate's condition ends in a check"},
+		{"TestedSideNeverReleased", lastValuePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which is only tested, is never released"},
 		{"ConditionOfAnotherType", lastGatePlan, func(p *AssignPlan) { lastAt(p, 0).Type = testType("I64") }, "side %t2 of type Str does not fit last %t0 of type I64"},
 		{"ConditionUnvalidated", lastGatePlan, func(p *AssignPlan) { lastAt(p, 0).Sides = lastAt(p, 0).Sides[:1] }, "last %t0 has 1 sides and needs a next"},
 		{"GateTakesASide", lastGatePlan, func(p *AssignPlan) { p.Gate().Cond = 2 }, "gate takes %t2 where its condition binds %t0"},
 		{"ValueIDRepeatsASide", lastGatePlan, func(p *AssignPlan) { p.Gate().Body[0].(*Eval).Result = 2 }, "eval 3 has result ID 2; IDs must be dense"},
-		{"TestedConditionNeverReleased", lastGatePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which a check only tested, is never released"},
+		{"TestedConditionNeverReleased", lastGatePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which is only tested, is never released"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

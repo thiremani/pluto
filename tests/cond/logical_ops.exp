@@ -172,3 +172,6 @@ PrecedenceNearest: 4 z? d?
 FirstLastRanAndFailed: fb
 FirstLastFallbackTested: right
 FirstLastDiscarded: hello
+TestedValueYields: 7
+called 1
+NestedFirstSecondYields: 1

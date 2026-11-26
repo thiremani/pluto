@@ -80,9 +80,10 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 
 // validateGate checks what a gated plan's execute region holds beside its
 // values: one condition, then the gate that takes it and admits a region. The
-// condition is a check, or a last whose every side is one. It returns the
-// outcome ID the values start at. A gate anywhere else is no value, and the
-// values' own validation rejects it.
+// condition is a check, a last or a first, which the gate only tests, and it
+// can fail, or the gate would never reject. It returns the outcome ID the
+// values start at. A gate anywhere else is no value, and the values' own
+// validation rejects it.
 func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (int, error) {
 	gate := p.Gate()
 	if gate == nil {
@@ -106,8 +107,12 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 		if err := validateLast(p.Label, "last %t0", 1, cond, compatible); err != nil {
 			return 0, err
 		}
-		if _, isCheck := cond.final().(*Check); !isCheck {
-			return 0, fmt.Errorf("plan %s: last %%t0 ends in %T, and a gate's condition ends in a check", p.Label, cond.final())
+	case *First:
+		if err := validateFirst(p.Label, 0, cond, compatible); err != nil {
+			return 0, err
+		}
+		if !cond.MayFail() {
+			return 0, fmt.Errorf("plan %s: first %%t0 cannot fail, so the gate that takes it would never reject", p.Label)
 		}
 	default:
 		return 0, fmt.Errorf("plan %s: gate follows %T, which is no condition", p.Label, before[0])
@@ -151,8 +156,9 @@ func validateDense(plan, word string, id OutcomeID, next int) error {
 
 // validateLast checks a last, named as an error names it, whose sides start
 // at sideStart: at least two sides of one slot each, numbered in execution
-// order. Every side before the final one is a check, and the final one, a
-// check or an eval, fits the last's type.
+// order. Every side before the final one is only tested, a check or a first,
+// and the final one, a check, an eval or a first, fits the last's type. A
+// first that is a side binds no outcome.
 func validateLast(plan, name string, sideStart int, l *Last, compatible func(target, outcome Type) bool) error {
 	if l.Type == nil {
 		return fmt.Errorf("plan %s: %s has no type", plan, name)
@@ -162,8 +168,8 @@ func validateLast(plan, name string, sideStart int, l *Last, compatible func(tar
 	}
 
 	final := len(l.Sides) - 1
+	sideID := sideStart
 	for i, side := range l.Sides {
-		sideID := sideStart + i
 		switch n := side.(type) {
 		case *Check:
 			if err := validateCheck(plan, sideID, n); err != nil {
@@ -174,7 +180,7 @@ func validateLast(plan, name string, sideStart int, l *Last, compatible func(tar
 			}
 		case *Eval:
 			if i < final {
-				return fmt.Errorf("plan %s: side %%t%d of %s is an eval before the final side, where a side is a check", plan, sideID, name)
+				return fmt.Errorf("plan %s: side %%t%d of %s is an eval before the final side, where a side is a check or a first", plan, sideID, name)
 			}
 			if err := validateEval(plan, sideID, n); err != nil {
 				return err
@@ -185,32 +191,50 @@ func validateLast(plan, name string, sideStart int, l *Last, compatible func(tar
 			if !compatible(l.Type, n.Slots[0].Type) {
 				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit %s of type %s", plan, sideID, n.Slots[0].Type.String(), name, l.Type.String())
 			}
+		case *First:
+			nested := fmt.Sprintf("the first in side %d of %s", i+1, name)
+			if n.Result != NoOutcome {
+				return fmt.Errorf("plan %s: %s binds outcome %%t%d, and a side of a last binds none", plan, nested, n.Result)
+			}
+			if err := validateFirstSides(plan, nested, sideID, n, compatible); err != nil {
+				return err
+			}
+			if i == final && !compatible(l.Type, n.Type) {
+				return fmt.Errorf("plan %s: %s has type %s, which does not fit the last's type %s", plan, nested, n.Type.String(), l.Type.String())
+			}
 		default:
-			return fmt.Errorf("plan %s: side %%t%d of %s is %T, which is no check or eval", plan, sideID, name, side)
+			return fmt.Errorf("plan %s: side %d of %s is %T, which is no check, eval or first", plan, i+1, name, side)
 		}
+		sideID += Outcomes(side)
 	}
 
 	return nil
 }
 
-// validateFirst checks a first whose outcome is id: at least two sides, each
-// yielding one slot that fits its type, numbered after it in execution order.
-// A side a fallback follows runs it where it fails, so it must be able to
-// fail, and the last side has nothing to fall back to.
+// validateFirst checks a first whose outcome is id, and its sides, numbered
+// after it in execution order.
 func validateFirst(plan string, id int, f *First, compatible func(target, outcome Type) bool) error {
 	if err := validateDense(plan, "first", f.Result, id); err != nil {
 		return err
 	}
+	return validateFirstSides(plan, fmt.Sprintf("first %%t%d", id), id+1, f, compatible)
+}
+
+// validateFirstSides checks a first, named as an error names it, whose sides
+// start at sideStart: at least two, each yielding one slot that fits its type.
+// A side a fallback follows runs it where it fails, so it must be able to
+// fail, and the last side has nothing to fall back to.
+func validateFirstSides(plan, name string, sideStart int, f *First, compatible func(target, outcome Type) bool) error {
 	if f.Type == nil {
-		return fmt.Errorf("plan %s: first %%t%d has no type", plan, id)
+		return fmt.Errorf("plan %s: %s has no type", plan, name)
 	}
 	if len(f.Sides) < 2 {
-		return fmt.Errorf("plan %s: first %%t%d has %d sides and needs a fallback", plan, id, len(f.Sides))
+		return fmt.Errorf("plan %s: %s has %d sides and needs a fallback", plan, name, len(f.Sides))
 	}
 
-	sideID := id + 1
+	sideID := sideStart
 	for i, side := range f.Sides {
-		if err := validateFirstSide(plan, f, i, sideID, side, compatible); err != nil {
+		if err := validateFirstSide(plan, name, f, i, sideID, side, compatible); err != nil {
 			return err
 		}
 		sideID += Outcomes(side)
@@ -218,12 +242,12 @@ func validateFirst(plan string, id int, f *First, compatible func(target, outcom
 	return nil
 }
 
-// validateFirstSide checks side i of f, whose own nodes start at sideID: an
-// eval or a check of one slot fitting the first's type, or a last — an && of
-// its own, which binds no outcome, its value reaching a mapping through the
-// first's. A side a fallback follows must be able to fail. A message names a
-// side by the outcome it binds, and a nested last by its place.
-func validateFirstSide(plan string, f *First, i, sideID int, side Node, compatible func(target, outcome Type) bool) error {
+// validateFirstSide checks side i of f, which an error names first, whose own
+// nodes start at sideID: an eval or a check of one slot fitting the first's
+// type, or a last — an && of its own, which binds no outcome. A side a
+// fallback follows must be able to fail. A message names a side by the
+// outcome it binds, and a nested last by its place.
+func validateFirstSide(plan, first string, f *First, i, sideID int, side Node, compatible func(target, outcome Type) bool) error {
 	name := fmt.Sprintf("side %%t%d", sideID)
 	switch n := side.(type) {
 	case *Eval:
@@ -231,35 +255,36 @@ func validateFirstSide(plan string, f *First, i, sideID int, side Node, compatib
 			return err
 		}
 		if len(n.Slots) != 1 {
-			return fmt.Errorf("plan %s: %s of first %%t%d has %d slots", plan, name, f.Result, len(n.Slots))
+			return fmt.Errorf("plan %s: %s of %s has %d slots", plan, name, first, len(n.Slots))
 		}
 		if i < len(f.Sides)-1 && !n.MayFail() {
-			return fmt.Errorf("plan %s: %s of first %%t%d cannot fail, so the fallback after it would never run", plan, name, f.Result)
+			return fmt.Errorf("plan %s: %s of %s cannot fail, so the fallback after it would never run", plan, name, first)
 		}
-		return validateFirstSideType(plan, name, n.Slots[0].Type, f, compatible)
+		return validateFirstSideType(plan, name, n.Slots[0].Type, first, f, compatible)
 	case *Check:
 		if err := validateCheck(plan, sideID, n); err != nil {
 			return err
 		}
-		return validateFirstSideType(plan, name, n.Slots[0].Type, f, compatible)
+		return validateFirstSideType(plan, name, n.Slots[0].Type, first, f, compatible)
 	case *Last:
 		name = fmt.Sprintf("the last in side %d", i+1)
+		nested := name + " of " + first
 		if n.Result != NoOutcome {
-			return fmt.Errorf("plan %s: %s of first %%t%d binds outcome %%t%d, and a side of a first binds none", plan, name, f.Result, n.Result)
+			return fmt.Errorf("plan %s: %s binds outcome %%t%d, and a side of a first binds none", plan, nested, n.Result)
 		}
-		if err := validateLast(plan, fmt.Sprintf("%s of first %%t%d", name, f.Result), sideID, n, compatible); err != nil {
+		if err := validateLast(plan, nested, sideID, n, compatible); err != nil {
 			return err
 		}
-		return validateFirstSideType(plan, name, n.Type, f, compatible)
+		return validateFirstSideType(plan, name, n.Type, first, f, compatible)
 	}
-	return fmt.Errorf("plan %s: side %d of first %%t%d is %T, which is no eval, check or last", plan, i+1, f.Result, side)
+	return fmt.Errorf("plan %s: side %d of %s is %T, which is no eval, check or last", plan, i+1, first, side)
 }
 
-// validateFirstSideType checks that a side's own type fits the first's, which
-// names the whole selection.
-func validateFirstSideType(plan, name string, side Type, f *First, compatible func(target, outcome Type) bool) error {
+// validateFirstSideType checks that a side's own type fits that of the first
+// an error names first, whose type names the whole selection.
+func validateFirstSideType(plan, name string, side Type, first string, f *First, compatible func(target, outcome Type) bool) error {
 	if !compatible(f.Type, side) {
-		return fmt.Errorf("plan %s: %s of type %s does not fit first %%t%d of type %s", plan, name, side.String(), f.Result, f.Type.String())
+		return fmt.Errorf("plan %s: %s of type %s does not fit %s of type %s", plan, name, side.String(), first, f.Type.String())
 	}
 	return nil
 }
@@ -542,7 +567,7 @@ func (p *AssignPlan) replacement(name string) (Mapping, bool) {
 // validateReleases checks plan §14.19-21: every owned outcome and every
 // replaced held value is consumed or released exactly once, on each path. An
 // owned outcome a binding takes where it yields is released where it fails,
-// and one a check only tested is released whether or not it yielded.
+// and one that is only tested is released whether or not it yielded.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDiscardDrop := make(map[OutcomeRef]bool)
@@ -572,17 +597,18 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 
 	needTestDrop := make(map[OutcomeRef]bool)
-	for _, ch := range p.tests() {
-		for i, slot := range ch.Slots {
+	for _, sup := range p.tests() {
+		id, _ := result(sup)
+		for i, slot := range sup.slots() {
 			if slot.Ownership == Owned {
-				needTestDrop[OutcomeRef{Outcome: ch.Result, Slot: i}] = true
+				needTestDrop[OutcomeRef{Outcome: id, Slot: i}] = true
 			}
 		}
 	}
 	droppedTested := make(map[OutcomeRef]bool)
 	for _, ref := range p.Tested {
 		if !needTestDrop[ref] {
-			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not an owned outcome a check only tested", p.Label, ref.Outcome, ref.Slot)
+			return fmt.Errorf("plan %s: drop of %%t%d slot %d, which is not an owned outcome that is only tested", p.Label, ref.Outcome, ref.Slot)
 		}
 		if droppedTested[ref] {
 			return fmt.Errorf("plan %s: tested %%t%d slot %d dropped twice", p.Label, ref.Outcome, ref.Slot)
@@ -591,7 +617,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	}
 	for ref := range needTestDrop {
 		if !droppedTested[ref] {
-			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d, which a check only tested, is never released", p.Label, ref.Outcome, ref.Slot)
+			return fmt.Errorf("plan %s: owned outcome %%t%d slot %d, which is only tested, is never released", p.Label, ref.Outcome, ref.Slot)
 		}
 	}
 
@@ -650,7 +676,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 
 // outcomeType returns the type of the outcome slot a mapping takes: a slot of
 // an eval, or the one slot of a check, a first or a last, never a node inside
-// one of those.
+// one of those or in a gate's condition.
 func (p *AssignPlan) outcomeType(ref OutcomeRef) (Type, error) {
 	for _, node := range p.Values() {
 		if bound, binds := result(node); binds && bound == ref.Outcome {

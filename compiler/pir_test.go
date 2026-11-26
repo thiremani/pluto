@@ -153,12 +153,13 @@ s`)
 // failure skips the statement's own value plans (row 7), and so does a ||
 // after one when it is the whole value (row 7b), not under an operator, in a
 // cell or a call argument, or with a side of several slots; a side of a || may
-// itself be a comparison or an && that plans (row 7b), while an || for a
-// statement's gate stays legacy. Ordinary heap
-// values — both string
-// flavours, concatenations, array literals of either layout, table
-// literals — and calls with ordinary arguments plan alongside scalars and
-// Range descriptors.
+// itself be a comparison or an && that plans (row 7b). An || plans as a
+// statement's gate and as a side of an && too (row 15), and not when one of
+// its own sides does not plan, in a gate or as an &&'s final side. Ordinary
+// heap values — both string flavours,
+// concatenations, array literals of either layout, table literals — and
+// calls with ordinary arguments plan alongside scalars and Range
+// descriptors.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -216,10 +217,12 @@ fa = x > 2 && 10 || 7
 fq = x > 2 < 9 && 10 || 7
 fg = x > 2 || x < 9 13
 fl = (x > 9 || x > 0) && 7
+fh = x > 2 < 9 || x < 0 13
+fk = x > 2 && (x > 9 < 20 || x > 0)
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fl, fm, fn`)
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fl, fh, fk, fm, fn`)
 
-	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa", "assign fg", "assign fl"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -2099,6 +2102,207 @@ s, t, h, g`)
 `, plans[15].Render(true))
 }
 
+// Plan §4, §12 and matrix rows 15, 19: an || plans as a statement's gate and as
+// a side of an &&. A first or a last binds an outcome only where a gate or a
+// mapping names it, so one nested in the other binds none. A node no mapping
+// takes from is only tested, whatever its kind, and what it built is released
+// once it ran. A failed access goes to the nearest fallback that follows a
+// side holding it, however deep the side, and with none it skips.
+func TestPlanGoldenNestedSelections(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planNestedSelections", `s = MkStr(x)
+    s = "s-x"
+`, `sarr = ["x" "y"]
+h = "heap" ⊕ "!"
+a = 5
+b = 3
+n = 1
+x = 1
+x = a > 9 || b > 0 7
+x = a > 9 && b > 0 || n > 0 7
+x = (a > 9 || b > 0) && 7
+v = (a > 9 || b > 0) && n > 0 14
+x = sarr[9] > "a" || MkStr(b) > "a" 7
+t = "old" ⊕ "!"
+t = n > 0 && (sarr[9] > "a" || sarr[1] > "zz")
+u = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h
+y = (sarr[9] || MkStr(b) > "a") && 7
+x, v, t, u, y`)
+
+	require.Equal(t, []string{"assign sarr", "assign h", "assign a", "assign b", "assign n", "assign x",
+		"assign x", "assign x", "assign x", "assign v", "assign x", "assign t", "assign t", "assign u",
+		"assign y"}, planLabels(plans))
+
+	// A gate takes a first's own outcome, as it takes a last's, and the
+	// region's values are numbered after the first's sides.
+	require.Equal(t, `assign x
+    source
+        x = a > 9 || b > 0 7
+
+    execute
+        %t0 =
+            first I64
+                %t1 = check I64 a > 9
+            fallback
+                %t2 = check I64 b > 0
+        gate %t0
+            %t3 = eval I64 7
+
+    commit
+        x = %t3 [on-skip=keep]
+`, plans[6].Render(true))
+	// An && side of a gate's first is a last that binds no outcome.
+	require.Equal(t, `assign x
+    source
+        x = a > 9 && b > 0 || n > 0 7
+
+    execute
+        %t0 =
+            first I64
+                last I64
+                    %t1 = check I64 a > 9
+                next
+                    %t2 = check I64 b > 0
+            fallback
+                %t3 = check I64 n > 0
+        gate %t0
+            %t4 = eval I64 7
+
+    commit
+        x = %t4 [on-skip=keep]
+`, plans[7].Render(true))
+	// An || side of a last is a first that binds no outcome: its head sits
+	// where the outcome line would have gone. Before the final side it is
+	// only tested, and the final side supplies the value.
+	require.Equal(t, `assign x
+    source
+        x = (a > 9 || b > 0) && 7
+
+    execute
+        %t0 =
+            last I64
+                first I64
+                    %t1 = check I64 a > 9
+                fallback
+                    %t2 = check I64 b > 0
+            next
+                %t3 = eval I64 7
+
+    commit
+        x = %t0 [on-skip=keep]
+`, plans[8].Render(true))
+	// A gate's conjuncts are the sides of one last, an || among them.
+	require.Equal(t, `assign v
+    source
+        v = (a > 9 || b > 0) && n > 0 14
+
+    execute
+        %t0 =
+            last I64
+                first I64
+                    %t1 = check I64 a > 9
+                fallback
+                    %t2 = check I64 b > 0
+            next
+                %t3 = check I64 n > 0
+        gate %t0
+            %t4 = eval I64 14
+
+    commit
+        v = %t4 [on-skip=zero]
+`, plans[9].Render(true))
+	// A gate only tests its first, so what each check built is released once
+	// it is compared, whichever side yielded.
+	require.Equal(t, `assign x
+    source
+        x = sarr[9] > "a" || MkStr(b) > "a" 7
+
+    execute
+        %t0 =
+            first Str
+                %t1 = check owned Str sarr[9] > "a" [on-oob=fallback]
+            fallback
+                %t2 = check owned Str MkStr(b) > "a"
+        gate %t0
+            %t3 = eval I64 7
+
+    commit
+        x = %t3 [on-skip=keep]
+        drop %t1
+        drop %t2
+`, plans[10].Render(true))
+	// A first that is a last's final side supplies its value from either
+	// side. What a side built is released where it failed: where the fallback
+	// inside the last ran, or where the outcome skipped.
+	require.Equal(t, `assign t
+    source
+        t = n > 0 && (sarr[9] > "a" || sarr[1] > "zz")
+
+    execute
+        %t0 =
+            last Str
+                %t1 = check I64 n > 0
+            next
+                first Str
+                    %t2 = check owned Str sarr[9] > "a" [on-oob=fallback]
+                fallback
+                    %t3 = check owned Str sarr[1] > "zz" [on-oob=skip]
+
+    commit
+        t = %t0 [move] [on-skip=keep]
+        drop %t2 [on-fallback]
+        drop %t3 [on-skip]
+        drop t [old]
+`, plans[12].Render(true))
+	// A first in a last in a first: no fallback follows %t3 inside its own
+	// first, and the outer one resolves its failure. The mapping names each
+	// node that can supply the value.
+	require.Equal(t, `assign u
+    source
+        u = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check I64 n > 0
+                next
+                    first Str
+                        %t2 = check owned Str sarr[9] > "a" [on-oob=fallback]
+                    fallback
+                        %t3 = check owned Str sarr[8] > "b" [on-oob=fallback]
+            fallback
+                %t4 = eval borrowed Str h
+
+    commit
+        u = %t0 [move %t2] [move %t3] [copy %t4]
+        drop %t2 [on-fallback]
+        drop %t3 [on-fallback]
+`, plans[13].Render(true))
+	// An eval is only tested where no mapping takes from it, as a check is.
+	require.Equal(t, `assign y
+    source
+        y = (sarr[9] || MkStr(b) > "a") && 7
+
+    execute
+        %t0 =
+            last I64
+                first Str
+                    %t1 = eval owned Str sarr[9] [on-oob=fallback]
+                fallback
+                    %t2 = check owned Str MkStr(b) > "a"
+            next
+                %t3 = eval I64 7
+
+    commit
+        y = %t0 [on-skip=zero]
+        drop %t1
+        drop %t2
+`, plans[14].Render(true))
+}
+
 // A gate reads whether its check yielded and takes nothing, so what the check
 // built is released before the gate's region runs (plan §8).
 func TestPlanGateReleasesCheckFirst(t *testing.T) {
@@ -2119,16 +2323,20 @@ hc`)
 // built is released in the block a branch on the bit that says it ran admits
 // (plan §8), whether it feeds a `_`, failed a read after building, or failed
 // its comparison: where it never ran, its memory holds nothing to release.
+// A final side that is an || runs each of its own sides only there too, so
+// each has the bit, and what a side built sits in memory of its own.
 func TestPlanLastReleasesFinalSideWhereItRan(t *testing.T) {
 	cases := []struct {
 		name      string
 		statement string
 		ran       string
 		staged    string
+		slot      string
 	}{
-		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_ran", "%discard"},
-		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free"},
-		{"FailedCheck", `s = n > 9 && MkStr(n) > "a"`, "%last_ran", "%temp_free"},
+		{"Discarded", `_ = n > 9 && MkStr(n)`, "%last_ran", "%discard", "%last_side.mem"},
+		{"FailedRead", `s = n > 9 && (sarr[9] ⊕ "!")`, "%last_ran", "%temp_free", "%last_side.mem"},
+		{"FailedCheck", `s = n > 9 && MkStr(n) > "a"`, "%last_ran", "%temp_free", "%last_side.mem"},
+		{"FinalFirstSide", `s = n > 9 && (MkStr(n) > "zzz" || MkStr(n) > "a")`, "%last_ran", "%temp_free", "%first_side.mem"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2149,7 +2357,7 @@ n, s, sarr`)
 			require.Contains(t, ir, tc.ran+" = load i1, ptr "+tc.ran+".mem", "the branch must read the flag the final side sets")
 			require.Contains(t, ir, "br i1 "+tc.ran+", label %ran_if, label %ran_cont")
 			admitted := irBlock(ir, "ran_if")
-			require.Contains(t, admitted, tc.staged+" = load ptr, ptr %last_side.mem")
+			require.Contains(t, admitted, tc.staged+" = load ptr, ptr "+tc.slot)
 			require.Contains(t, admitted, "call void @free(ptr "+tc.staged+")")
 		})
 	}

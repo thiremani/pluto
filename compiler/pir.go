@@ -63,15 +63,26 @@ func (c *Compiler) lowerPlanned(stmt ast.Statement, fn string, body int) bool {
 }
 
 // planGateEligible admits a statement without a gate, or one whose gate's
-// conditions are each one check (matrix row 15). One condition is the check
-// the gate takes; several are the conjuncts of an &&, the sides of a last.
+// conditions each plan as a node that is only tested (matrix row 15). One
+// condition is the node the gate takes; several are the conjuncts of an &&,
+// the sides of a last.
 func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
 	for _, cond := range conds {
-		if !c.planCheckEligible(cond) {
+		if !c.planTestedEligible(cond) {
 			return false
 		}
 	}
 	return true
+}
+
+// planTestedEligible admits a condition that is only tested, a gate's or a
+// side before the final one of a last: an || is a first, and any other is a
+// check.
+func (c *Compiler) planTestedEligible(cond ast.Expression) bool {
+	if _, isOr := ast.IsLogicalOr(cond); isOr {
+		return c.planFirstEligible(cond)
+	}
+	return c.planCheckEligible(cond)
 }
 
 // planCheckEligible admits a condition as one check: a scalar comparison
@@ -136,8 +147,8 @@ func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
 	return reads && c.planFirstEligible(expr)
 }
 
-// planFirstEligible admits a value-position || as one first: each side yields
-// one slot, as a check, as a last, or as an eval.
+// planFirstEligible admits an || as one first: each side yields one slot, as
+// a check, as a last, or as an eval.
 func (c *Compiler) planFirstEligible(expr ast.Expression) bool {
 	for _, side := range fallbackSides(expr) {
 		if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) != 1 {
@@ -151,8 +162,8 @@ func (c *Compiler) planFirstEligible(expr ast.Expression) bool {
 }
 
 // planSideEligible admits one side of a first, taking its kind from the side
-// itself as a last's sides do: a comparison is a check, a value-position && is
-// a last, and any other expression is an eval.
+// itself as a last's sides do: a comparison is a check, an && is a last, and
+// any other expression is an eval.
 func (c *Compiler) planSideEligible(side ast.Expression) bool {
 	if _, isAnd := ast.IsLogicalAnd(side); isAnd {
 		return c.planLastEligible(side)
@@ -163,26 +174,26 @@ func (c *Compiler) planSideEligible(side ast.Expression) bool {
 	return c.planExprEligible(side, true)
 }
 
-// planLastEligible admits a value-position && as one last: checks, then a
-// check or an eval of one slot, whose value the last yields.
+// planLastEligible admits an && as one last: sides that are only tested, then
+// a check, a first or an eval of one slot, whose value the last yields.
 func (c *Compiler) planLastEligible(expr ast.Expression) bool {
 	sides := lastSides(expr)
 	final := sides[len(sides)-1]
 	for _, side := range sides[:len(sides)-1] {
-		if !c.planCheckEligible(side) {
+		if !c.planTestedEligible(side) {
 			return false
 		}
 	}
 
-	if c.scalarComparison(final) {
-		return c.planCheckEligible(final)
+	if _, isOr := ast.IsLogicalOr(final); isOr || c.scalarComparison(final) {
+		return c.planTestedEligible(final)
 	}
 	return len(c.ExprCache[key(c.FuncNameMangled, final)].OutTypes) == 1 && c.planExprEligible(final, true)
 }
 
-// lastSides lists the sides of a value-position && in the order they run. A
-// chain is conditions and then one value however it is grouped, so it is one
-// list; any other expression is its own one side.
+// lastSides lists the sides of an && in the order they run. A chain is
+// conditions and then one value however it is grouped, so it is one list; any
+// other expression is its own one side.
 func lastSides(expr ast.Expression) []ast.Expression {
 	and, isAnd := ast.IsLogicalAnd(expr)
 	if !isAnd {
@@ -191,9 +202,9 @@ func lastSides(expr ast.Expression) []ast.Expression {
 	return append(lastSides(and.Left), lastSides(and.Right)...)
 }
 
-// fallbackSides lists the sides of a value-position || in the order they are
-// tried. A chain takes the first side that yields however it is grouped, so
-// it is one list; any other expression is its own one side.
+// fallbackSides lists the sides of an || in the order they are tried. A chain
+// takes the first side that yields however it is grouped, so it is one list;
+// any other expression is its own one side.
 func fallbackSides(expr ast.Expression) []ast.Expression {
 	or, isOr := ast.IsLogicalOr(expr)
 	if !isOr {
@@ -363,9 +374,9 @@ func (c *Compiler) planTarget(ident *ast.Identifier) pir.Target {
 
 // buildLetPlan maps each expression's output slots onto the next targets in
 // order; the solver validated that the totals match. A comparison becomes a
-// check, a value-position || a first and a value-position && a last, each of
-// one slot. A statement's condition becomes the gate that takes it, whose
-// region holds the values: a gate may leave every mapping unapplied.
+// check, an || a first and an && a last, each of one slot. A statement's
+// condition becomes the gate that takes it, whose region holds the values: a
+// gate may leave every mapping unapplied.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPlan {
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
@@ -398,7 +409,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 		}
 
 		if _, isOr := ast.IsLogicalOr(expr); isOr {
-			first := c.buildFirst(expr, next)
+			first := c.buildFirst(expr, next, next+1)
 			values = append(values, first)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, gated || first.MayFail())
 			next += pir.OutcomeID(pir.Outcomes(first))
@@ -424,35 +435,36 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 const conditionID = pir.OutcomeID(0)
 
 // buildCondition plans a gate's conditions as the node the gate takes, and
-// returns the outcome ID after it: one condition is a check, and the
-// conjuncts of an && are the sides of a last of the final one's type. It
+// returns the outcome ID after it: one condition is a check or a first, and
+// the conjuncts of an && are the sides of a last of the final one's type. It
 // returns no node for a statement without a gate.
 func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.OutcomeID) {
-	switch len(conds) {
-	case 0:
+	if len(conds) == 0 {
 		return nil, conditionID
-	case 1:
-		return c.buildCheck(conds[0].(*ast.InfixExpression), conditionID), conditionID + 1
 	}
 
-	t := c.ExprCache[key(c.FuncNameMangled, conds[len(conds)-1])].OutTypes[0]
-	last := c.buildLast(conds, t, conditionID, conditionID+1)
-	return last, conditionID + pir.OutcomeID(pir.Outcomes(last))
+	var cond pir.Node
+	switch {
+	case len(conds) > 1:
+		t := c.ExprCache[key(c.FuncNameMangled, conds[len(conds)-1])].OutTypes[0]
+		cond = c.buildLast(conds, t, conditionID, conditionID+1)
+	case c.scalarComparison(conds[0]):
+		cond = c.buildCheck(conds[0].(*ast.InfixExpression), conditionID)
+	default:
+		cond = c.buildFirst(conds[0], conditionID, conditionID+1)
+	}
+	return cond, conditionID + pir.OutcomeID(pir.Outcomes(cond))
 }
 
 // buildLast plans sides as one last of type t whose outcome is result, its
 // own sides starting at sideStart; result is pir.NoOutcome for a last that is
-// a side of a first, which binds none. A side that is a comparison is a
-// check, and any other side is an eval.
+// a side of a first, which binds none.
 func (c *Compiler) buildLast(sides []ast.Expression, t Type, result, sideStart pir.OutcomeID) *pir.Last {
 	last := &pir.Last{Result: result, Type: t, Sides: make([]pir.Node, len(sides))}
+	next := sideStart
 	for i, side := range sides {
-		sideID := sideStart + pir.OutcomeID(i)
-		if c.scalarComparison(side) {
-			last.Sides[i] = c.buildCheck(side.(*ast.InfixExpression), sideID)
-			continue
-		}
-		last.Sides[i] = c.buildEval(side, sideID)
+		last.Sides[i] = c.buildSide(side, next)
+		next += pir.OutcomeID(pir.Outcomes(last.Sides[i]))
 	}
 	return last
 }
@@ -474,18 +486,18 @@ func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID) *pir.Eval {
 	return ev
 }
 
-// buildFirst plans the value-position || expr, whose outcome is id; its sides
-// take the IDs after it in execution order, a nested last's own sides
-// included.
-func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First {
+// buildFirst plans the || expr as one first whose outcome is result, its own
+// sides starting at sideStart; result is pir.NoOutcome for a first that is a
+// side of a last, which binds none.
+func (c *Compiler) buildFirst(expr ast.Expression, result, sideStart pir.OutcomeID) *pir.First {
 	sides := fallbackSides(expr)
 	first := &pir.First{
-		Result: id,
+		Result: result,
 		Type:   c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0],
 		Sides:  make([]pir.Node, len(sides)),
 	}
 
-	next := id + 1
+	next := sideStart
 	for i, side := range sides {
 		first.Sides[i] = c.buildSide(side, next)
 		next += pir.OutcomeID(pir.Outcomes(first.Sides[i]))
@@ -493,13 +505,17 @@ func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First 
 	return first
 }
 
-// buildSide plans one side of a first, whose own nodes start at id: a
-// comparison as a check, a value-position && as a last that binds no outcome,
-// and any other expression as an eval.
+// buildSide plans one side of a first or a last, whose own nodes start at id,
+// taking its kind from the side itself: an && is a last and an || a first,
+// neither binding an outcome, a comparison is a check, and any other
+// expression is an eval.
 func (c *Compiler) buildSide(side ast.Expression, id pir.OutcomeID) pir.Node {
 	if _, isAnd := ast.IsLogicalAnd(side); isAnd {
 		t := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes[0]
 		return c.buildLast(lastSides(side), t, pir.NoOutcome, id)
+	}
+	if _, isOr := ast.IsLogicalOr(side); isOr {
+		return c.buildFirst(side, pir.NoOutcome, id)
 	}
 	if c.scalarComparison(side) {
 		return c.buildCheck(side.(*ast.InfixExpression), id)
@@ -540,11 +556,11 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 // loweredSource is one eval or check that can supply a node's outcome, after
 // it ran: the outcome it binds, its slots, and two bits. ran says the
 // expression that produces the value ran, so a value is there to take or to
-// release; it is nil for a source that always runs. yielded says that value
-// is the outcome, and is nil for one that always yields. Each bit covers
-// every slot: an eval yields or fails as a whole. A side of a first or a last
-// runs on a path of its own, so its slots point to memory and are loaded
-// where they are read.
+// release; it is nil for a source that ran wherever every source before it
+// failed. yielded says that value is the outcome, and is nil for one that
+// always yields. Each bit covers every slot: an eval yields or fails as a
+// whole. A source inside a first or a last runs on a path of its own, so its
+// slots point to memory and are loaded where they are read.
 type loweredSource struct {
 	id      pir.OutcomeID
 	out     []*Symbol
@@ -586,7 +602,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 		return
 	}
 
-	admitted := c.lowerCondition(cond, plan.Tested)
+	admitted := c.lowerTested(cond, plan.Tested)
 	fresh := c.backBranchedTargets(plan)
 	c.withCondBranch(admitted, "gate", func() {
 		nodes := c.lowerValues(plan)
@@ -595,26 +611,57 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	}, nil)
 }
 
-// lowerCondition runs a gate's condition and returns the bit that says
-// whether it yielded. A gate only tests its condition, so what each check
-// built is released once it is compared.
-func (c *Compiler) lowerCondition(cond pir.Node, tested []pir.OutcomeRef) llvm.Value {
-	if check, isCheck := cond.(*pir.Check); isCheck {
-		return c.lowerTested(check, tested)
+// lowerTested runs a node whose outcome is only tested, a gate's condition or
+// a side before the final one of a last, and returns the bit that says
+// whether it yielded. Nothing takes what its evals and checks built, so each
+// releases that once it ran. A first or a last runs its sides on paths of
+// their own, so its bit sits in memory, cleared before they part.
+func (c *Compiler) lowerTested(node pir.Node, tested []pir.OutcomeRef) llvm.Value {
+	switch n := node.(type) {
+	case *pir.First:
+		yielded := c.clearedFlag("first_tested.mem")
+		c.lowerTestedFirst(n.Sides, tested, yielded)
+		return c.createLoad(yielded, Int{Width: 1}, "first_tested")
+	case *pir.Last:
+		yielded := c.clearedFlag("last_yielded.mem")
+		c.lowerTestedLast(n.Sides, tested, yielded)
+		return c.createLoad(yielded, Int{Width: 1}, "last_yielded")
 	}
-	return c.lowerLast(cond.(*pir.Last), tested, false, sideFlags{}).yielded
+
+	src := c.lowerSource(node.(pir.Supplier))
+	c.dropSourceSlots(tested, src, "check_free")
+	if src.yielded.IsNil() {
+		return llvm.ConstInt(c.mapToLLVMType(Int{Width: 1}), 1, false)
+	}
+	return src.yielded
 }
 
-// lowerTested runs a check whose outcome is only tested: it releases what the
-// check built and returns the bit that says whether it yielded.
-func (c *Compiler) lowerTested(ch *pir.Check, tested []pir.OutcomeRef) llvm.Value {
-	out, yielded := c.lowerCheck(ch)
-	for _, ref := range tested {
-		if ref.Outcome == ch.Result {
-			c.freeSymbolValue(out[ref.Slot], "check_free")
-		}
+// lowerTestedFirst runs the first of sides into yielded and, where it failed,
+// the sides after it.
+func (c *Compiler) lowerTestedFirst(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
+	held := c.lowerTested(sides[0], tested)
+	c.createStore(held, yielded, Int{Width: 1})
+	if len(sides) == 1 {
+		return
 	}
-	return yielded
+
+	c.withCondBranch(c.builder.CreateNot(held, "first_failed"), "first_fallback", func() {
+		c.lowerTestedFirst(sides[1:], tested, yielded)
+	}, nil)
+}
+
+// lowerTestedLast runs the first of sides and, where it yielded, the sides
+// after it; the final side sets yielded.
+func (c *Compiler) lowerTestedLast(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
+	held := c.lowerTested(sides[0], tested)
+	if len(sides) == 1 {
+		c.createStore(held, yielded, Int{Width: 1})
+		return
+	}
+
+	c.withCondBranch(held, "last_next", func() {
+		c.lowerTestedLast(sides[1:], tested, yielded)
+	}, nil)
 }
 
 // lowerValues runs the nodes whose outcomes the commit maps.
@@ -626,9 +673,9 @@ func (c *Compiler) lowerValues(plan *pir.AssignPlan) []loweredNode {
 			src := c.lowerSource(n)
 			nodes = append(nodes, loweredNode{id: src.id, sources: []loweredSource{src}})
 		case *pir.First:
-			nodes = append(nodes, c.lowerFirst(n, plan.Tested))
+			nodes = append(nodes, c.lowerSelection(n.Result, n, firstFlags, plan.Tested))
 		case *pir.Last:
-			nodes = append(nodes, loweredNode{id: n.Result, sources: []loweredSource{c.lowerLast(n, plan.Tested, true, sideFlags{})}})
+			nodes = append(nodes, c.lowerSelection(n.Result, n, lastFlags, plan.Tested))
 		}
 	}
 	return nodes
@@ -709,76 +756,157 @@ func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
 	return out, c.createLoad(guard, Int{Width: 1}, "assign_bounds_ok")
 }
 
-// sideFlags are a side's two bits in memory, cleared before the sides part so
-// that reading them where the mappings land dominates. ran says the
-// expression that produces the side's value ran; yielded says that value is
-// the first's outcome. Only a side that is a last needs ran, since its final
-// side runs only where the checks before it held, while entering any other
-// side runs its expression. A side that cannot fail needs no yielded.
+// sideFlags are a source's two bits in memory, cleared before the sides of
+// its first or last part so that reading them where the mappings land
+// dominates. ran says the expression that produces the source's value ran;
+// yielded says that value is the outcome. Only a source inside a last needs
+// ran, since a last's final side runs only where the sides before it held,
+// while a side of the outermost first runs wherever the one before it failed.
+// A source that cannot fail and is no part of a last needs no yielded.
 type sideFlags struct {
 	ran     llvm.Value
 	yielded llvm.Value
 }
 
-// lowerFirst runs a first's sides in order until one yields (plan §4). A
-// side's flags start false, so they read false wherever the side did not run.
-func (c *Compiler) lowerFirst(f *pir.First, tested []pir.OutcomeRef) loweredNode {
-	flags := make([]sideFlags, len(f.Sides))
-	for i, side := range f.Sides {
-		if _, isLast := side.(*pir.Last); isLast {
-			flags[i].ran = c.clearedFlag("first_side_ran.mem")
-		}
-		if side.(pir.Outcome).MayFail() {
-			flags[i].yielded = c.clearedFlag("first_yielded.mem")
-		}
-	}
-
-	sides := make([]loweredSource, len(f.Sides))
-	c.lowerSides(f, tested, sides, flags, 0)
-
-	i1 := Int{Width: 1}
-	for i := range f.Sides {
-		if !flags[i].ran.IsNil() {
-			sides[i].ran = c.createLoad(flags[i].ran, i1, "first_side_ran")
-		}
-		if !flags[i].yielded.IsNil() {
-			sides[i].yielded = c.createLoad(flags[i].yielded, i1, "first_yielded")
-		}
-	}
-	return loweredNode{id: f.Result, sources: sides}
+// flagNames names the flags of a selection's sources, which read as the kind
+// of the selection a mapping takes.
+type flagNames struct {
+	ran     string
+	yielded string
 }
 
-// lowerSides runs side i of f into its own flags, and the sides after it only
-// where it failed.
-func (c *Compiler) lowerSides(f *pir.First, tested []pir.OutcomeRef, sides []loweredSource, flags []sideFlags, i int) {
-	sides[i] = c.lowerFirstSide(f.Sides[i], tested, flags[i])
-	if i+1 == len(sides) {
+var (
+	firstFlags = flagNames{ran: "first_side_ran", yielded: "first_yielded"}
+	lastFlags  = flagNames{ran: "last_ran", yielded: "last_yielded"}
+)
+
+// lowerSelection runs a first or a last whose outcome id a mapping takes
+// (plan §4) and gives each source that can supply it. A source's flags start
+// false, so they read false wherever the source did not run.
+func (c *Compiler) lowerSelection(id pir.OutcomeID, node pir.Node, names flagNames, tested []pir.OutcomeRef) loweredNode {
+	flags := c.appendSideFlags(nil, node, false, names)
+	sources := make([]loweredSource, len(flags))
+	c.lowerSupplying(node, tested, "", sources, flags)
+
+	i1 := Int{Width: 1}
+	for i := range sources {
+		if !flags[i].ran.IsNil() {
+			sources[i].ran = c.createLoad(flags[i].ran, i1, names.ran)
+		}
+		if !flags[i].yielded.IsNil() {
+			sources[i].yielded = c.createLoad(flags[i].yielded, i1, names.yielded)
+		}
+	}
+	return loweredNode{id: id, sources: sources}
+}
+
+// appendSideFlags adds the cleared flags of each source node supplies, in the
+// order they run; inLast says node sits inside a last.
+func (c *Compiler) appendSideFlags(flags []sideFlags, node pir.Node, inLast bool, names flagNames) []sideFlags {
+	switch n := node.(type) {
+	case *pir.First:
+		for _, side := range n.Sides {
+			flags = c.appendSideFlags(flags, side, inLast, names)
+		}
+		return flags
+	case *pir.Last:
+		return c.appendSideFlags(flags, n.Sides[len(n.Sides)-1], true, names)
+	}
+
+	var own sideFlags
+	if inLast {
+		own.ran = c.clearedFlag(names.ran + ".mem")
+	}
+	if inLast || node.(pir.Outcome).MayFail() {
+		own.yielded = c.clearedFlag(names.yielded + ".mem")
+	}
+	return append(flags, own)
+}
+
+// lowerSupplying runs node, whose value a mapping takes, into sources and
+// flags, which hold the sources node supplies in the order they run. A source
+// runs on a path of its own, so its value is staged in memory, which the
+// commit reads where the source yielded; slot names that memory for a node
+// that is itself the source, and a first or a last names its own sides'.
+func (c *Compiler) lowerSupplying(node pir.Node, tested []pir.OutcomeRef, slot string, sources []loweredSource, flags []sideFlags) {
+	switch n := node.(type) {
+	case *pir.First:
+		c.lowerSides(n.Sides, tested, sources, flags)
+	case *pir.Last:
+		c.lowerLastSides(n.Sides, tested, sources, flags)
+	default:
+		sources[0] = c.lowerStaged(node.(pir.Supplier), slot, flags[0])
+	}
+}
+
+// lowerSides runs the first of a first's sides and, where it failed, the
+// sides after it.
+func (c *Compiler) lowerSides(sides []pir.Node, tested []pir.OutcomeRef, sources []loweredSource, flags []sideFlags) {
+	n := len(pir.Suppliers(sides[0]))
+	c.lowerSupplying(sides[0], tested, "first_side.mem", sources[:n], flags[:n])
+	if len(sides) == 1 {
 		return
 	}
-	c.withCondBranch(c.builder.CreateNot(sides[i].yielded, "first_failed"), "first_fallback", func() {
-		c.lowerSides(f, tested, sides, flags, i+1)
+
+	failed := c.builder.CreateNot(c.sideYielded(sides[0], sources[:n], flags[:n]), "first_failed")
+	c.withCondBranch(failed, "first_fallback", func() {
+		c.lowerSides(sides[1:], tested, sources[n:], flags[n:])
 	}, nil)
 }
 
-// lowerFirstSide runs one side of a first into flags and gives the source it
-// supplies. A side runs on a path of its own, so the value it supplies is
-// staged in memory, which the commit reads where the side yielded: an eval's
-// or a check's outcome here, and a last's final side's in the last's own
-// staging. A last sets both of its bits; any other side records only whether
-// it yielded, since entering it stages its value and only a path on which the
-// sides before it failed reaches its release.
-func (c *Compiler) lowerFirstSide(side pir.Node, tested []pir.OutcomeRef, flags sideFlags) loweredSource {
-	if l, isLast := side.(*pir.Last); isLast {
-		return c.lowerLast(l, tested, true, flags)
+// sideYielded is the bit that says the side of a first that just ran yielded:
+// an eval's or a check's own bit, and for a last, whose sources ran on paths
+// of their own, whether the flag of any of them is set.
+func (c *Compiler) sideYielded(side pir.Node, sources []loweredSource, flags []sideFlags) llvm.Value {
+	if _, isLast := side.(*pir.Last); !isLast {
+		return sources[0].yielded
 	}
 
-	src := c.lowerSource(side.(pir.Supplier))
-	slot := c.createEntryBlockAlloca(c.mapToLLVMType(src.out[0].Type), "first_side.mem")
-	c.createStore(src.out[0].Val, slot, src.out[0].Type)
-	src.out = []*Symbol{{Val: slot, Type: Ptr{Elem: src.out[0].Type}}}
-	if !flags.yielded.IsNil() {
-		c.createStore(src.yielded, flags.yielded, Int{Width: 1})
+	i1 := Int{Width: 1}
+	yielded := c.createLoad(flags[0].yielded, i1, "last_yielded")
+	for _, own := range flags[1:] {
+		yielded = c.builder.CreateOr(yielded, c.createLoad(own.yielded, i1, "last_yielded"), "last_any_yielded")
 	}
+	return yielded
+}
+
+// lowerLastSides runs the first of a last's sides and, where it yielded, the
+// sides after it (plan §4). A side before the final one is only tested, and
+// the final one supplies the last's value.
+func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, sources []loweredSource, flags []sideFlags) {
+	if len(sides) == 1 {
+		c.lowerSupplying(sides[0], tested, "last_side.mem", sources, flags)
+		return
+	}
+
+	c.withCondBranch(c.lowerTested(sides[0], tested), "last_next", func() {
+		c.lowerLastSides(sides[1:], tested, sources, flags)
+	}, nil)
+}
+
+// lowerStaged runs an eval or a check inside a first or a last, stages its
+// value in memory named slot, and sets the flags it has: that it ran, and
+// whether it yielded.
+func (c *Compiler) lowerStaged(n pir.Supplier, slot string, flags sideFlags) loweredSource {
+	i1 := Int{Width: 1}
+	src := c.lowerSource(n)
+	mem := c.createEntryBlockAlloca(c.mapToLLVMType(src.out[0].Type), slot)
+	c.createStore(src.out[0].Val, mem, src.out[0].Type)
+	src.out = []*Symbol{{Val: mem, Type: Ptr{Elem: src.out[0].Type}}}
+
+	ok := llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
+	if !flags.ran.IsNil() {
+		c.createStore(ok, flags.ran, i1)
+	}
+	if flags.yielded.IsNil() {
+		return src
+	}
+
+	held := src.yielded
+	if held.IsNil() {
+		held = ok
+	}
+	c.createStore(held, flags.yielded, i1)
 	return src
 }
 
@@ -788,69 +916,6 @@ func (c *Compiler) clearedFlag(name string) llvm.Value {
 	flag := c.createEntryBlockAlloca(c.mapToLLVMType(i1), name)
 	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 0, false), flag, i1)
 	return flag
-}
-
-// lowerLast runs a last's sides in order while each yields (plan §4). It
-// returns the final side as the one source of the last's outcome, with the
-// bit that says every side yielded and the bit that says the final side ran
-// and staged a value to release. mapped says a mapping takes the outcome, so
-// the final side's value is staged; a gate only tests its last, which stages
-// nothing and so has no second bit. flags holds the caller's own bits where
-// it has them, so that a last inside a first writes the bits that first reads
-// back after the sides part.
-func (c *Compiler) lowerLast(l *pir.Last, tested []pir.OutcomeRef, mapped bool, flags sideFlags) loweredSource {
-	i1 := Int{Width: 1}
-	src := loweredSource{}
-	ran := flags.ran
-	if ran.IsNil() && mapped {
-		ran = c.clearedFlag("last_ran.mem")
-	}
-	yielded := flags.yielded
-	if yielded.IsNil() {
-		yielded = c.clearedFlag("last_yielded.mem")
-	}
-
-	c.lowerLastSides(l.Sides, tested, mapped, &src, ran, yielded)
-
-	if !ran.IsNil() {
-		src.ran = c.createLoad(ran, i1, "last_ran")
-	}
-	src.yielded = c.createLoad(yielded, i1, "last_yielded")
-	return src
-}
-
-// lowerLastSides runs the first of sides and, where it yielded, the sides
-// after it. A side before the final one is a check that is only tested. The
-// final side sets the yielded flag. Where mapped holds, it stages its value
-// in src and sets the ran flag; otherwise it is a check that is only tested.
-func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, mapped bool, src *loweredSource, ran, yielded llvm.Value) {
-	i1 := Int{Width: 1}
-	if len(sides) > 1 {
-		held := c.lowerTested(sides[0].(*pir.Check), tested)
-		c.withCondBranch(held, "last_next", func() {
-			c.lowerLastSides(sides[1:], tested, mapped, src, ran, yielded)
-		}, nil)
-		return
-	}
-
-	if !mapped {
-		c.createStore(c.lowerTested(sides[0].(*pir.Check), tested), yielded, i1)
-		return
-	}
-
-	final := c.lowerSource(sides[0].(pir.Supplier))
-	slot := c.createEntryBlockAlloca(c.mapToLLVMType(final.out[0].Type), "last_side.mem")
-	c.createStore(final.out[0].Val, slot, final.out[0].Type)
-	src.id = final.id
-	src.out = []*Symbol{{Val: slot, Type: Ptr{Elem: final.out[0].Type}}}
-
-	ok := llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
-	c.createStore(ok, ran, i1)
-	held := final.yielded
-	if held.IsNil() {
-		held = ok
-	}
-	c.createStore(held, yielded, i1)
 }
 
 // nodeYielded is the bit that says whether a node's outcome yielded: some

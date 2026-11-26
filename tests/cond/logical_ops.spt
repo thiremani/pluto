@@ -664,3 +664,13 @@ fsHeap = fsL > "zzz" || (fsL ⊕ "?") > "a" && fsR
 # so the release reads it where the mappings land and frees what it built.
 _ = sl > "zzz" || a > 0 && (sl ⊕ "?")
 "FirstLastDiscarded: -sl"
+
+# A value nothing takes is only tested, and yields wherever it ran: the &&
+# inside the || ends in 5, so the || yields and the outer && takes 7.
+teA = (a > 2 && 5 || b > 5) && 7
+"TestedValueYields: -teA"
+
+# An || that ends an && that is itself a side of an ||: its second side
+# yields, so the && did, and the outer fallback does not run.
+nfA = a > 2 && (b > 5 || Loud(1) > 0) || Loud(2)
+"NestedFirstSecondYields: -nfA"
