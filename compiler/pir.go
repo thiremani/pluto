@@ -692,13 +692,13 @@ func (c *Compiler) compareOperands(cmp *ast.InfixExpression) ([]*Symbol, llvm.Va
 }
 
 // lowerEval compiles one eval and returns its outcome with the bit that says
-// whether it yielded; the bit is nil for an eval that always does. An eval
-// that may fail runs under a bounds guard of its own, which each of its
+// whether it yielded; the bit is nil for an eval that always does. A checked
+// eval runs under a bounds guard of its own, which each of its
 // index reads ANDs its in-bounds bit into (plan §9). A read past the end
 // gives a zero that later operators still compute with, and a call lowered
 // after it does not run, so the outcome holds a value where it failed too.
 func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
-	if !ev.MayFail() {
+	if !ev.Checked {
 		return c.compileExpression(ev.Expr, nil), llvm.Value{}
 	}
 

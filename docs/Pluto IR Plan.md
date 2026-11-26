@@ -1660,8 +1660,9 @@ A side with a `fallback` after it must be able to fail, and its reads carry
 fails too the outcome skips, and only then does the mapping carry a skip
 policy, so `x = arr[9] || -1` prints `x = %t0` for a fresh target and an
 existing one alike. The validator checks on every `first` that a side a
-`fallback` follows can fail and that the mapping's policy follows the last
-side; the tags are read off the sides' places.
+`fallback` follows can fail and that a binding's policy follows the last
+side where the statement has no gate; the tags are read off the sides'
+places.
 
 Each side keeps its own ownership, and nothing is copied where the sides
 meet (the rule Step 6 plans for every conditional value): the commit takes

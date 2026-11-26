@@ -956,6 +956,7 @@ func TestRenderFirst(t *testing.T) {
 
 	// A failed read inside a last is resolved as the last's own failure is:
 	// by the fallback after its side, or by a skip in the side none follows.
+	// What a final side built is released under the same word.
 	lasts := firstLastsPlan()
 	Elaborate(lasts)
 	if err := Validate(lasts, sameSpelling); err != nil {
@@ -969,19 +970,24 @@ func TestRenderFirst(t *testing.T) {
         %t0 =
             first Str
                 last Str
-                    %t1 = check Str sarr[9] > "a" [on-oob=fallback]
+                    %t1 = check owned Str sarr[9] > "a" [on-oob=fallback]
                 next
-                    %t2 = eval Str sarr[8] [on-oob=fallback]
+                    %t2 = eval owned Str sarr[8] [on-oob=fallback]
             fallback
                 last Str
-                    %t3 = check Str sarr[7] > "b" [on-oob=skip]
+                    %t3 = check owned Str sarr[7] > "b" [on-oob=skip]
                 next
-                    %t4 = eval Str sarr[6] [on-oob=skip]
+                    %t4 = eval owned Str sarr[6] [on-oob=skip]
 
     commit
-        s = %t0 [on-skip=keep]
+        s = %t0 [move] [on-skip=keep]
+        drop %t1
+        drop %t3
+        drop %t2 [on-fallback]
+        drop %t4 [on-skip]
+        drop s [old]
 `
-	if got := lasts.Render(false); got != want {
+	if got := lasts.Render(true); got != want {
 		t.Fatalf("render of a last for each side mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
