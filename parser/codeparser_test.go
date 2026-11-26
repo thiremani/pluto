@@ -262,6 +262,12 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	}, p.Errors())
 }
 
+func TestMissingBodyIndentReportsError(t *testing.T) {
+	p := NewCodeParser(lexer.New("missing-indent.pt", "r = F()\nx"))
+	require.Nil(t, p.Parse())
+	require.Contains(t, p.Errors(), "missing-indent.pt:1:8:expected next token to be INDENT, got IDENT instead")
+}
+
 // A literal inside a function body keeps the body's block structure, however
 // its lines are indented.
 func TestLayoutInBody(t *testing.T) {

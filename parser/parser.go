@@ -470,36 +470,24 @@ func (p *StmtParser) noteSpelled(tok token.Token) {
 	}
 }
 
-// spell gives stmt the source its file spells it with, from the token the
-// statement started at to the last one it spells, and closes the recording
-// noteSpelled does. A plan quotes that rather than the ast's own rendering,
-// so what a reader sees is what they wrote.
-func (p *StmtParser) spell(stmt ast.Statement) {
-	p.spelling = false
-
-	src := p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
-	switch s := stmt.(type) {
-	case *ast.LetStatement:
-		s.Src = src
-	case *ast.PrintStatement:
-		s.Src = src
-	}
+func (p *StmtParser) sourceSpelling() string {
+	return p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
 }
 
 // parseStatement parses one statement and gives it the source its file
 // spells it with. The recording runs for exactly as long as this does, so a
 // caller that parses a declaration of its own keeps none of its tokens.
-func (p *StmtParser) parseStatement() (stmt ast.Statement) {
+func (p *StmtParser) parseStatement() ast.Statement {
 	if p.skipIndented() {
 		return nil
 	}
 	firstToken := p.curToken
 	p.spelling = true
+	defer func() { p.spelling = false }()
 	p.stmtStart = token.Token{}
 	p.stmtEnd = token.Token{}
 	p.stmtLiterals = p.stmtLiterals[:0]
 	p.noteSpelled(firstToken)
-	defer func() { p.spell(stmt) }()
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its
@@ -514,6 +502,7 @@ func (p *StmtParser) parseStatement() (stmt ast.Statement) {
 		p.errorOnBlanks()
 		return &ast.PrintStatement{
 			Token: firstToken,
+			Src:   p.sourceSpelling(),
 			Expression: &ast.CallExpression{
 				Token:     firstToken,
 				Function:  &ast.Identifier{Token: firstToken, Value: ""},
@@ -536,11 +525,8 @@ func (p *StmtParser) parseStatement() (stmt ast.Statement) {
 	}
 
 	p.checkNoDuplicates(identList)
-	// A nil *ast.LetStatement is not a nil ast.Statement, so the let is named
-	// and tested rather than returned straight through. It is not named stmt:
-	// this function returns one, and nothing should have to ask which the
-	// deferred spelling reads.
 	if let := p.parseLetStatement(identList); let != nil {
+		let.Src = p.sourceSpelling()
 		return let
 	}
 	return nil
