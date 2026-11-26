@@ -157,13 +157,18 @@ func TestSplitOperatorKeepsItsRunes(t *testing.T) {
 func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
 	const script = "√--x\n"
 	p := New(lexer.New("TestSplitOperatorPlacesItsRemainder", script))
-	pieces := p.splitOperator(p.curToken)
-	require.Len(t, pieces, 2)
+	first, remainder := splitOperator(p.curToken, "√")
 
 	runes := []rune(script)
-	for _, tok := range pieces {
+	for _, tok := range []token.Token{first, remainder} {
 		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
 		require.Equal(t, tok.Pos+1, tok.Column, "operator %q", tok.Literal)
+	}
+
+	p.normalizeCurrentPrefixOperator()
+	for _, want := range []string{"√", "-", "-", "x"} {
+		require.Equal(t, want, p.curToken.Literal)
+		p.nextToken()
 	}
 }
 

@@ -297,75 +297,45 @@ func (p *StmtParser) isPrefixRun(lit string) bool {
 	return true
 }
 
-// splitOperator splits a run that begins a value at its first prefix
-// operator: "√-" -> ["√", "-"]. Only a run made of prefix operators alone is
-// split. Any other is one operator, defined or not, as a run between two
-// values always is, so "a*-b" names an operator "*-".
-func (p *StmtParser) splitOperator(tok token.Token) []token.Token {
-	if tok.Type != token.OPERATOR || !p.isPrefixRun(tok.Literal) {
-		return []token.Token{tok}
-	}
-
-	match := p.findLongestPrefixOp(tok.Literal)
-	if match == tok.Literal {
-		return []token.Token{tok} // No split needed
-	}
-
-	// Split into matched part and remainder. Each piece keeps the runes of
-	// the run that spell it, so a token still says where its own source is.
+// splitOperator takes a matched prefix off an operator run. Both pieces keep
+// their source extents, and only the first inherits the run's leading space.
+func splitOperator(tok token.Token, match string) (token.Token, token.Token) {
 	matched := utf8.RuneCountInString(match)
-	result := []token.Token{
-		{
-			Type:     token.OPERATOR,
-			Literal:  match,
-			FileName: tok.FileName,
-			Line:     tok.Line,
-			Column:   tok.Column,
-			Pos:      tok.Pos,
-			Len:      matched,
-			// Preserve source spacing so attached-prefix boundary checks still
-			// work after an operator run is split into parseable pieces.
-			HadSpace: tok.HadSpace,
-		},
-	}
+	first := tok
+	first.Literal = match
+	first.Len = matched
 
-	remainder := tok.Literal[len(match):]
-	if remainder != "" {
-		result = append(result, token.Token{
-			Type:     token.OPERATOR,
-			Literal:  remainder,
-			FileName: tok.FileName,
-			Line:     tok.Line,
-			Column:   tok.Column + matched,
-			Pos:      tok.Pos + matched,
-			Len:      tok.Len - matched,
-		})
-	}
-
-	return result
+	tok.Literal = tok.Literal[len(match):]
+	tok.Pos += matched
+	tok.Column += matched
+	tok.Len -= matched
+	tok.HadSpace = false
+	return first, tok
 }
 
-// normalizeCurrentPrefixOperator splits current token for prefix parsing
+// A run that begins a value must consist entirely of prefix operators.
+// Queue the pieces together so each suffix can be consumed directly.
 func (p *StmtParser) normalizeCurrentPrefixOperator() {
-	tokens := p.splitOperator(p.curToken)
-	if len(tokens) <= 1 {
+	rest := p.curToken
+	if p.prefixParseFns[rest.Literal] != nil || !p.isPrefixRun(rest.Literal) {
 		return
 	}
 
-	// Update current to matched part, queue the rest
-	p.curToken = tokens[0]
-
-	// Set next token to the immediate remainder part, and queue the original peek
-	// plus any further remainder (avoiding duplicating tokens[1]).
-	originalPeek := p.peekToken
-	p.peekToken = tokens[1]
-
-	queue := []token.Token{}
-	if len(tokens) > 2 {
-		queue = append(queue, tokens[2:]...)
+	var pieces []token.Token
+	for {
+		match := p.findLongestPrefixOp(rest.Literal)
+		if match == rest.Literal {
+			break
+		}
+		first, remainder := splitOperator(rest, match)
+		pieces = append(pieces, first)
+		rest = remainder
 	}
-	queue = append(queue, originalPeek)
-	p.savedTokens = append(queue, p.savedTokens...)
+
+	pieces = append(pieces, rest, p.peekToken)
+	p.curToken = pieces[0]
+	p.peekToken = pieces[1]
+	p.savedTokens = append(pieces[2:], p.savedTokens...)
 }
 
 func (p *StmtParser) curTokenIs(t token.TokenType) bool {
