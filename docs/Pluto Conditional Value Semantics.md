@@ -354,6 +354,16 @@ Spacing separates cells, and operators glue their operands into one cell:
 [a > 3 && b < 5 || 10]   # one cell
 ```
 
+A run of operator characters is one operator. Attached to the value before it,
+it stands between two values, so it has to be an operator that takes two. After
+a space, a run made of prefix operators begins the next cell:
+
+```pluto
+[a - √b]    # one cell: a minus √b
+[a -√b]     # two cells: a and -√b
+[a-√b]      # error: operator -√ is not defined
+```
+
 A direct array comparison follows the same rule element-wise: `arr > k` is a
 **mask** — each cell keeps its left value where the comparison holds, else 0, *in
 place* (length- and position-preserving). It is the scalar "yield the left

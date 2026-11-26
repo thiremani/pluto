@@ -167,13 +167,39 @@ func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
 	}
 }
 
-// A run of operator characters between two values is one operator, so "*-"
-// is an operator nothing defines, not a product with a negation.
-func TestOperatorRunBetweenValuesIsOneOperator(t *testing.T) {
-	const name = "TestOperatorRunBetweenValuesIsOneOperator"
-	sp := NewScriptParser(lexer.New(name, "x = a*-b\n"))
-	sp.Parse()
-	require.Equal(t, []string{name + ":1:6:no prefix parse function for *- found"}, sp.Errors())
+// A run of operator characters that names no operator is reported as that,
+// once and whole, at the run. Only a run made of prefix operators begins a
+// value, and after a value only with a space before it, where a value may
+// begin: "a-√b" is no difference with a root, and "-*" is no negation. An
+// operator that is defined keeps its own reading: "*" before a value has its
+// own error, and "√" begins a value wherever it stands.
+func TestUndefinedOperatorRun(t *testing.T) {
+	const name = "TestUndefinedOperatorRun:"
+	for _, tt := range []struct{ input, err string }{
+		{"x = a-√b", "1:6:operator -√ is not defined"},
+		{"x = 1 -√b", "1:7:operator -√ is not defined"},
+		{"x = f(a -√b)", "1:9:operator -√ is not defined"},
+		{"x = [a*-b]", "1:7:operator *- is not defined"},
+		{"x = -*b", "1:5:operator -* is not defined"},
+		{"x, y = a, b @ c", "1:13:operator @ is not defined"},
+		{"x = *b", "1:5:no prefix parse function for * found"},
+	} {
+		sp := NewScriptParser(lexer.New("TestUndefinedOperatorRun", tt.input+"\nafter = 3"))
+		program := sp.Parse()
+		require.Equal(t, []string{name + tt.err}, sp.Errors(), tt.input)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+
+	for _, tt := range []struct{ input, parsed string }{
+		{"x = a > 1 -√c", "x = (a > 1) (-(√c))"},
+		{"x = [1 -√4]", "x = [1 (-(√4))]"},
+		{"x = [a√b]", "x = [a (√b)]"},
+	} {
+		sp := NewScriptParser(lexer.New("TestUndefinedOperatorRun", tt.input))
+		program := sp.Parse()
+		require.Empty(t, sp.Errors(), tt.input)
+		require.Equal(t, []string{tt.parsed}, statementStrings(program.Statements), tt.input)
+	}
 }
 
 // A statement's spelling holds everything the statement does, so parsing it
@@ -286,16 +312,16 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got . instead",
 		}},
 		{"operator run", "a @= 2", []string{
-			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got OPERATOR instead",
+			"TestUnparsedAssignmentTarget:1:3:operator @ is not defined",
 		}},
 		{"closing paren", "a ) = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got ) instead",
 		}},
 		{"only target", "@ = 2", []string{
-			"TestUnparsedAssignmentTarget:1:1:no prefix parse function for @ found",
+			"TestUnparsedAssignmentTarget:1:1:operator @ is not defined",
 		}},
 		{"second target", "a, @ = 2, 3", []string{
-			"TestUnparsedAssignmentTarget:1:4:no prefix parse function for @ found",
+			"TestUnparsedAssignmentTarget:1:4:operator @ is not defined",
 		}},
 	}
 

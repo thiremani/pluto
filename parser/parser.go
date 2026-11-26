@@ -256,16 +256,30 @@ func (p *StmtParser) findLongestPrefixOp(lit string) string {
 	return best
 }
 
+// isPrefixRun reports whether lit is made of prefix operators alone, so that
+// a value may begin with it.
+func (p *StmtParser) isPrefixRun(lit string) bool {
+	for lit != "" {
+		op := p.findLongestPrefixOp(lit)
+		if op == "" {
+			return false
+		}
+		lit = lit[len(op):]
+	}
+	return true
+}
+
 // splitOperator splits a run that begins a value at its first prefix
-// operator: "√-" -> ["√", "-"]. A run between two values is never split: it
-// is one operator, defined or not, so "a*-b" names an operator "*-".
+// operator: "√-" -> ["√", "-"]. Only a run made of prefix operators alone is
+// split. Any other is one operator, defined or not, as a run between two
+// values always is, so "a*-b" names an operator "*-".
 func (p *StmtParser) splitOperator(tok token.Token) []token.Token {
-	if tok.Type != token.OPERATOR {
+	if tok.Type != token.OPERATOR || !p.isPrefixRun(tok.Literal) {
 		return []token.Token{tok}
 	}
 
 	match := p.findLongestPrefixOp(tok.Literal)
-	if match == "" || match == tok.Literal {
+	if match == tok.Literal {
 		return []token.Token{tok} // No split needed
 	}
 
@@ -377,6 +391,11 @@ func (p *StmtParser) curError(t token.TokenType) {
 }
 
 func (p *StmtParser) noPrefixParseFnError(t token.Token) {
+	if p.isUndefinedOperator(t) {
+		p.undefinedOperatorError(t)
+		return
+	}
+
 	msg := fmt.Sprintf("no prefix parse function for %s found", t.TokenTypeWithOp())
 	ce := &token.CompileError{
 		Token: p.curToken,
@@ -966,7 +985,34 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplit
 		return nil
 	}
 
-	return p.parseExpressionTail(precedence, splitPrefix, leftExp)
+	value := p.parseExpressionTail(precedence, splitPrefix, leftExp)
+	if value == nil || precedence > LOWEST || !p.isUndefinedOperator(p.peekToken) {
+		return value
+	}
+
+	// A whole value, parsed at LOWEST, ends at a run that is no operator. Made
+	// of prefix operators and with a space before it, the run begins the next
+	// value where one may begin. Any other stands between two values as one
+	// operator, which nothing defines; it is read past, as a failed part is.
+	if p.peekToken.HadSpace && p.isPrefixRun(p.peekToken.Literal) && p.shouldSplitAttachedPrefix(splitPrefix, value) {
+		return value
+	}
+	p.nextToken()
+	p.undefinedOperatorError(p.curToken)
+	return nil
+}
+
+// isUndefinedOperator reports whether tok is a run of operator characters
+// that names no operator, neither before a value nor between two.
+func (p *StmtParser) isUndefinedOperator(tok token.Token) bool {
+	return tok.Type == token.OPERATOR && p.prefixParseFns[tok.Literal] == nil && p.infixParseFns[tok.Literal] == nil
+}
+
+func (p *StmtParser) undefinedOperatorError(tok token.Token) {
+	p.errors = append(p.errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("operator %s is not defined", tok.Literal),
+	})
 }
 
 // parseExpressionTail continues parsing an expression using precedence climbing.
