@@ -679,8 +679,9 @@ derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
-for a plain store; a mapping fed by a `first` names a transfer for each side
-where they differ, `[move %t1] [copy %t2]`, and one word where they agree —
+for a plain store; a mapping that several nodes can supply names a transfer
+for each `eval` or `check` among them where they differ,
+`[move %t1] [copy %t2]`, and one word where they agree —
 and follows the mappings with the derived releases,
 `drop %t1` for an owned outcome that is only tested or is discarded,
 `drop %t0 [on-skip]` for what an owned outcome built before it skipped,
@@ -795,8 +796,9 @@ The value-position `&&` prints the same way under `last` (decided
 side before it yielded. Its clause word is `next`, where a `first` has
 `fallback` (decided 2026-11-18). A chain is one `last` however it is grouped,
 and only its final side supplies the value, so a mapping takes it by one
-transfer (decided 2026-11-20), or by one for each side where that final side
-is a `first` (decided 2026-11-26).
+transfer (decided 2026-11-20). Where that final side is a `first`, the
+mapping takes one for each `eval` or `check` that can supply the value,
+which may be more than the `first` has sides (decided 2026-11-26).
 
 ```text
 assign v
@@ -2084,13 +2086,14 @@ whose `5` nothing takes. The parser keeps a plain value out of a gate's
 `x = b > 9 || arr[1] > 0 && k 5` are gates today.
 
 A `last` supplies its value from its final side, so where that side is a
-`first` each side of the `first` can supply it, and the mapping names a
-transfer for each. A failed access goes to the nearest `fallback` that
-follows a side holding it, however deep, and skips the outcome where there is
-none: above, no `fallback` follows `%t3` inside its own `first`, and the
-outer one resolves it. A release carries the same word, so
-`t = n > 0 && (sarr[9] > "a" || sarr[1] > "zz")` drops its first check
-`[on-fallback]` and its second `[on-skip]`.
+`first` each `eval` or `check` the `first` can take its value from can supply
+it, and the mapping names a transfer for each: a `first` of two sides gives
+three where one side is a `last` that itself ends in a `first`. A failed
+access goes to the nearest `fallback` that follows a side holding it, however
+deep, and skips the outcome where there is none: above, no `fallback` follows
+`%t3` inside its own `first`, and the outer one resolves it. A release
+carries the same word, so `t = n > 0 && (sarr[9] > "a" || sarr[1] > "zz")`
+drops its first check `[on-fallback]` and its second `[on-skip]`.
 
 The validator checks that a gate's condition is a check, a `last` or a
 `first`, and that it can fail, since a gate over one that cannot would never
