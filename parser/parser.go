@@ -1564,6 +1564,7 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 // parseRow parses a row's cells up to a ']' or the end of its line, where it
 // stops, and adds the row to arr unless it is empty. A cell that fails leaves
 // the row failed, and the row reads on past the brackets the cell left open.
+// A cell that fails at the row's own ']' has ended the row.
 func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	row := []ast.Expression{}
 	ok := true
@@ -1575,6 +1576,9 @@ func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 		ok = ok && expr != nil
 		if expr != nil {
 			row = append(row, expr)
+		}
+		if p.open.squares < start.squares {
+			break
 		}
 		if !p.atLineEnd() {
 			p.nextToken()

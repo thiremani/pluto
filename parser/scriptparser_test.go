@@ -2069,7 +2069,9 @@ func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
 // from the cell after, so what is left of a failed call, group or index is not
 // read as cells, and a later cell still reports its own error. Each cell
 // counts its own brackets, so a stray ')' before it changes nothing. A ']'
-// that closes none of the cell's brackets stays the row's own.
+// that closes none of the cell's brackets stays the row's own, and a cell
+// that fails at it has ended the row: what follows the literal is not read as
+// its cells.
 func TestFailedCellTakesItsBrackets(t *testing.T) {
 	const name = "TestFailedCellTakesItsBrackets:"
 	const undefined = "operator @ is not defined"
@@ -2080,6 +2082,7 @@ func TestFailedCellTakesItsBrackets(t *testing.T) {
 		{"x = [f(a@b, c) ) (d@e) g@h]", []string{"1:9:" + undefined, "1:16:no prefix parse function for ) found", "1:20:" + undefined, "1:25:" + undefined}},
 		{"x = [v[a@b] c@d]", []string{"1:9:" + undefined, "1:14:" + undefined}},
 		{"x = g([f(a b], c@d)", []string{"1:10:expected next token to be ), got IDENT instead", "1:17:" + undefined}},
+		{"x = [f([1 +], 9) c@d]", []string{"1:12:no prefix parse function for ] found", "1:19:" + undefined}},
 	} {
 		sp := NewScriptParser(lexer.New("TestFailedCellTakesItsBrackets", tt.input+"\nafter = 3"))
 		program := sp.Parse()
