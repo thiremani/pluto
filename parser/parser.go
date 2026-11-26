@@ -476,9 +476,6 @@ func (p *StmtParser) noteSpelled(tok token.Token) {
 // so what a reader sees is what they wrote.
 func (p *StmtParser) spell(stmt ast.Statement) {
 	p.spelling = false
-	if stmt == nil {
-		return
-	}
 
 	src := p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
 	switch s := stmt.(type) {
