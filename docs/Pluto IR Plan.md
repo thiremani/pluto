@@ -795,7 +795,8 @@ The value-position `&&` prints the same way under `last` (decided
 side before it yielded. Its clause word is `next`, where a `first` has
 `fallback` (decided 2026-11-18). A chain is one `last` however it is grouped,
 and only its final side supplies the value, so a mapping takes it by one
-transfer (decided 2026-11-20).
+transfer (decided 2026-11-20), or by one for each side where that final side
+is a `first` (decided 2026-11-26).
 
 ```text
 assign v
