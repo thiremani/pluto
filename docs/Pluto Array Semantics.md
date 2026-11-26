@@ -65,7 +65,7 @@ overflow `I64`.
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal has one row, however long; an editor
 can wrap it for display. A literal whose `[` ends its line is a block: its
-rows line up with each other, at any depth past the line that holds the `[`,
+rows are indented 4 spaces past the line that holds the `[`,
 and its `]` goes on its own line, at that line's column. A line break inside a
 multi-line string starts no line of its own, so after such a string the line
 holding the `[` is the one the string began on. A nested block literal follows
@@ -81,8 +81,8 @@ matrix = [
 A line break between an inline literal's cells or before its `]` is an error,
 but a cell can itself hold a block literal, a multi-line string or a call
 continued after a comma. A block literal's `]` on its last row's line or at
-another column, and rows that are not indented past the line holding its `[`
-or do not line up, are errors too.
+another column, and rows that are not 4 spaces past the line holding its `[`,
+are errors too.
 
 A line breaks only after a comma or `=`, and the next line is indented past
 the statement's line, so a call's arguments can span lines, as can the names
@@ -217,7 +217,8 @@ column name. The header goes on its own line after `[`, with all its column
 names on that line. Headerless literals start directly with their first data
 row.
 
-The header's `:` hangs 2 spaces left of the rows, with one space after it, so
+The header's `:` hangs 2 spaces left of the rows, so 2 spaces past the line
+holding the `[`, with one space after it, so
 the first header and first value begin in the same column. Spacing within
 header and data rows is otherwise non-semantic:
 

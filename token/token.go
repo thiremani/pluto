@@ -185,6 +185,8 @@ type Token struct {
 	Literal  string // source spelling; string contents retain escape sequences
 	Line     int
 	Column   int
+	Pos      int  // the token's first rune, counted from the input's start
+	Len      int  // its runes of source spelling; 0 for a token no source spells
 	HadSpace bool // true if there was any space before this token
 }
 

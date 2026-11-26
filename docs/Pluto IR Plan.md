@@ -543,7 +543,8 @@ as before, and siblings of a skipped outcome still commit.
 
 ```text
 assign obA, obB
-    source "obA, obB = obArr[10], 5"
+    source
+        obA, obB = obArr[10], 5
 
     execute
         %t0 = eval I64 obArr[10] [on-oob=skip]
@@ -732,15 +733,46 @@ The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
 golden for its new node kinds. An eval operand is always one physical line:
 control characters inside a string literal are escaped (`"line one\nline
-two"`). A block-layout array literal — rank-2 rows, a table — is spelled as
-in the source with each of its line breaks escaped the same way
-(`[\n    1 2\n    3 4\n]`), as the plan's `source` line already shows it
-(decided 2026-11-13; matrix rows 2c and 36). `commit`
-and `advance` carry no mode keyword: both are always simultaneous (§14).
+two"`), and a block-layout array literal — rank-2 rows, a table — is spelled
+as in the source with each of its line breaks escaped the same way
+(`[\n    1 2\n    3 4\n]`; decided 2026-11-13, matrix rows 2c and 36).
+
+A plan's `source` follows the opposite rule, since it is the whole statement
+rather than an operand: the label stands alone and the statement's own lines
+sit one level in, so a block literal reads as it is laid out (decided
+2026-11-23). What it renders is the file's own text, from the statement's
+first token to the line break that ends it: a comment any of its lines ends
+with is in it, and so is a comment line between two of its lines, while the
+lines around the statement are not (decided 2026-11-26). Each later line
+loses the indentation the statement stands at, which the layout rules give
+every line of its own, so the lines keep the shape the file gives them; a line holding
+nothing of the statement — blank, or a comment at any indentation — loses no
+more than it has, and a line a string literal runs through keeps the
+characters the string holds. So the parens the ast adds
+to spell out its own nesting are absent
+(`d = Twice(d) + 1`, not `d = (Twice(d) + 1)`), and an implicit
+multiplication reads as it was typed (`imp = 5a`). Every statement a plan is
+built from comes from a file, and validation rejects a plan whose head carries
+no source, so there is nothing to fall back to. Within a line,
+everything a reader could not otherwise see is
+escaped — a tab, a control, and every rune Unicode calls unprintable, the
+format and separator characters among them — so a source never breaks the
+layout. Two statements still render alike where they hold the same text, a
+physical tab and a `\t` escape among them; what these rules rule out is two
+statements that differ. Only a line terminator becomes a
+line, and LF, CRLF and CR all count as one (README), so a terminator reads the
+same however a file spells it and never collides with the `\r` a source asks
+for by escape. A multi-line string literal is the one place the two rules
+disagree about what the text holds: the source shifts its continuation to the
+section's indent, and the operand beside it is exact.
+
+`commit` and `advance` carry no mode keyword: both are always simultaneous
+(§14).
 
 ```text
 assign x
-    source "x = ((data[i] || other[j]) || (-1))"
+    source
+        x = data[i] || other[j] || -1
 
     execute
         %t0 =
@@ -764,7 +796,8 @@ transfer (decided 2026-11-20).
 
 ```text
 assign v
-    source "v = ((n > 2) && 10)"
+    source
+        v = n > 2 && 10
 
     execute
         %t0 =
@@ -786,7 +819,8 @@ whatever the condition.
 
 ```text
 assign x
-    source "x = (n > 0) 5"
+    source
+        x = n > 0 5
 
     execute
         %t0 = check I64 n > 0
@@ -1408,7 +1442,8 @@ in source order.
 
 ```text
 print
-    source "\"n: -n\", h, (h ⊕ \"!\")"
+    source
+        "n: -n", h, h ⊕ "!"
 
     execute
         %t0 = eval borrowed Str h
@@ -1445,7 +1480,11 @@ the literal as the source spells it, with each line break escaped.
 
 ```text
 assign scores
-    source "scores = [\n  : Name Score\n    \"Ada\" 10\n]"
+    source
+        scores = [
+          : Name Score
+            "Ada" 10
+        ]
 
     execute
         %t0 = eval Table[Name:Str Score:I64] [\n  : Name Score\n    "Ada" 10\n]
@@ -1512,7 +1551,8 @@ freshness.
 
 ```text
 assign skeep
-    source "skeep = (skeep ⊕ sarr[9])"
+    source
+        skeep = skeep ⊕ sarr[9]
 
     execute
         %t0 = eval owned Str skeep ⊕ sarr[9] [on-oob=skip]
@@ -1596,7 +1636,8 @@ either way.
 
 ```text
 assign s
-    source "s = (sarr[9] || h)"
+    source
+        s = sarr[9] || h
 
     execute
         %t0 =
@@ -1711,7 +1752,8 @@ that outcome and holds the statement's values in its region.
 
 ```text
 assign s
-    source "s = (MkStr(n) > \"a\") t"
+    source
+        s = MkStr(n) > "a" t
 
     execute
         %t0 = check owned Str MkStr(n) > "a"
@@ -1776,7 +1818,8 @@ before the final one is a comparison, a `check` that is only tested, and the
 
 ```text
 assign t
-    source "t = ((MkStr(n) > \"a\") && MkStr(x))"
+    source
+        t = MkStr(n) > "a" && MkStr(x)
 
     execute
         %t0 =
@@ -1843,7 +1886,8 @@ where the comparison holds; where it fails, the binding carries
 
 ```text
 assign s
-    source "s = (MkStr(a) > \"zzz\")"
+    source
+        s = MkStr(a) > "zzz"
 
     execute
         %t0 = check owned Str MkStr(a) > "zzz"
@@ -1904,7 +1948,8 @@ and any other side is an `eval`.
 
 ```text
 assign t
-    source "t = ((MkStr(a) > \"a\") && MkStr(b)) || h"
+    source
+        t = MkStr(a) > "a" && MkStr(b) || h
 
     execute
         %t0 =

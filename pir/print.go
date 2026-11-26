@@ -3,7 +3,6 @@ package pir
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -98,10 +97,21 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) 
 }
 
 // writeHead writes what every plan opens with: its header, its source, and
-// the line that opens its execute region.
+// the line that opens its execute region. The source prints as the lines its
+// file spells the statement with, one level in, so a literal that spans lines
+// reads as it is laid out, with every character a reader cannot see still
+// escaped. A node's operand stays one line, line breaks escaped with it
+// (plan §12).
 func writeHead(b *strings.Builder, head Head) {
 	fmt.Fprintf(b, "%s\n", head.Label)
-	fmt.Fprintf(b, "    source %s\n", strconv.Quote(head.Source))
+	b.WriteString("    source\n")
+	for _, line := range strings.Split(logicalNewlines(head.Source), "\n") {
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		fmt.Fprintf(b, "        %s\n", escapeControls(line))
+	}
 	b.WriteString("\n    execute\n")
 }
 
@@ -168,11 +178,13 @@ func FuncHeader(fn string) string {
 	return "function " + fn + "\n"
 }
 
-// indent moves every non-blank line one level in.
+// indent moves every line one level in but the empty ones, which separate a
+// plan's sections: a line of spaces belongs to a multi-line source and keeps
+// its own indentation.
 func indent(text string) string {
 	lines := strings.SplitAfter(text, "\n")
 	for i, line := range lines {
-		if strings.TrimSpace(line) != "" {
+		if line != "" && line != "\n" {
 			lines[i] = "    " + line
 		}
 	}
@@ -194,24 +206,38 @@ func renderPayload(expr ast.Expression) string {
 	return escapeControls(s)
 }
 
-// escapeControls keeps an operand on one physical line: C0 and C1 controls
-// and the Unicode line and paragraph separators are escaped.
+// logicalNewlines rewrites every line terminator Pluto counts as one — LF,
+// CRLF and CR alike, as lexer.LogicalRune reads them — to LF, so a terminator
+// reads the same however a file spells it and never collides with the `\r` an
+// escape in the source asks for.
+func logicalNewlines(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
+
+// escapeControls spells out what a reader would not otherwise see, so that an
+// operand stays on one physical line, a source line keeps its own, and two
+// statements that differ never render alike: a line terminator, a tab, and
+// every rune Unicode calls unprintable, the format and separator characters
+// among them.
 func escapeControls(s string) string {
 	var b strings.Builder
-	for _, r := range s {
+	for _, r := range logicalNewlines(s) {
 		switch {
 		case r == '\n':
 			b.WriteString(`\n`)
 		case r == '\t':
 			b.WriteString(`\t`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case r < 0x80 && unicode.IsControl(r):
-			fmt.Fprintf(&b, `\x%02x`, r)
-		case unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r):
-			fmt.Fprintf(&b, `\u%04x`, r)
-		default:
+		case unicode.IsPrint(r):
 			b.WriteRune(r)
+		case r < 0x80:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r > 0xffff:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
 		}
 	}
 	return b.String()

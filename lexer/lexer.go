@@ -25,11 +25,10 @@ type Lexer struct {
 }
 
 // block is an indented block. Its lines start at level, and the INDENT that
-// opens it spells out how far that is past the block around it, which the
-// parser requires to be 4 spaces for a body or a struct definition. A block
-// that opens after a line ending in '[' holds that literal's rows, at any
-// depth past base, the column of the line holding the '[', and only such a
-// block closes, at a ']' line at base.
+// opens it spells out how far that is past what the block hangs from, for the
+// parser to judge: the block around it, or for a literal's rows base, the
+// column of the line holding the '['. A block of rows opens after a line
+// ending in '[', and only such a block closes, at a ']' line at base.
 type block struct {
 	level     int
 	holdsRows bool
@@ -73,7 +72,6 @@ const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
 	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, at the column of the line holding its '['"
-	BLOCK_ROWS_ERR   = "a block literal's rows are indented past the line holding its '['"
 	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -92,7 +90,89 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	return tok
 }
 
-// tokenAt makes a token at column on the line being read.
+// Spelling is the source a statement is spelled with: the input from first
+// to end, the line break that ends the statement, so a comment a line of the
+// statement ends with is in it and the lines around the statement are not.
+// Its lines keep the shape the file gives them: each later one loses the
+// indentation the statement stands at, which the layout rules give every
+// line of its own, and a blank or comment line loses what it has of that. A
+// line a string literal runs into keeps its characters as they are, since
+// those are what the string holds; literals are the string tokens the
+// statement spans, in source order. first is a token this lexer produced
+// that spells source, and end the line break it produced after it: no other
+// pair names a statement of this input, so a caller that hands one over has
+// a bug that checking here would only move.
+func (l *Lexer) Spelling(first, end token.Token, literals []token.Token) string {
+	indent := first.Column - 1
+	lines := spanLines(l.input, first.Pos, end.Pos, literals)
+
+	spelled := make([]string, len(lines))
+	for i, line := range lines {
+		text := line.text
+		if !line.beginsInString {
+			text = text[min(indent, leading(text)):]
+		}
+		if !line.endsInString {
+			text = strings.TrimRight(text, " \t")
+		}
+		spelled[i] = text
+	}
+	return strings.Join(spelled, "\n")
+}
+
+// leading counts the spaces a line opens with.
+func leading(text string) int {
+	return len(text) - len(strings.TrimLeft(text, " "))
+}
+
+// spanLine is one line of a span: its text, and whether a string literal is
+// open at either end of it. A line that begins inside one opens with the
+// string's own characters, so moving it left would take them; a line that
+// ends inside one ends with them, so trimming it would. A middle line of a
+// literal of several lines does both. Where the line sits in the input is
+// what decides these, and is wanted for nothing else, so it stays inside
+// spanLines.
+type spanLine struct {
+	text           string
+	beginsInString bool
+	endsInString   bool
+}
+
+// spanLines splits the input from pos to end into lines — each terminator the
+// language counts as one, LF, CRLF and CR alike, as LogicalRune reads them —
+// and says of each what the string literals do to it. It reads the lines in
+// source order and the literals arrive in it, so one cursor settles them all:
+// a literal that ends before a line starts is behind every line after it.
+func spanLines(input []rune, pos, end int, literals []token.Token) []spanLine {
+	lines := []spanLine{}
+	at := 0
+	for start := pos; ; {
+		i := start
+		for i < end && input[i] != '\n' && input[i] != '\r' {
+			i++
+		}
+
+		line := spanLine{text: string(input[start:i])}
+		for at < len(literals) && literals[at].Pos+literals[at].Len <= start {
+			at++
+		}
+		for j := at; j < len(literals) && literals[j].Pos < i; j++ {
+			lit, stop := literals[j].Pos, literals[j].Pos+literals[j].Len
+			line.beginsInString = line.beginsInString || (start > lit && start < stop)
+			line.endsInString = line.endsInString || (i > lit && i < stop)
+		}
+		lines = append(lines, line)
+
+		if i >= end {
+			return lines
+		}
+		_, start = LogicalRune(input, i)
+	}
+}
+
+// tokenAt makes a token at column on the line being read. Len stays zero:
+// the layout tokens this makes on their own spell no source, and lex measures
+// the ones that do once they are whole.
 func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) token.Token {
 	return token.Token{
 		FileName: l.FileName,
@@ -100,6 +180,7 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 		Literal:  literal,
 		Line:     l.lineOffset,
 		Column:   column,
+		Pos:      l.position,
 	}
 }
 
@@ -115,7 +196,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		return next.tok, &token.CompileError{Token: next.tok, Msg: next.msg}
 	}
 
-	tok, err := l.lex()
+	tok, err := l.measured()
 	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
 	}
@@ -188,7 +269,7 @@ func (l *Lexer) closes(column int) bool {
 // the error about it. A token carries one error, and lex reports none about
 // either character, so one from lex here would be a lexer bug.
 func (l *Lexer) queueLexed(msg string) {
-	tok, err := l.lex()
+	tok, err := l.measured()
 	if err != nil {
 		panic("internal: lex reported an error on the ']' or ':' that starts a line")
 	}
@@ -250,14 +331,14 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 // returns to it; any other line is reported.
 func (l *Lexer) placeLine(level, column int, first rune) {
 	if around := l.level(len(l.blocks)); level > around {
-		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
 		rows := l.last == token.LBRACK
-		var msg string
-		if rows && level <= l.line {
-			msg = BLOCK_ROWS_ERR
+		from := around
+		if rows {
+			from = l.line
 		}
+		at := l.tokenAt(token.INDENT, strings.Repeat(" ", max(0, level-from)), column)
 		l.blocks = append(l.blocks, block{level, rows, l.line})
-		l.pending.push(lexed{at, msg})
+		l.pending.push(lexed{tok: at})
 		return
 	}
 	n := len(l.blocks)
@@ -283,6 +364,15 @@ func (l *Lexer) dedentTo(n, column int, first rune) {
 		l.blocks = l.blocks[:len(l.blocks)-1]
 		l.pending.push(lexed{tok: at})
 	}
+}
+
+// measured lexes the next token and gives it the runes that spell it: lex
+// leaves the input just past a token it returns, so its length is how far the
+// position moved. Every token a source spells comes from here.
+func (l *Lexer) measured() (token.Token, *token.CompileError) {
+	tok, err := l.lex()
+	tok.Len = l.position - tok.Pos
+	return tok, err
 }
 
 func (l *Lexer) lex() (token.Token, *token.CompileError) {
@@ -354,12 +444,14 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 			tok = l.createToken(token.GEQ, token.SYM_GEQ, hadSpace)
 			l.readRune()
 		} else if l.peekRune() == '>' {
+			// The token starts at the first '>', so it is made before the
+			// rest of the run is read: a token carries where its spelling
+			// starts, and its column is reported from there.
+			tok = l.createToken(token.OPERATOR, token.SYM_ASR, hadSpace)
 			l.readRune()
 			if l.peekRune() == '>' {
-				tok = l.createToken(token.OPERATOR, token.SYM_SHR, hadSpace)
+				tok.Literal = token.SYM_SHR
 				l.readRune()
-			} else {
-				tok = l.createToken(token.OPERATOR, token.SYM_ASR, hadSpace)
 			}
 		} else {
 			tok = l.createToken(token.GTR, token.SYM_GTR, hadSpace)

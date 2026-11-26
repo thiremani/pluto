@@ -1017,7 +1017,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "        ", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.INT, "2", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 10},
 			{token.DEINDENT, "]", "", 4, 5},
@@ -1028,7 +1028,7 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a block literal's rows and ']' are reported away from the line holding its '['", func(t *testing.T) {
+	t.Run("rows at the column of the line holding their '[' spell no indentation, and a ']' elsewhere is reported", func(t *testing.T) {
 		checkInput(t, "x = f(1,\n    [\n    2\n])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
@@ -1038,7 +1038,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "    ", "3:5:" + BLOCK_ROWS_ERR, 3, 5},
+			{token.INDENT, "", "", 3, 5},
 			{token.INT, "2", "", 3, 5},
 			{token.NEWLINE, "\n", "", 3, 6},
 			{token.DEINDENT, "]", "", 4, 1},
@@ -1080,7 +1080,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "        ", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.INT, "2", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 10},
 			{token.DEINDENT, "]", "", 4, 5},
@@ -1415,6 +1415,167 @@ func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
 		if value != "\n" || next != tt.wantNext || err == nil {
 			t.Errorf("%s: DecodeStringEscape = (%q, %d, %v), want (%q, %d, non-nil error)",
 				tt.name, value, next, err, "\n", tt.wantNext)
+		}
+	}
+}
+
+// spellAll quotes every token of src as one span, as a parser does for a
+// statement: from the first token a source spells to the last line break,
+// with the string literals between them.
+func spellAll(t *testing.T, src string) string {
+	t.Helper()
+	l := New("spellAll", src)
+	var first, end token.Token
+	var literals []token.Token
+	for {
+		tok, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Type == token.NEWLINE {
+			end = tok
+		}
+		if tok.Len == 0 {
+			continue
+		}
+		if first.Len == 0 {
+			first = tok
+		}
+		if tok.Type == token.STRING {
+			literals = append(literals, tok)
+		}
+	}
+	return l.Spelling(first, end, literals)
+}
+
+// spellFrom quotes the tokens of src from the first one on line from, as a
+// parser does for a statement a function body indents.
+func spellFrom(t *testing.T, src string, from int) string {
+	t.Helper()
+	l := New("spellFrom", src)
+	var first, end token.Token
+	var literals []token.Token
+	for {
+		tok, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Type == token.NEWLINE {
+			end = tok
+		}
+		if tok.Len == 0 || tok.Line < from {
+			continue
+		}
+		if first.Len == 0 {
+			first = tok
+		}
+		if tok.Type == token.STRING {
+			literals = append(literals, tok)
+		}
+	}
+	return l.Spelling(first, end, literals)
+}
+
+// A span an indented statement makes moves left as one: each later line
+// loses the indentation the statement stands at. A line holding nothing of
+// the statement — blank or a comment, however it is indented — loses no more
+// than it has.
+func TestSpellingMovesASpanAsOne(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"ABodyComesBackToItsOwnLevel", "r = G(x)\n    m = [\n        2 3\n    ]\n", "m = [\n    2 3\n]"},
+		{"AFlushLeftCommentHoldsNothingBack", "r = G(x)\n    m = [\n# flush left\n        2 3\n    ]\n", "m = [\n# flush left\n    2 3\n]"},
+		{"ATabbedCommentHoldsNothingBack", "r = G(x)\n    m = [\n\t# tabbed\n        2 3\n    ]\n", "m = [\n\t# tabbed\n    2 3\n]"},
+		{"ATabOnlyLineHoldsNothingBack", "r = G(x)\n    m = [\n\t\n        2 3\n    ]\n", "m = [\n\n    2 3\n]"},
+		{"TwoLiteralsOnOneLine", "r = G(x)\n    s = \"a\" ⊕ \"b\n c\"\n", "s = \"a\" ⊕ \"b\n c\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := spellFrom(t, tc.src, 2); got != tc.want {
+				t.Fatalf("Spelling = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Spelling quotes a statement as its file spells it: from its first token to
+// the line break that ends it, so a comment any of its lines ends with is in
+// it, with every later line moved left to where the first stands and a line
+// a string literal runs through left as the string holds it.
+func TestSpelling(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"OneLineKeepsItsCommentWithoutItsBlanks", "a = 1 # one \t\n", "a = 1 # one"},
+		{"LinesKeepTheirShape", "m = [\n    2 3\n]\n", "m = [\n    2 3\n]"},
+		{"AnInteriorCommentStays", "m = [\n    # a row\n    2 3\n]\n", "m = [\n    # a row\n    2 3\n]"},
+		{"StringContentKeepsItsSpaces", "w = \"hello   \n \nworld\"\n", "w = \"hello   \n \nworld\""},
+		{"ADeeperLineKeepsItsShape", "long =\n    a + 1\n", "long =\n    a + 1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := spellAll(t, tc.src); got != tc.want {
+				t.Fatalf("Spelling = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Spelling reads a terminator the same however the file spells it, as the
+// lexer itself does.
+func TestSpellingLineEndings(t *testing.T) {
+	for name, src := range map[string]string{"LF": "m = [\n    2\n]\n", "CRLF": "m = [\r\n    2\r\n]\r\n", "CR": "m = [\r    2\r]\r"} {
+		t.Run(name, func(t *testing.T) {
+			if got, want := spellAll(t, src), "m = [\n    2\n]"; got != want {
+				t.Fatalf("Spelling = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Every token a source spells carries the runes that spell it, so a caller
+// can quote any span of the input from its tokens alone. A layout token
+// spells nothing and says so with a zero length.
+func TestTokenExtents(t *testing.T) {
+	const src = "a = 5 # one\nm = [\n    2 3\n]\ns = \"x\ny\"\nimp = 5a\nf = -8 >> 1 >>> 2 << 3\ng = a == b != c <= d >= e\nh = .5\nt = [\n  : Name Score\n    \"Ada\" 1\n]\n"
+	l := New("TestTokenExtents", src)
+	runes := []rune(src)
+	for {
+		tok, err := l.NextToken()
+		if tok.Type == token.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error at %d:%d: %v", tok.Line, tok.Column, err)
+		}
+		switch tok.Type {
+		case token.INDENT, token.DEINDENT, token.NEWLINE:
+			if tok.Len != 0 {
+				t.Fatalf("layout token %q at %d:%d spells %d runes, want none", tok.Literal, tok.Line, tok.Column, tok.Len)
+			}
+			continue
+		}
+		if tok.Len <= 0 {
+			t.Fatalf("token %q (type %d) at %d:%d spells no source", tok.Literal, int(tok.Type), tok.Line, tok.Column)
+		}
+		spelled := string(runes[tok.Pos : tok.Pos+tok.Len])
+		want := tok.Literal
+		if tok.Type == token.STRING {
+			want = `"` + tok.Literal + `"`
+		}
+		if spelled != want {
+			t.Fatalf("token at %d:%d spells %q, want %q", tok.Line, tok.Column, spelled, want)
 		}
 	}
 }

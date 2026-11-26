@@ -83,6 +83,31 @@ type (
 	postfixParseFn func(ast.Expression) ast.Expression
 )
 
+// brackets counts the parentheses and square brackets open where a token
+// stands. An opener counts once the parser is past it and a closer as soon as
+// it is current, so a value that closes what it opens ends at the count it
+// started at.
+type brackets struct {
+	parens, squares int
+}
+
+// move takes the count from the token passed to the one now current.
+func (b *brackets) move(passed, current token.TokenType) {
+	switch passed {
+	case token.LPAREN:
+		b.parens++
+	case token.LBRACK:
+		b.squares++
+	}
+
+	switch current {
+	case token.RPAREN:
+		b.parens--
+	case token.RBRACK:
+		b.squares--
+	}
+}
+
 // Token Management System for Pluto Parser
 //
 // Token flow: [Lexer] -> peekToken -> curToken
@@ -96,9 +121,13 @@ type StmtParser struct {
 	l      *lexer.Lexer
 	errors []*token.CompileError
 
-	curToken    token.Token
-	peekToken   token.Token
-	savedTokens []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
+	curToken     token.Token
+	peekToken    token.Token
+	spelling     bool          // a statement is being parsed, so its tokens are kept
+	stmtStart    token.Token   // the first token of the statement being parsed
+	stmtLiterals []token.Token // the string literals it spans
+	savedTokens  []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
+	open         brackets      // the brackets open where curToken stands
 
 	prefixParseFns  map[string]prefixParseFn
 	infixParseFns   map[string]infixParseFn
@@ -176,7 +205,10 @@ func New(l *lexer.Lexer) *StmtParser {
 
 func (p *StmtParser) nextToken() {
 	// always advance current token
+	passed := p.curToken.Type
 	p.curToken = p.peekToken
+	p.open.move(passed, p.curToken.Type)
+	p.noteSpelled(p.curToken)
 
 	// get new peek token from queue or lexer
 	if len(p.savedTokens) > 0 {
@@ -240,105 +272,69 @@ func (p *StmtParser) handleImplicitMult() {
 
 // ============ Operator Splitting ============
 
-type OpType int
-
-const (
-	PrefixOp OpType = iota
-	InfixOp
-)
-
-// findLongestOp finds the longest matching operator in the parse function map
-func (p *StmtParser) findLongestOp(lit string, opType OpType) string {
+// findLongestPrefixOp finds the longest prefix operator lit starts with.
+func (p *StmtParser) findLongestPrefixOp(lit string) string {
 	best := ""
-	switch opType {
-	case PrefixOp:
-		for op := range p.prefixParseFns {
-			if strings.HasPrefix(lit, op) && len(op) > len(best) {
-				best = op
-			}
-		}
-	case InfixOp:
-		for op := range p.infixParseFns {
-			if strings.HasPrefix(lit, op) && len(op) > len(best) {
-				best = op
-			}
+	for op := range p.prefixParseFns {
+		if strings.HasPrefix(lit, op) && len(op) > len(best) {
+			best = op
 		}
 	}
 	return best
 }
 
-// splitOperator splits "√-" -> ["√", "-"]
-func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token {
-	if tok.Type != token.OPERATOR {
-		return []token.Token{tok}
+// isPrefixRun reports whether lit is made of prefix operators alone, so that
+// a value may begin with it.
+func (p *StmtParser) isPrefixRun(lit string) bool {
+	for lit != "" {
+		op := p.findLongestPrefixOp(lit)
+		if op == "" {
+			return false
+		}
+		lit = lit[len(op):]
 	}
-
-	match := p.findLongestOp(tok.Literal, opType)
-	if match == "" || match == tok.Literal {
-		return []token.Token{tok} // No split needed
-	}
-
-	// Split into matched part and remainder
-	result := []token.Token{
-		{
-			Type:     token.OPERATOR,
-			Literal:  match,
-			FileName: tok.FileName,
-			Line:     tok.Line,
-			Column:   tok.Column,
-			// Preserve source spacing so attached-prefix boundary checks still
-			// work after an operator run is split into parseable pieces.
-			HadSpace: tok.HadSpace,
-		},
-	}
-
-	remainder := tok.Literal[len(match):]
-	if remainder != "" {
-		result = append(result, token.Token{
-			Type:     token.OPERATOR,
-			Literal:  remainder,
-			FileName: tok.FileName,
-			Line:     tok.Line,
-			Column:   tok.Column + utf8.RuneCountInString(match),
-		})
-	}
-
-	return result
+	return true
 }
 
-// normalizeCurrentPrefixOperator splits current token for prefix parsing
+// splitOperator takes a matched prefix off an operator run. Both pieces keep
+// their source extents, and only the first inherits the run's leading space.
+func splitOperator(tok token.Token, match string) (token.Token, token.Token) {
+	matched := utf8.RuneCountInString(match)
+	first := tok
+	first.Literal = match
+	first.Len = matched
+
+	tok.Literal = tok.Literal[len(match):]
+	tok.Pos += matched
+	tok.Column += matched
+	tok.Len -= matched
+	tok.HadSpace = false
+	return first, tok
+}
+
+// A run that begins a value must consist entirely of prefix operators.
+// Queue the pieces together so each suffix can be consumed directly.
 func (p *StmtParser) normalizeCurrentPrefixOperator() {
-	tokens := p.splitOperator(p.curToken, PrefixOp)
-	if len(tokens) <= 1 {
+	rest := p.curToken
+	if p.prefixParseFns[rest.Literal] != nil || !p.isPrefixRun(rest.Literal) {
 		return
 	}
 
-	// Update current to matched part, queue the rest
-	p.curToken = tokens[0]
-
-	// Set next token to the immediate remainder part, and queue the original peek
-	// plus any further remainder (avoiding duplicating tokens[1]).
-	originalPeek := p.peekToken
-	p.peekToken = tokens[1]
-
-	queue := []token.Token{}
-	if len(tokens) > 2 {
-		queue = append(queue, tokens[2:]...)
-	}
-	queue = append(queue, originalPeek)
-	p.savedTokens = append(queue, p.savedTokens...)
-}
-
-// normalizePeekInfixOperator splits peek token for infix parsing
-func (p *StmtParser) normalizePeekInfixOperator() {
-	tokens := p.splitOperator(p.peekToken, InfixOp)
-	if len(tokens) <= 1 {
-		return
+	var pieces []token.Token
+	for {
+		match := p.findLongestPrefixOp(rest.Literal)
+		if match == rest.Literal {
+			break
+		}
+		first, remainder := splitOperator(rest, match)
+		pieces = append(pieces, first)
+		rest = remainder
 	}
 
-	// Replace peek with matched part, queue the rest
-	p.peekToken = tokens[0]
-	p.savedTokens = append(tokens[1:], p.savedTokens...)
+	pieces = append(pieces, rest, p.peekToken)
+	p.curToken = pieces[0]
+	p.peekToken = pieces[1]
+	p.savedTokens = append(pieces[2:], p.savedTokens...)
 }
 
 func (p *StmtParser) curTokenIs(t token.TokenType) bool {
@@ -392,6 +388,11 @@ func (p *StmtParser) curError(t token.TokenType) {
 }
 
 func (p *StmtParser) noPrefixParseFnError(t token.Token) {
+	if p.isUndefinedOperator(t) {
+		p.undefinedOperatorError(t)
+		return
+	}
+
 	msg := fmt.Sprintf("no prefix parse function for %s found", t.TokenTypeWithOp())
 	ce := &token.CompileError{
 		Token: p.curToken,
@@ -419,11 +420,42 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	return program
 }
 
+// noteSpelled keeps what a statement's spelling needs of the token now
+// current: the first token a source spells, and the string literals after
+// it, whose characters are the string's own rather than the file's layout.
+// The start is taken from what a source spells, so the illegal token a
+// recovered statement starts after cannot reach before it.
+func (p *StmtParser) noteSpelled(tok token.Token) {
+	if !p.spelling || tok.Len == 0 {
+		return
+	}
+	if p.stmtStart.Len == 0 {
+		p.stmtStart = tok
+	}
+	if tok.Type == token.STRING {
+		p.stmtLiterals = append(p.stmtLiterals, tok)
+	}
+}
+
+// sourceSpelling is the source of the statement that has just ended:
+// curToken is the line break it ends on.
+func (p *StmtParser) sourceSpelling() string {
+	return p.l.Spelling(p.stmtStart, p.curToken, p.stmtLiterals)
+}
+
+// parseStatement parses one statement and gives it the source its file
+// spells it with. The recording runs for exactly as long as this does, so a
+// caller that parses a declaration of its own keeps none of its tokens.
 func (p *StmtParser) parseStatement() ast.Statement {
 	if p.skipIndented() {
 		return nil
 	}
 	firstToken := p.curToken
+	p.spelling = true
+	defer func() { p.spelling = false }()
+	p.stmtStart = token.Token{}
+	p.stmtLiterals = p.stmtLiterals[:0]
+	p.noteSpelled(firstToken)
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its
@@ -438,6 +470,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		p.errorOnBlanks()
 		return &ast.PrintStatement{
 			Token: firstToken,
+			Src:   p.sourceSpelling(),
 			Expression: &ast.CallExpression{
 				Token:     firstToken,
 				Function:  &ast.Identifier{Token: firstToken, Value: ""},
@@ -460,8 +493,9 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	}
 
 	p.checkNoDuplicates(identList)
-	if stmt := p.parseLetStatement(identList); stmt != nil {
-		return stmt
+	if let := p.parseLetStatement(identList); let != nil {
+		let.Src = p.sourceSpelling()
+		return let
 	}
 	return nil
 }
@@ -691,7 +725,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	if !p.peekTokenIs(token.INDENT) {
 		return stmt
 	}
-	p.checkBlockIndent(p.peekToken)
+	p.checkBlockIndent(p.peekToken, blockIndentErr)
 	p.nextToken() // consume INDENT
 	p.nextToken() // move to first token in the struct body
 	if !p.parseStructBody(stmt.Value) {
@@ -891,7 +925,8 @@ func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode, continued int) []
 		p.nextToken()
 		p.lineUp(&continued)
 		p.nextToken()
-		expList = append(expList, p.parseExpression(LOWEST, splitPrefix))
+		// A comma starts a positional value. Only the first expression can be a gate.
+		expList = append(expList, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 	return expList
 }
@@ -930,7 +965,34 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplit
 		return nil
 	}
 
-	return p.parseExpressionTail(precedence, splitPrefix, leftExp)
+	value := p.parseExpressionTail(precedence, splitPrefix, leftExp)
+	if value == nil || precedence > LOWEST || !p.isUndefinedOperator(p.peekToken) {
+		return value
+	}
+
+	// A whole value, parsed at LOWEST, ends at a run that is no operator. Made
+	// of prefix operators and with a space before it, the run begins the next
+	// value where one may begin. Any other stands between two values as one
+	// operator, which nothing defines; it is read past, as a failed part is.
+	if p.peekToken.HadSpace && p.isPrefixRun(p.peekToken.Literal) && p.shouldSplitAttachedPrefix(splitPrefix, value) {
+		return value
+	}
+	p.nextToken()
+	p.undefinedOperatorError(p.curToken)
+	return nil
+}
+
+// isUndefinedOperator reports whether tok is a run of operator characters
+// that names no operator, neither before a value nor between two.
+func (p *StmtParser) isUndefinedOperator(tok token.Token) bool {
+	return tok.Type == token.OPERATOR && p.prefixParseFns[tok.Literal] == nil && p.infixParseFns[tok.Literal] == nil
+}
+
+func (p *StmtParser) undefinedOperatorError(tok token.Token) {
+	p.errors = append(p.errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("operator %s is not defined", tok.Literal),
+	})
 }
 
 // parseExpressionTail continues parsing an expression using precedence climbing.
@@ -958,11 +1020,6 @@ func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixS
 
 		if precedence >= p.peekPrecedence() {
 			break
-		}
-
-		// Normalize operator first to get its true form
-		if p.peekToken.Type == token.OPERATOR {
-			p.normalizePeekInfixOperator()
 		}
 
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
@@ -1141,7 +1198,7 @@ const (
 	blockIndentErr = "indent a body or a struct definition by 4 spaces, and a struct's header ':' by 2, with one space after it"
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
-	blockRowsErr   = lexer.BLOCK_ROWS_ERR
+	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line holding its '[', and a table's header ':' 2"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma or '=', onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
@@ -1200,8 +1257,8 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 }
 
 // parseBlockLiteral reads a literal whose '[' ends its line: an optional
-// header and the rows, as a block at any depth past the statement or row
-// holding its '[', then the ']' on its own line. It leaves curToken at the ']'.
+// header and the rows, as a block 4 spaces past the line holding its '[',
+// then the ']' on its own line. It leaves curToken at the ']'.
 func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	if p.peekTokenIs(token.RBRACK) {
 		p.nextToken()
@@ -1211,6 +1268,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: blockRowsErr})
 		return false
 	}
+	p.checkBlockIndent(p.peekToken, blockRowsErr)
 	p.nextToken() // the line break after '['
 	p.nextToken() // the rows' INDENT
 
@@ -1265,11 +1323,11 @@ func (p *StmtParser) skipLine() {
 	}
 }
 
-// checkBlockIndent reports a block that its INDENT says is not indented 4
-// spaces past the line that opens it.
-func (p *StmtParser) checkBlockIndent(indent token.Token) {
+// checkBlockIndent reports, with msg, a block that its INDENT says is not
+// indented 4 spaces past the line it hangs from.
+func (p *StmtParser) checkBlockIndent(indent token.Token, msg string) {
 	if indent.Literal != blockIndent {
-		p.errors = append(p.errors, &token.CompileError{Token: indent, Msg: blockIndentErr})
+		p.errors = append(p.errors, &token.CompileError{Token: indent, Msg: msg})
 	}
 }
 
@@ -1503,16 +1561,22 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 
 // parseRow parses a row's cells up to a ']' or the end of its line, where it
 // stops, and adds the row to arr unless it is empty. A cell that fails leaves
-// the row failed, and the row reads on.
+// the row failed, and the row reads on past the brackets the cell left open.
+// A cell that fails at the row's own ']' has ended the row.
 func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	row := []ast.Expression{}
 	ok := true
 
 	for !p.curTokenIs(token.RBRACK) && !p.atLineEnd() {
+		start := p.open
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
+		p.leaveBrackets(start)
 		ok = ok && expr != nil
 		if expr != nil {
 			row = append(row, expr)
+		}
+		if p.open.squares < start.squares {
+			break
 		}
 		if !p.atLineEnd() {
 			p.nextToken()
@@ -1524,6 +1588,19 @@ func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	}
 
 	return ok
+}
+
+// leaveBrackets reads on to the token that closes the last bracket opened
+// since start, where a cell that failed inside its brackets ends. It stops
+// short of a ']' that closes none of them, which is the row's own, and at the
+// end of the line.
+func (p *StmtParser) leaveBrackets(start brackets) {
+	for p.open.parens > start.parens || p.open.squares > start.squares {
+		if p.atLineEnd() || p.peekTokenIs(token.RBRACK) && p.open.squares == start.squares {
+			return
+		}
+		p.nextToken()
+	}
 }
 
 // parseRangeLiteral is called when we encounter a ':' in an infix position.
@@ -1664,7 +1741,7 @@ func (p *StmtParser) lineUp(continued *int) {
 // assumes current token is token.NEWLINE
 func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 	if p.peekTokenIs(token.INDENT) {
-		p.checkBlockIndent(p.peekToken)
+		p.checkBlockIndent(p.peekToken, blockIndentErr)
 	} else {
 		p.peekError(token.INDENT)
 	}

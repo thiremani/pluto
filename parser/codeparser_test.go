@@ -262,6 +262,12 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	}, p.Errors())
 }
 
+func TestMissingBodyIndentReportsError(t *testing.T) {
+	p := NewCodeParser(lexer.New("missing-indent.pt", "r = F()\nx"))
+	require.Nil(t, p.Parse())
+	require.Contains(t, p.Errors(), "missing-indent.pt:1:8:expected next token to be INDENT, got IDENT instead")
+}
+
 // A literal inside a function body keeps the body's block structure, however
 // its lines are indented.
 func TestLayoutInBody(t *testing.T) {
@@ -274,7 +280,6 @@ func TestLayoutInBody(t *testing.T) {
 		{"call continued after a comma", "    y = f(x,\n        1)\n"},
 		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
 		{"block literal after a multi-line string", "    y = f(\"a\nb\", [\n        2 3\n    ])\n"},
-		{"table header one column left of its statement", "    y = [\n   : a b\n     1 2\n    ]\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
@@ -720,4 +725,35 @@ p = Person
 	require.Len(t, code.Statements, 2)
 	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
 	require.IsType(t, &ast.StructStatement{}, code.Statements[1])
+}
+
+// A declaration is no statement a plan is built from, so parsing one keeps
+// none of its tokens: the recording runs for as long as parseStatement does
+// and no longer, where it once grew for the parser's whole life. Each case
+// puts a function first, so the recording has been on and has to have been
+// closed, and asks for the buffer's capacity rather than its length, since
+// emptying a slice leaves what it allocated behind. A statement that fails
+// to parse takes its own way out of parseStatement and closes the recording
+// just the same.
+func TestCodeDeclarationsKeepNoTokens(t *testing.T) {
+	cases := []struct {
+		name  string
+		code  string
+		parse bool
+	}{
+		{"AfterABodyThatParsed", "r = F(x)\n    r = x\nk = \"decl\"\n", true},
+		{"AfterABodyThatDidNot", "r = F(x)\n    1 = x\nk = \"decl\"\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New(tc.name, tc.code))
+			cp.Parse()
+			if tc.parse {
+				require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
+			} else {
+				require.NotEmpty(t, cp.Errors(), "expected the body to fail to parse")
+			}
+			require.Zero(t, cap(cp.p.stmtLiterals), "a declaration must leave no capture buffer")
+		})
+	}
 }

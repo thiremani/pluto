@@ -380,7 +380,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 		nameParts[i] = ident.Value
 	}
 	plan := &pir.AssignPlan{
-		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: stmt.String()},
+		Head:   pir.Head{Label: "assign " + strings.Join(nameParts, ", "), Func: fn, Source: stmt.Src},
 		Commit: make([]pir.Mapping, 0, len(stmt.Name)),
 	}
 
@@ -529,7 +529,7 @@ func (c *Compiler) mapNextTarget(plan *pir.AssignPlan, stmt *ast.LetStatement, o
 // string literal as itself, since print formats it in place, and any other
 // argument as the outcome of its eval.
 func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.PrintPlan {
-	plan := &pir.PrintPlan{Head: pir.Head{Label: "print", Func: fn, Source: stmt.String()}}
+	plan := &pir.PrintPlan{Head: pir.Head{Label: "print", Func: fn, Source: stmt.Src}}
 	for _, expr := range stmt.Expression.Arguments {
 		if lit, isLit := expr.(*ast.StringLiteral); isLit {
 			plan.Args = append(plan.Args, pir.PrintArg{Literal: lit})

@@ -354,6 +354,17 @@ Spacing separates cells, and operators glue their operands into one cell:
 [a > 3 && b < 5 || 10]   # one cell
 ```
 
+A named prefix-only operator such as `√` can start a cell even when it touches
+the previous cell. A run such as `-√` has no operator of its own. It can start
+the next cell when a space separates it from the previous value.
+
+```pluto
+[a - √b]    # one cell: a minus √b
+[a -√b]     # two cells: a and -√b
+[a-√b]      # error: operator -√ is not defined
+[a√b]       # two cells: a and √b
+```
+
 A direct array comparison follows the same rule element-wise: `arr > k` is a
 **mask** — each cell keeps its left value where the comparison holds, else 0, *in
 place* (length- and position-preserving). It is the scalar "yield the left

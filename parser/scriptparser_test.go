@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -51,6 +52,249 @@ func TestAssign(t *testing.T) {
 	}
 }
 
+// Plan §12: a statement carries the source its file spells it with, so a
+// plan quotes what its author wrote rather than the ast's own rendering: the
+// parens the ast adds are absent, an implicit multiplication reads as it was
+// typed, a comment the line ends with is kept, and a statement of several
+// lines keeps its own shape dedented to its first line.
+func TestStatementSpelling(t *testing.T) {
+	const script = `b = ((a))
+n = -a
+imp = 5a
+f = -8 >> 1 # arithmetic right shift
+m = [
+    1 2
+    3 4
+]
+long =
+    a + 1
+w = "hello   
+ 
+	
+world"
+"out: -b -n"
+`
+	want := []string{
+		"b = ((a))",
+		"n = -a",
+		"imp = 5a",
+		"f = -8 >> 1 # arithmetic right shift",
+		"m = [\n    1 2\n    3 4\n]",
+		"long =\n    a + 1",
+		"w = \"hello   \n \n\t\nworld\"",
+		`"out: -b -n"`,
+	}
+
+	l := lexer.New("TestStatementSpelling", script)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+	require.Len(t, program.Statements, len(want))
+
+	for i, stmt := range program.Statements {
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			require.Equal(t, want[i], s.Src, "statement %d", i)
+		case *ast.PrintStatement:
+			require.Equal(t, want[i], s.Src, "statement %d", i)
+		default:
+			t.Fatalf("statement %d is %T", i, stmt)
+		}
+	}
+}
+
+// A statement the parser recovers is spelled from the first token a source
+// spells, not from whatever stood before it. A tab in an indent is reported
+// and lexed as a token of its own that spells nothing and stands at the
+// tab's column, so a span begun there would hold the tab. Begun at x, it is
+// the statement alone.
+func TestRecoveredStatementSpellsWhatItHas(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestRecoveredStatementSpellsWhatItHas", "a = 2\n  \tx = 1\n"))
+	program := sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected the tab indent to be reported")
+	require.Len(t, program.Statements, 2)
+	require.Equal(t, "x = 1", program.Statements[1].(*ast.LetStatement).Src)
+}
+
+// Nothing before a statement's first token on its line is spelled with it.
+// Only an error leaves text there: a NUL ends a comment early, and the
+// statement the parser recovers starts at the NUL.
+func TestRecoveredStatementExcludesEarlierComment(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestRecoveredStatementExcludesEarlierComment", "# ignored\t\x00 x = 1\n"))
+	program := sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected the NUL to be reported")
+	require.Equal(t, "\x00 x = 1", requireOnlyLetStmt(t, program).Src)
+}
+
+// A run of operator characters the parser splits gives each piece the runes
+// of the run that spell it, so a token still says where its own source is.
+func TestSplitOperatorKeepsItsRunes(t *testing.T) {
+	const script = "x = 3\ny = √-x\n"
+	sp := NewScriptParser(lexer.New("TestSplitOperatorKeepsItsRunes", script))
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+	require.Len(t, program.Statements, 2)
+
+	root, isRoot := program.Statements[1].(*ast.LetStatement).Value[0].(*ast.PrefixExpression)
+	require.True(t, isRoot, "expected a prefix expression")
+	inner, isInner := root.Right.(*ast.PrefixExpression)
+	require.True(t, isInner, "expected a prefix expression under it")
+
+	runes := []rune(script)
+	for _, op := range []*ast.PrefixExpression{root, inner} {
+		tok := op.Tok()
+		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]),
+			"operator %q spells %q", tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
+	}
+	require.Equal(t, root.Tok().Pos+root.Tok().Len, inner.Tok().Pos, "the pieces must follow one another")
+}
+
+// The first split of a longer run leaves a remainder of several runes, which
+// the next split measures its own pieces from. Every prefix operator is one
+// rune, so the pieces a parse ends with are all one rune long and cannot show
+// a length taken from the wrong piece; the first split of "√--" does. On a
+// file's first line a piece's column is one past its position.
+func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
+	const script = "√--x\n"
+	p := New(lexer.New("TestSplitOperatorPlacesItsRemainder", script))
+	first, remainder := splitOperator(p.curToken, "√")
+
+	runes := []rune(script)
+	for _, tok := range []token.Token{first, remainder} {
+		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
+		require.Equal(t, tok.Pos+1, tok.Column, "operator %q", tok.Literal)
+	}
+
+	p.normalizeCurrentPrefixOperator()
+	for _, want := range []string{"√", "-", "-", "x"} {
+		require.Equal(t, want, p.curToken.Literal)
+		p.nextToken()
+	}
+}
+
+// An operator that is one prefix operator already is left as it is, with no
+// queue built for it. Queuing it again copies every token still waiting, once
+// for each operator of a run, which makes a long run quadratic.
+func TestSinglePrefixOperatorIsNotRequeued(t *testing.T) {
+	p := New(lexer.New("TestSinglePrefixOperatorIsNotRequeued", "-x\n"))
+	require.Zero(t, testing.AllocsPerRun(100, p.normalizeCurrentPrefixOperator))
+}
+
+// A run of operator characters that names no operator is reported as that,
+// once and whole, at the run. Only a run made of prefix operators begins a
+// value, and after a value only with a space before it, where a value may
+// begin: "a-√b" is no difference with a root, and "-*" is no negation. An
+// operator that is defined keeps its own reading: "*" before a value has its
+// own error, and "√" begins a value wherever it stands.
+func TestUndefinedOperatorRun(t *testing.T) {
+	const name = "TestUndefinedOperatorRun:"
+	for _, tt := range []struct{ input, err string }{
+		{"x = a-√b", "1:6:operator -√ is not defined"},
+		{"x = 1 -√b", "1:7:operator -√ is not defined"},
+		{"x = f(a -√b)", "1:9:operator -√ is not defined"},
+		{"x = [a*-b]", "1:7:operator *- is not defined"},
+		{"x = -*b", "1:5:operator -* is not defined"},
+		{"x, y = a, b @ c", "1:13:operator @ is not defined"},
+		{"x, y = a, b -√c", "1:13:operator -√ is not defined"},
+		{"x = *b", "1:5:no prefix parse function for * found"},
+	} {
+		sp := NewScriptParser(lexer.New("TestUndefinedOperatorRun", tt.input+"\nafter = 3"))
+		program := sp.Parse()
+		require.Equal(t, []string{name + tt.err}, sp.Errors(), tt.input)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+
+	for _, tt := range []struct{ input, parsed string }{
+		{"x = a > 1 -√c", "x = (a > 1) (-(√c))"},
+		{"x = [1 -√4]", "x = [1 (-(√4))]"},
+		{"x = [a√b]", "x = [a (√b)]"},
+	} {
+		sp := NewScriptParser(lexer.New("TestUndefinedOperatorRun", tt.input))
+		program := sp.Parse()
+		require.Empty(t, sp.Errors(), tt.input)
+		require.Equal(t, []string{tt.parsed}, statementStrings(program.Statements), tt.input)
+	}
+}
+
+// A statement's spelling holds everything the statement does, so parsing it
+// on its own gives the same statement back. That catches a span that dropped
+// or added a character where no golden names it.
+func TestSpellingReparses(t *testing.T) {
+	scripts := []string{
+		"b = a + 2 * 3\n",
+		"imp = 5a\n",
+		"f = -8 >> 1 # arithmetic right shift\n",
+		"m = [\n    1 2\n    3 4\n]\n",
+		"long =\n    a + 1\n",
+		"w = \"hello   \n \n\t\nworld\"\n",
+		"s = \"a\nb\"\n\"out: -s\"\n",
+		"u =\n# a comment the statement runs past\n    1 + 1\n",
+	}
+	for i, script := range scripts {
+		t.Run(fmt.Sprintf("script%d", i), func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestSpellingReparses", script))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			for _, stmt := range program.Statements {
+				src, ok := spelled(stmt)
+				require.True(t, ok, "statement %T carries no spelling", stmt)
+
+				again := NewScriptParser(lexer.New("TestSpellingReparses", src+"\n"))
+				reparsed := again.Parse()
+				require.Empty(t, again.Errors(), "reparsing %q: %v", src, again.Errors())
+				require.Len(t, reparsed.Statements, 1, "reparsing %q", src)
+				require.Equal(t, stmt.String(), reparsed.Statements[0].String(), "reparsing %q", src)
+			}
+		})
+	}
+}
+
+// spelled returns the source a statement carries, where it carries one.
+func spelled(stmt ast.Statement) (string, bool) {
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		return s.Src, true
+	case *ast.PrintStatement:
+		return s.Src, true
+	}
+	return "", false
+}
+
+// Plan §12: a statement inside a function body is spelled dedented to its own
+// first line, so a plan can place it at its own level.
+func TestStatementSpellingInBody(t *testing.T) {
+	const code = `r = G(x)
+    t = x * 2 # doubled
+    s = "line one
+line two"
+    u =
+# flush left
+        x + 1
+    v = [
+      : Name Score
+        "Ada" 1
+    ]
+    r = t + 1
+`
+	l := lexer.New("TestStatementSpellingInBody", code)
+	cp := NewCodeParser(l)
+	parsed := cp.Parse()
+	require.Empty(t, cp.Errors(), "unexpected parse errors: %v", cp.Errors())
+
+	var spelled []string
+	for _, stmt := range parsed.Statements {
+		fn, isFunc := stmt.(*ast.FuncStatement)
+		if !isFunc {
+			continue
+		}
+		for _, inner := range fn.Body.Statements {
+			spelled = append(spelled, inner.(*ast.LetStatement).Src)
+		}
+	}
+	require.Equal(t, []string{"t = x * 2 # doubled", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "v = [\n  : Name Score\n    \"Ada\" 1\n]", "r = t + 1"}, spelled)
+}
+
 func TestInvalidAssignment(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -82,16 +326,16 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got . instead",
 		}},
 		{"operator run", "a @= 2", []string{
-			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got OPERATOR instead",
+			"TestUnparsedAssignmentTarget:1:3:operator @ is not defined",
 		}},
 		{"closing paren", "a ) = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got ) instead",
 		}},
 		{"only target", "@ = 2", []string{
-			"TestUnparsedAssignmentTarget:1:1:no prefix parse function for @ found",
+			"TestUnparsedAssignmentTarget:1:1:operator @ is not defined",
 		}},
 		{"second target", "a, @ = 2, 3", []string{
-			"TestUnparsedAssignmentTarget:1:4:no prefix parse function for @ found",
+			"TestUnparsedAssignmentTarget:1:4:operator @ is not defined",
 		}},
 	}
 
@@ -669,6 +913,19 @@ func TestCommaConditionRejected(t *testing.T) {
 	sp.Parse()
 	require.NotEmpty(t, sp.Errors(), "expected a parse error for a comma condition list")
 	require.Contains(t, sp.Errors()[0], "a statement condition is a single expression; combine conditions with &&")
+}
+
+// After a comma nothing begins a condition's value, so a spaced minus there
+// is a subtraction, after an identifier and after a comparison alike, and
+// the statement has no condition.
+func TestCommaStartsPositionalValue(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestCommaStartsPositionalValue", "x, y, z = 1, n -1, b > 2 -5"))
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Equal(t, "x, y, z = 1, (n - 1), ((b > 2) - 5)", stmt.String())
 }
 
 func TestConditionListBesideArithmetic(t *testing.T) {
@@ -1635,14 +1892,15 @@ func TestLayoutKeepsStatements(t *testing.T) {
 	}{
 		{"nested block literals", "x = [\n    [\n        1 2\n    ]\n]", nil},
 		{"block literal", "m = [\n    1 2\n    3 4\n]", nil},
-		{"rows at any depth past the statement", "m = [\n  1 2\n  3 4\n]", nil},
+		{"rows 2 spaces past the statement", "m = [\n  1 2\n  3 4\n]", []string{name + "2:3:" + blockRowsErr}},
+		{"rows 8 spaces past the statement", "m = [\n        1 2\n        3 4\n]", []string{name + "2:9:" + blockRowsErr}},
 		{"rows under a '[' on a continued line", "x = f(1,\n    [\n        2 3\n    ])", nil},
-		{"rows of a '[' in the middle of its line", "x = f(1, [\n        2 3\n], a,\n    b)", nil},
-		{"']' aligned under a '[' in the middle of its line", "x = f(1, [\n               2 3\n           ],\n           a,\n           b)", []string{name + "3:12:" + blockCloseErr}},
+		{"rows of a '[' in the middle of its line", "x = f(1, [\n    2 3\n], a,\n    b)", nil},
+		{"']' aligned under a '[' in the middle of its line", "x = f(1, [\n    2 3\n           ],\n           a,\n           b)", []string{name + "3:12:" + blockCloseErr}},
 		{"empty literal's ']' on a continued line", "x = f(1,\n    [\n    ]0)", nil},
 		{"empty literal's ']' indented", "x = [\n        ]0", []string{name + "2:9:" + blockCloseErr}},
-		{"table header at its statement's column", "t = [\n: a b\n  1 2\n]", nil},
-		{"row left of the first row", "m = [\n        1 2\n    3 4\n]", []string{name + "3:5:" + lexer.INDENT_ERR + ". At char: 3"}},
+		{"table header at its statement's column", "t = [\n: a b\n  1 2\n]", []string{name + "2:1:" + blockRowsErr}},
+		{"row left of the first row", "m = [\n    1 2\n  3 4\n]", []string{name + "3:3:" + lexer.INDENT_ERR + ". At char: 3"}},
 		{"unclosed block literal", "x = [\n    1 2", []string{name + "3:1:" + blockCloseErr}},
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:" + blockCloseErr}},
 		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
@@ -1658,6 +1916,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"table closed on its header's line", "t = [\n  : a b]", []string{name + "2:8:" + blockCloseErr}},
 		{"block literal's ']' at its rows' column", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
 		{"rows at the column of the line holding '['", "x = f(1,\n    [\n    2 3\n    ])", []string{name + "3:5:" + blockRowsErr}},
+		{"rows left of the line holding '['", "x = f(1,\n        [\n    2 3\n        ])", []string{name + "3:5:" + blockRowsErr}},
 		{"nested call's continued arguments", "x = f(a,\n    g(b,\n        c),\n    d)", nil},
 		{"call continued after '='", "x =\n    f(a,\n        b)", nil},
 		{"calls joined by an operator", "x = f(a,\n    b) + g(c,\n        d)", nil},
@@ -1806,6 +2065,37 @@ func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
 	}
 }
 
+// A cell that fails inside its brackets takes them with it. The row reads on
+// from the cell after, so what is left of a failed call, group or index is not
+// read as cells, and a later cell still reports its own error. Each cell
+// counts its own brackets, so a stray ')' before it changes nothing. A ']'
+// that closes none of the cell's brackets stays the row's own, and a cell
+// that fails at it has ended the row: what follows the literal is not read as
+// its cells.
+func TestFailedCellTakesItsBrackets(t *testing.T) {
+	const name = "TestFailedCellTakesItsBrackets:"
+	const undefined = "operator @ is not defined"
+	for _, tt := range []struct {
+		input string
+		errs  []string
+	}{
+		{"x = [f(a@b, c) ) (d@e) g@h]", []string{"1:9:" + undefined, "1:16:no prefix parse function for ) found", "1:20:" + undefined, "1:25:" + undefined}},
+		{"x = [v[a@b] c@d]", []string{"1:9:" + undefined, "1:14:" + undefined}},
+		{"x = g([f(a b], c@d)", []string{"1:10:expected next token to be ), got IDENT instead", "1:17:" + undefined}},
+		{"x = [f([1 +], 9) c@d]", []string{"1:12:no prefix parse function for ] found", "1:19:" + undefined}},
+	} {
+		sp := NewScriptParser(lexer.New("TestFailedCellTakesItsBrackets", tt.input+"\nafter = 3"))
+		program := sp.Parse()
+
+		var errs []string
+		for _, err := range tt.errs {
+			errs = append(errs, name+err)
+		}
+		require.Equal(t, errs, sp.Errors(), tt.input)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+}
+
 // The end of the input ends its last line as a line break does, so a line
 // cut short there gets the error it gets before a newline.
 func TestLastLineEndsAtEndOfInput(t *testing.T) {
@@ -1903,9 +2193,10 @@ func statementStrings(stmts []ast.Statement) []string {
 	return strs
 }
 
-// An index bracket keeps its expression on its line.
+// An index bracket keeps its expression on its line. The line after it is no
+// literal's rows, so how far it is indented is not judged.
 func TestIndexStaysOnOneLine(t *testing.T) {
-	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
+	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n  i]"))
 	sp.Parse()
 	require.Equal(t, []string{"TestIndexStaysOnOneLine:1:14:" + lineBreakErr}, sp.Errors())
 }
