@@ -2380,8 +2380,11 @@ n, s`)
 	fallback := irBlock(ir, "first_fallback_if")
 	flag := irCapture(t, fallback, `store i1 true, ptr (%last_ran\.mem\w+),`)
 	slot := irCapture(t, fallback, `store ptr %\w+, ptr (%first_side\.mem\w+),`)
-	require.Less(t, strings.Index(ir, "store i1 false, ptr "+flag+","), strings.Index(ir, "last_next_if:"),
-		"the second side's bit must be cleared before the sides part")
+	cleared := strings.Index(ir, "store i1 false, ptr "+flag+",")
+	parted := strings.Index(ir, "last_next_if:")
+	require.NotEqual(t, -1, cleared, "the second side's bit must start false, so that it reads false where the side never ran")
+	require.NotEqual(t, -1, parted, "expected the block the check before the || admits")
+	require.Less(t, cleared, parted, "the second side's bit must be cleared before the sides part")
 
 	ran := irCapture(t, ir, `(%\w+) = load i1, ptr `+regexp.QuoteMeta(flag)+`,`)
 	admitted := irBlock(ir, irCapture(t, ir, `br i1 `+regexp.QuoteMeta(ran)+`, label %(\w+),`))
