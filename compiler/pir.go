@@ -147,13 +147,9 @@ func (c *Compiler) planValueEligible(expr ast.Expression, reads bool) bool {
 	return reads && c.planFirstEligible(expr)
 }
 
-// planFirstEligible admits an || as one first: each side yields one slot, as
-// a check, as a last, or as an eval.
+// planFirstEligible admits an || as one first, each of whose sides plans.
 func (c *Compiler) planFirstEligible(expr ast.Expression) bool {
 	for _, side := range fallbackSides(expr) {
-		if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) != 1 {
-			return false
-		}
 		if !c.planSideEligible(side) {
 			return false
 		}
@@ -161,12 +157,19 @@ func (c *Compiler) planFirstEligible(expr ast.Expression) bool {
 	return true
 }
 
-// planSideEligible admits one side of a first, taking its kind from the side
-// itself as a last's sides do: a comparison is a check, an && is a last, and
-// any other expression is an eval.
+// planSideEligible admits one side of a first or a last that yields one slot,
+// taking its kind from the side itself as buildSide does: an && is a last, an
+// || is a first, a comparison is a check, and any other expression is an eval.
 func (c *Compiler) planSideEligible(side ast.Expression) bool {
+	if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) != 1 {
+		return false
+	}
+
 	if _, isAnd := ast.IsLogicalAnd(side); isAnd {
 		return c.planLastEligible(side)
+	}
+	if _, isOr := ast.IsLogicalOr(side); isOr {
+		return c.planFirstEligible(side)
 	}
 	if c.scalarComparison(side) {
 		return c.planCheckEligible(side)
@@ -175,20 +178,15 @@ func (c *Compiler) planSideEligible(side ast.Expression) bool {
 }
 
 // planLastEligible admits an && as one last: sides that are only tested, then
-// a check, a first or an eval of one slot, whose value the last yields.
+// a final side, whose value the last yields.
 func (c *Compiler) planLastEligible(expr ast.Expression) bool {
 	sides := lastSides(expr)
-	final := sides[len(sides)-1]
 	for _, side := range sides[:len(sides)-1] {
 		if !c.planTestedEligible(side) {
 			return false
 		}
 	}
-
-	if _, isOr := ast.IsLogicalOr(final); isOr || c.scalarComparison(final) {
-		return c.planTestedEligible(final)
-	}
-	return len(c.ExprCache[key(c.FuncNameMangled, final)].OutTypes) == 1 && c.planExprEligible(final, true)
+	return c.planSideEligible(sides[len(sides)-1])
 }
 
 // lastSides lists the sides of an && in the order they run. A chain is
