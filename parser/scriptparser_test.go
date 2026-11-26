@@ -907,6 +907,19 @@ func TestCommaConditionRejected(t *testing.T) {
 	require.Contains(t, sp.Errors()[0], "a statement condition is a single expression; combine conditions with &&")
 }
 
+// After a comma nothing begins a condition's value, so a spaced minus there
+// is a subtraction, after an identifier and after a comparison alike, and
+// the statement has no condition.
+func TestCommaStartsPositionalValue(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestCommaStartsPositionalValue", "x, y, z = 1, n -1, b > 2 -5"))
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Equal(t, "x, y, z = 1, (n - 1), ((b > 2) - 5)", stmt.String())
+}
+
 func TestConditionListBesideArithmetic(t *testing.T) {
 	// Arithmetic inside a condition takes parentheses; after the condition
 	// list, it starts the value.
