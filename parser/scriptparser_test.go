@@ -2038,6 +2038,34 @@ func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
 	}
 }
 
+// A cell that fails inside its brackets takes them with it. The row reads on
+// from the cell after, so what is left of a failed call, group or index is not
+// read as cells, and a later cell still reports its own error. Each cell
+// counts its own brackets, so a stray ')' before it changes nothing. A ']'
+// that closes none of the cell's brackets stays the row's own.
+func TestFailedCellTakesItsBrackets(t *testing.T) {
+	const name = "TestFailedCellTakesItsBrackets:"
+	const undefined = "operator @ is not defined"
+	for _, tt := range []struct {
+		input string
+		errs  []string
+	}{
+		{"x = [f(a@b, c) ) (d@e) g@h]", []string{"1:9:" + undefined, "1:16:no prefix parse function for ) found", "1:20:" + undefined, "1:25:" + undefined}},
+		{"x = [v[a@b] c@d]", []string{"1:9:" + undefined, "1:14:" + undefined}},
+		{"x = g([f(a b], c@d)", []string{"1:10:expected next token to be ), got IDENT instead", "1:17:" + undefined}},
+	} {
+		sp := NewScriptParser(lexer.New("TestFailedCellTakesItsBrackets", tt.input+"\nafter = 3"))
+		program := sp.Parse()
+
+		var errs []string
+		for _, err := range tt.errs {
+			errs = append(errs, name+err)
+		}
+		require.Equal(t, errs, sp.Errors(), tt.input)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+}
+
 // The end of the input ends its last line as a line break does, so a line
 // cut short there gets the error it gets before a newline.
 func TestLastLineEndsAtEndOfInput(t *testing.T) {

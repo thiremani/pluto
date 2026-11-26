@@ -83,6 +83,31 @@ type (
 	postfixParseFn func(ast.Expression) ast.Expression
 )
 
+// brackets counts the parentheses and square brackets open where a token
+// stands. An opener counts once the parser is past it and a closer as soon as
+// it is current, so a value that closes what it opens ends at the count it
+// started at.
+type brackets struct {
+	parens, squares int
+}
+
+// move takes the count from the token passed to the one now current.
+func (b *brackets) move(passed, current token.TokenType) {
+	switch passed {
+	case token.LPAREN:
+		b.parens++
+	case token.LBRACK:
+		b.squares++
+	}
+
+	switch current {
+	case token.RPAREN:
+		b.parens--
+	case token.RBRACK:
+		b.squares--
+	}
+}
+
 // Token Management System for Pluto Parser
 //
 // Token flow: [Lexer] -> peekToken -> curToken
@@ -103,6 +128,7 @@ type StmtParser struct {
 	stmtEnd      token.Token   // the last token of it a source spells
 	stmtLiterals []token.Token // the string literals it spans
 	savedTokens  []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
+	open         brackets      // the brackets open where curToken stands
 
 	prefixParseFns  map[string]prefixParseFn
 	infixParseFns   map[string]infixParseFn
@@ -180,7 +206,9 @@ func New(l *lexer.Lexer) *StmtParser {
 
 func (p *StmtParser) nextToken() {
 	// always advance current token
+	passed := p.curToken.Type
 	p.curToken = p.peekToken
+	p.open.move(passed, p.curToken.Type)
 	p.noteSpelled(p.curToken)
 
 	// get new peek token from queue or lexer
@@ -1581,13 +1609,15 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 
 // parseRow parses a row's cells up to a ']' or the end of its line, where it
 // stops, and adds the row to arr unless it is empty. A cell that fails leaves
-// the row failed, and the row reads on.
+// the row failed, and the row reads on past the brackets the cell left open.
 func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	row := []ast.Expression{}
 	ok := true
 
 	for !p.curTokenIs(token.RBRACK) && !p.atLineEnd() {
+		start := p.open
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
+		p.leaveBrackets(start)
 		ok = ok && expr != nil
 		if expr != nil {
 			row = append(row, expr)
@@ -1602,6 +1632,19 @@ func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	}
 
 	return ok
+}
+
+// leaveBrackets reads on to the token that closes the last bracket opened
+// since start, where a cell that failed inside its brackets ends. It stops
+// short of a ']' that closes none of them, which is the row's own, and at the
+// end of the line.
+func (p *StmtParser) leaveBrackets(start brackets) {
+	for p.open.parens > start.parens || p.open.squares > start.squares {
+		if p.atLineEnd() || p.peekTokenIs(token.RBRACK) && p.open.squares == start.squares {
+			return
+		}
+		p.nextToken()
+	}
 }
 
 // parseRangeLiteral is called when we encounter a ':' in an infix position.
