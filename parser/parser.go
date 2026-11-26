@@ -245,40 +245,26 @@ func (p *StmtParser) handleImplicitMult() {
 
 // ============ Operator Splitting ============
 
-type OpType int
-
-const (
-	PrefixOp OpType = iota
-	InfixOp
-)
-
-// findLongestOp finds the longest matching operator in the parse function map
-func (p *StmtParser) findLongestOp(lit string, opType OpType) string {
+// findLongestPrefixOp finds the longest prefix operator lit starts with.
+func (p *StmtParser) findLongestPrefixOp(lit string) string {
 	best := ""
-	switch opType {
-	case PrefixOp:
-		for op := range p.prefixParseFns {
-			if strings.HasPrefix(lit, op) && len(op) > len(best) {
-				best = op
-			}
-		}
-	case InfixOp:
-		for op := range p.infixParseFns {
-			if strings.HasPrefix(lit, op) && len(op) > len(best) {
-				best = op
-			}
+	for op := range p.prefixParseFns {
+		if strings.HasPrefix(lit, op) && len(op) > len(best) {
+			best = op
 		}
 	}
 	return best
 }
 
-// splitOperator splits "√-" -> ["√", "-"]
-func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token {
+// splitOperator splits a run that begins a value at its first prefix
+// operator: "√-" -> ["√", "-"]. A run between two values is never split: it
+// is one operator, defined or not, so "a*-b" names an operator "*-".
+func (p *StmtParser) splitOperator(tok token.Token) []token.Token {
 	if tok.Type != token.OPERATOR {
 		return []token.Token{tok}
 	}
 
-	match := p.findLongestOp(tok.Literal, opType)
+	match := p.findLongestPrefixOp(tok.Literal)
 	if match == "" || match == tok.Literal {
 		return []token.Token{tok} // No split needed
 	}
@@ -319,7 +305,7 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 
 // normalizeCurrentPrefixOperator splits current token for prefix parsing
 func (p *StmtParser) normalizeCurrentPrefixOperator() {
-	tokens := p.splitOperator(p.curToken, PrefixOp)
+	tokens := p.splitOperator(p.curToken)
 	if len(tokens) <= 1 {
 		return
 	}
@@ -338,18 +324,6 @@ func (p *StmtParser) normalizeCurrentPrefixOperator() {
 	}
 	queue = append(queue, originalPeek)
 	p.savedTokens = append(queue, p.savedTokens...)
-}
-
-// normalizePeekInfixOperator splits peek token for infix parsing
-func (p *StmtParser) normalizePeekInfixOperator() {
-	tokens := p.splitOperator(p.peekToken, InfixOp)
-	if len(tokens) <= 1 {
-		return
-	}
-
-	// Replace peek with matched part, queue the rest
-	p.peekToken = tokens[0]
-	p.savedTokens = append(tokens[1:], p.savedTokens...)
 }
 
 func (p *StmtParser) curTokenIs(t token.TokenType) bool {
@@ -1020,11 +994,6 @@ func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixS
 
 		if precedence >= p.peekPrecedence() {
 			break
-		}
-
-		// Normalize operator first to get its true form
-		if p.peekToken.Type == token.OPERATOR {
-			p.normalizePeekInfixOperator()
 		}
 
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]

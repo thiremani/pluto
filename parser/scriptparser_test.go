@@ -157,7 +157,7 @@ func TestSplitOperatorKeepsItsRunes(t *testing.T) {
 func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
 	const script = "√--x\n"
 	p := New(lexer.New("TestSplitOperatorPlacesItsRemainder", script))
-	pieces := p.splitOperator(p.curToken, PrefixOp)
+	pieces := p.splitOperator(p.curToken)
 	require.Len(t, pieces, 2)
 
 	runes := []rune(script)
@@ -165,6 +165,15 @@ func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
 		require.Equal(t, tok.Literal, string(runes[tok.Pos:tok.Pos+tok.Len]))
 		require.Equal(t, tok.Pos+1, tok.Column, "operator %q", tok.Literal)
 	}
+}
+
+// A run of operator characters between two values is one operator, so "*-"
+// is an operator nothing defines, not a product with a negation.
+func TestOperatorRunBetweenValuesIsOneOperator(t *testing.T) {
+	const name = "TestOperatorRunBetweenValuesIsOneOperator"
+	sp := NewScriptParser(lexer.New(name, "x = a*-b\n"))
+	sp.Parse()
+	require.Equal(t, []string{name + ":1:6:no prefix parse function for *- found"}, sp.Errors())
 }
 
 // A statement's spelling holds everything the statement does, so parsing it
