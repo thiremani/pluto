@@ -16,7 +16,7 @@ import (
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	writeHead(&b, p.Head)
-	writeNodes(&b, executeIndent, p.Execute, expanded)
+	writeNodes(&b, executeIndent, p.Execute, resolvedBySkip, expanded)
 
 	b.WriteString("\n    commit\n")
 	for _, m := range p.Commit {
@@ -42,7 +42,7 @@ func (p *PrintPlan) Render(expanded bool) string {
 	var b strings.Builder
 	writeHead(&b, p.Head)
 	for _, ev := range p.Evals {
-		writeEval(&b, executeIndent, ev, expanded)
+		writeEval(&b, executeIndent, ev, resolvedBySkip, expanded)
 	}
 	fmt.Fprintf(&b, "        print %s\n", strings.Join(p.argStrings(expanded), ", "))
 
@@ -77,21 +77,32 @@ const executeIndent = "        "
 // level is one step of indentation.
 const level = "    "
 
-// writeNodes writes a region's nodes at indent.
-func writeNodes(b *strings.Builder, indent string, nodes []Node, expanded bool) {
+// resolver is what resolves a failure where a node sits (plan §9), which the
+// plan's shape says and no node records: the fallback that follows the node's
+// side of a first, or the commit, where the outcome skips.
+type resolver int
+
+const (
+	resolvedBySkip resolver = iota
+	resolvedByFallback
+)
+
+// writeNodes writes a region's nodes at indent; by is what resolves a failure
+// in the region.
+func writeNodes(b *strings.Builder, indent string, nodes []Node, by resolver, expanded bool) {
 	for _, node := range nodes {
 		switch n := node.(type) {
 		case *Eval:
-			writeEval(b, indent, n, expanded)
+			writeEval(b, indent, n, by, expanded)
 		case *First:
-			writeSelection(b, indent, selection{id: n.Result, word: "first", clause: "fallback", t: n.Type, sides: n.Sides}, expanded)
+			writeSelection(b, indent, selection{id: n.Result, word: "first", clause: "fallback", catches: true, t: n.Type, sides: n.Sides}, by, expanded)
 		case *Check:
-			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.OnOOB, expanded))
+			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.Checked, by, expanded))
 		case *Last:
-			writeSelection(b, indent, selection{id: n.Result, word: "last", clause: "next", t: n.Type, sides: n.Sides}, expanded)
+			writeSelection(b, indent, selection{id: n.Result, word: "last", clause: "next", t: n.Type, sides: n.Sides}, by, expanded)
 		case *Gate:
 			fmt.Fprintf(b, "%sgate %%t%d\n", indent, n.Cond)
-			writeNodes(b, indent+level, n.Body, expanded)
+			writeNodes(b, indent+level, n.Body, by, expanded)
 		}
 	}
 }
@@ -115,39 +126,52 @@ func writeHead(b *strings.Builder, head Head) {
 	b.WriteString("\n    execute\n")
 }
 
-func writeEval(b *strings.Builder, indent string, ev *Eval, expanded bool) {
-	fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(ev.Result, "eval", ev.Slots, ev.Expr, ev.OnOOB, expanded))
+func writeEval(b *strings.Builder, indent string, ev *Eval, by resolver, expanded bool) {
+	fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(ev.Result, "eval", ev.Slots, ev.Expr, ev.Checked, by, expanded))
 }
 
 // outcomeLine is the line that binds the outcome of an eval or a check: the
-// operation's word, each slot's type, the operand, and the scope of the
-// operand's checked accesses where it has any.
-func outcomeLine(id OutcomeID, word string, slots []Slot, expr ast.Expression, scope OOBScope, expanded bool) string {
+// operation's word, each slot's type, the operand, and, where the operand
+// holds a checked access, what resolves a failed one.
+func outcomeLine(id OutcomeID, word string, slots []Slot, expr ast.Expression, checked bool, by resolver, expanded bool) string {
 	operand := renderPayload(expr)
 	line := fmt.Sprintf("%%t%d = %s %s %s", id, word, slotsString(slots, operand, expanded), operand)
-	if scope != NoChecks {
-		line += fmt.Sprintf(" [on-oob=%s]", scope)
+	if checked {
+		line += fmt.Sprintf(" [on-oob=%s]", by)
 	}
 	return line
 }
 
 // selection is what a first and a last print alike: the outcome each binds,
-// the word that names it, the word that labels each side after the first, the
-// type of the whole selection, and its sides.
+// the word that names it, the word that labels each side after the first,
+// whether that side resolves a failure of the one before it, the type of the
+// whole selection, and its sides.
 type selection struct {
-	id     OutcomeID
-	word   string
-	clause string
-	t      Type
-	sides  []Node
+	id      OutcomeID
+	word    string
+	clause  string
+	catches bool
+	t       Type
+	sides   []Node
+}
+
+// sideResolver is what resolves a failure in side i: the side after it where
+// the selection's sides catch, and otherwise by, which resolves a failure of
+// the selection itself.
+func (sel selection) sideResolver(i int, by resolver) resolver {
+	if sel.catches && i < len(sel.sides)-1 {
+		return resolvedByFallback
+	}
+	return by
 }
 
 // writeSelection writes a first or a last: the line that binds its outcome
 // where it binds one, then the head line naming the selection and its type,
 // each side one level further in, and the clause word before every side after
 // the first. A selection that binds no outcome prints its head where the
-// outcome line would have gone, so its sides stay one level in from it.
-func writeSelection(b *strings.Builder, indent string, sel selection, expanded bool) {
+// outcome line would have gone, so its sides stay one level in from it. by is
+// what resolves a failure of the selection.
+func writeSelection(b *strings.Builder, indent string, sel selection, by resolver, expanded bool) {
 	head := indent
 	if sel.id != NoOutcome {
 		fmt.Fprintf(b, "%s%%t%d =\n", indent, sel.id)
@@ -159,7 +183,7 @@ func writeSelection(b *strings.Builder, indent string, sel selection, expanded b
 		if i > 0 {
 			fmt.Fprintf(b, "%s%s\n", head, sel.clause)
 		}
-		writeNodes(b, head+level, []Node{side}, expanded)
+		writeNodes(b, head+level, []Node{side}, sel.sideResolver(i, by), expanded)
 	}
 }
 
@@ -347,16 +371,11 @@ func (p *AssignPlan) transfersString(m Mapping) string {
 	return b.String()
 }
 
-func (scope OOBScope) String() string {
-	switch scope {
-	case NoChecks:
-		return "none"
-	case SkipOutcome:
-		return "skip"
-	case UseFallback:
+func (by resolver) String() string {
+	if by == resolvedByFallback {
 		return "fallback"
 	}
-	return fmt.Sprintf("oob-scope(%d)", int(scope))
+	return "skip"
 }
 
 func (policy SkipPolicy) String() string {
@@ -392,7 +411,7 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 // failure is what the failure of the node whose outcome is id does, which its
 // position says: a fallback runs where a side of a first that one follows
 // fails, and every other failure reaches the commit and skips the outcome.
-func (p *AssignPlan) failure(id OutcomeID) OOBScope {
+func (p *AssignPlan) failure(id OutcomeID) resolver {
 	for _, node := range p.Values() {
 		first, isFirst := node.(*First)
 		if !isFirst {
@@ -400,11 +419,11 @@ func (p *AssignPlan) failure(id OutcomeID) OOBScope {
 		}
 		for _, side := range first.Sides[:len(first.Sides)-1] {
 			if sup, _ := result(supplier(side)); sup == id {
-				return UseFallback
+				return resolvedByFallback
 			}
 		}
 	}
-	return SkipOutcome
+	return resolvedBySkip
 }
 
 // eval finds the eval whose outcome is id among the values, the only place a

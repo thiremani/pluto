@@ -271,20 +271,12 @@ func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 	return true
 }
 
-// planOOBScope gives a node's index reads their scope (plan §9): a failed
-// read runs the fallback that follows its side of a first, and skips the
-// outcome otherwise. The router admits a read only in those two places.
-func planOOBScope(expr ast.Expression, fallbackFollows bool) pir.OOBScope {
+// planChecked reports an expression that holds an index read, whose bounds
+// its node checks (plan §9).
+func planChecked(expr ast.Expression) bool {
 	var reads []*ast.ArrayRangeExpression
 	collectArrayIndexAccesses(expr, &reads)
-	switch {
-	case len(reads) == 0:
-		return pir.NoChecks
-	case fallbackFollows:
-		return pir.UseFallback
-	default:
-		return pir.SkipOutcome
-	}
+	return len(reads) > 0
 }
 
 // planSkipPolicy is what a target holds where its mapping did not commit
@@ -390,7 +382,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 	var values []pir.Node
 	for _, expr := range stmt.Value {
 		if _, isAnd := ast.IsLogicalAnd(expr); isAnd {
-			last := c.buildLast(lastSides(expr), c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0], next, next+1, false)
+			last := c.buildLast(lastSides(expr), c.ExprCache[key(c.FuncNameMangled, expr)].OutTypes[0], next, next+1)
 			values = append(values, last)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: last.Result}, true)
 			next += pir.OutcomeID(pir.Outcomes(last))
@@ -398,7 +390,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 		}
 
 		if c.scalarComparison(expr) {
-			check := c.buildCheck(expr.(*ast.InfixExpression), next, false)
+			check := c.buildCheck(expr.(*ast.InfixExpression), next)
 			values = append(values, check)
 			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: check.Result}, true)
 			next++
@@ -408,15 +400,15 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 		if _, isOr := ast.IsLogicalOr(expr); isOr {
 			first := c.buildFirst(expr, next)
 			values = append(values, first)
-			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, gated || first.MaySkip())
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: first.Result}, gated || first.MayFail())
 			next += pir.OutcomeID(pir.Outcomes(first))
 			continue
 		}
 
-		ev := c.buildEval(expr, next, false)
+		ev := c.buildEval(expr, next)
 		values = append(values, ev)
 		for slot := range ev.Slots {
-			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, gated || ev.MaySkip())
+			c.mapNextTarget(plan, stmt, pir.OutcomeRef{Outcome: ev.Result, Slot: slot}, gated || ev.MayFail())
 		}
 		next++
 	}
@@ -440,45 +432,42 @@ func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.Outcome
 	case 0:
 		return nil, conditionID
 	case 1:
-		return c.buildCheck(conds[0].(*ast.InfixExpression), conditionID, false), conditionID + 1
+		return c.buildCheck(conds[0].(*ast.InfixExpression), conditionID), conditionID + 1
 	}
 
 	t := c.ExprCache[key(c.FuncNameMangled, conds[len(conds)-1])].OutTypes[0]
-	last := c.buildLast(conds, t, conditionID, conditionID+1, false)
+	last := c.buildLast(conds, t, conditionID, conditionID+1)
 	return last, conditionID + pir.OutcomeID(pir.Outcomes(last))
 }
 
 // buildLast plans sides as one last of type t whose outcome is result, its
 // own sides starting at sideStart; result is pir.NoOutcome for a last that is
 // a side of a first, which binds none. A side that is a comparison is a
-// check, and any other side is an eval. fallbackFollows says a fallback
-// follows the side of a first the last belongs to, which resolves a failed
-// access in any of its sides.
-func (c *Compiler) buildLast(sides []ast.Expression, t Type, result, sideStart pir.OutcomeID, fallbackFollows bool) *pir.Last {
+// check, and any other side is an eval.
+func (c *Compiler) buildLast(sides []ast.Expression, t Type, result, sideStart pir.OutcomeID) *pir.Last {
 	last := &pir.Last{Result: result, Type: t, Sides: make([]pir.Node, len(sides))}
 	for i, side := range sides {
 		sideID := sideStart + pir.OutcomeID(i)
 		if c.scalarComparison(side) {
-			last.Sides[i] = c.buildCheck(side.(*ast.InfixExpression), sideID, fallbackFollows)
+			last.Sides[i] = c.buildCheck(side.(*ast.InfixExpression), sideID)
 			continue
 		}
-		last.Sides[i] = c.buildEval(side, sideID, fallbackFollows)
+		last.Sides[i] = c.buildEval(side, sideID)
 	}
 	return last
 }
 
 // buildCheck plans the comparison cmp as one check, whose outcome is its left
-// operand; fallbackFollows says a fallback follows its side of a first.
-func (c *Compiler) buildCheck(cmp *ast.InfixExpression, id pir.OutcomeID, fallbackFollows bool) *pir.Check {
+// operand.
+func (c *Compiler) buildCheck(cmp *ast.InfixExpression, id pir.OutcomeID) *pir.Check {
 	t := c.ExprCache[key(c.FuncNameMangled, cmp)].OutTypes[0]
-	return &pir.Check{Result: id, Expr: cmp, Slots: []pir.Slot{c.planSlot(cmp.Left, t)}, OnOOB: planOOBScope(cmp, fallbackFollows)}
+	return &pir.Check{Result: id, Expr: cmp, Slots: []pir.Slot{c.planSlot(cmp.Left, t)}, Checked: planChecked(cmp)}
 }
 
-// buildEval plans expr as one eval; fallbackFollows says a fallback follows
-// the side of a first it belongs to.
-func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID, fallbackFollows bool) *pir.Eval {
+// buildEval plans expr as one eval.
+func (c *Compiler) buildEval(expr ast.Expression, id pir.OutcomeID) *pir.Eval {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	ev := &pir.Eval{Result: id, Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), OnOOB: planOOBScope(expr, fallbackFollows)}
+	ev := &pir.Eval{Result: id, Expr: expr, Slots: make([]pir.Slot, len(info.OutTypes)), Checked: planChecked(expr)}
 	for slot, t := range info.OutTypes {
 		ev.Slots[slot] = c.planSlot(expr, t)
 	}
@@ -498,7 +487,7 @@ func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First 
 
 	next := id + 1
 	for i, side := range sides {
-		first.Sides[i] = c.buildSide(side, next, i < len(sides)-1)
+		first.Sides[i] = c.buildSide(side, next)
 		next += pir.OutcomeID(pir.Outcomes(first.Sides[i]))
 	}
 	return first
@@ -506,17 +495,16 @@ func (c *Compiler) buildFirst(expr ast.Expression, id pir.OutcomeID) *pir.First 
 
 // buildSide plans one side of a first, whose own nodes start at id: a
 // comparison as a check, a value-position && as a last that binds no outcome,
-// and any other expression as an eval. fallbackFollows says the side after it
-// runs where it fails.
-func (c *Compiler) buildSide(side ast.Expression, id pir.OutcomeID, fallbackFollows bool) pir.Node {
+// and any other expression as an eval.
+func (c *Compiler) buildSide(side ast.Expression, id pir.OutcomeID) pir.Node {
 	if _, isAnd := ast.IsLogicalAnd(side); isAnd {
 		t := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes[0]
-		return c.buildLast(lastSides(side), t, pir.NoOutcome, id, fallbackFollows)
+		return c.buildLast(lastSides(side), t, pir.NoOutcome, id)
 	}
 	if c.scalarComparison(side) {
-		return c.buildCheck(side.(*ast.InfixExpression), id, fallbackFollows)
+		return c.buildCheck(side.(*ast.InfixExpression), id)
 	}
-	return c.buildEval(side, id, fallbackFollows)
+	return c.buildEval(side, id)
 }
 
 // mapNextTarget maps an outcome slot onto the statement's next target.
@@ -536,7 +524,7 @@ func (c *Compiler) buildPrintPlan(stmt *ast.PrintStatement, fn string) *pir.Prin
 			continue
 		}
 
-		ev := c.buildEval(expr, pir.OutcomeID(len(plan.Evals)), false)
+		ev := c.buildEval(expr, pir.OutcomeID(len(plan.Evals)))
 		plan.Evals = append(plan.Evals, ev)
 		plan.Args = append(plan.Args, pir.PrintArg{Outcome: ev.Result})
 	}
@@ -681,7 +669,7 @@ func (c *Compiler) commitValues(plan *pir.AssignPlan, nodes []loweredNode, repla
 // operand is only compared, so it is released here. A read past the end gives
 // a zero the comparison still computes with, and clears the bit.
 func (c *Compiler) lowerCheck(ch *pir.Check) ([]*Symbol, llvm.Value) {
-	if ch.OnOOB == pir.NoChecks {
+	if !ch.Checked {
 		return c.compareOperands(ch.Expr)
 	}
 
@@ -740,7 +728,7 @@ func (c *Compiler) lowerFirst(f *pir.First, tested []pir.OutcomeRef) loweredNode
 		if _, isLast := side.(*pir.Last); isLast {
 			flags[i].ran = c.clearedFlag("first_side_ran.mem")
 		}
-		if pir.Fallible(side) {
+		if side.(pir.Outcome).MayFail() {
 			flags[i].yielded = c.clearedFlag("first_yielded.mem")
 		}
 	}

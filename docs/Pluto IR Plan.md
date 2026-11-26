@@ -1513,8 +1513,10 @@ append.
 - Checked access and per-RHS skip scope are foundational, not a late
   optimization: every ordinary assignment already creates per-RHS bounds state
   (`compileExprAssigns`) whose failure selects keep-old versus commit
-  (`commitAssignmentsPerExpr`). Plans record explicit OOB scopes (§9), and the
-  bounds-bit idiom reduces to generic guard emission driven by them.
+  (`commitAssignmentsPerExpr`). Plans name explicit OOB scopes (§9): a node
+  records that it holds a checked access, and its place in the plan says what
+  a failed one does. The bounds-bit idiom reduces to generic guard emission
+  driven by the recorded bit.
 - Checked accesses migrate here in today's order, as the matrix's row 7
   retains it: an out-of-bounds read is still tested where it is read, so
   `y = Loud(1) + arr[oob]` still calls `Loud`. Testing it first needs Step 6's
@@ -1542,8 +1544,8 @@ append.
 **First slice landed — assignments with a checked index read.** An ordinary
 assignment whose value holds an index read plans (matrix row 7, and row 5d
 for a `_` target), at the script root and in a body without a range
-parameter. The read stays inside its `eval`, which records the scope every
-access in it has: a failed read skips the eval's outcome, every slot of it
+parameter. The read stays inside its `eval`, which records that it holds a
+checked access: a failed read skips the eval's outcome, every slot of it
 (`[on-oob=skip]`). Each mapping of that outcome to a binding records what
 its target then holds (`[on-skip=keep]` or `[on-skip=zero]`, §9), set by the
 builder and checked by the validator against the outcome and the target's
@@ -1583,13 +1585,14 @@ moves both strings, where legacy lowering copies them: in a statement that
 holds a checked read it decides each right-hand expression's copies alone,
 so it never sees that the other side replaces the owner.
 
-The validator enforces invariant 15 on every eval: an access outside a
-literal cell needs the eval's scope, and a scope needs an access. An access
-in a literal cell is rejected, because the cell resolves it and no plan node
-records that scope yet; so is a print eval that may fail, and a scope the
-plan does not define.
+The validator enforces invariant 15 on every eval: one that holds an access
+outside a literal cell is marked checked, and no other is. An access in a
+literal cell is rejected, because the cell resolves it and no plan node
+records that scope yet; so is a print eval that may fail. What a failed
+access does is not recorded on the node: the text names it from where the
+node sits, so the validator has no stored tag to check against that place.
 
-The lowerer emits the guard from the plan. An eval with the scope runs under
+The lowerer emits the guard from the plan. A checked eval runs under
 a bounds guard of its own, which each read ANDs its in-bounds bit into, and
 the guard's final value is the outcome's yield bit. Before any mapping
 lands, a binding with `[on-skip=keep]` moves to memory and one with
@@ -1656,7 +1659,9 @@ A side with a `fallback` after it must be able to fail, and its reads carry
 `[on-oob=fallback]`. The last side's reads carry `[on-oob=skip]`: where it
 fails too the outcome skips, and only then does the mapping carry a skip
 policy, so `x = arr[9] || -1` prints `x = %t0` for a fresh target and an
-existing one alike. The validator checks each of these on every `first`.
+existing one alike. The validator checks on every `first` that a side a
+`fallback` follows can fail and that the mapping's policy follows the last
+side; the tags are read off the sides' places.
 
 Each side keeps its own ownership, and nothing is copied where the sides
 meet (the rule Step 6 plans for every conditional value): the commit takes
@@ -1776,8 +1781,8 @@ or not it yielded. A read in an operand gives the check `[on-oob=skip]`: a
 failed read skips the check, and the gate rejects.
 
 The validator checks that a gate closes its region, takes the one check
-before it, and admits at least one value; that a check has one slot and no
-fallback scope; and that every binding under a gate carries its policy.
+before it, and admits at least one value; that a check has one slot; and
+that every binding under a gate carries its policy.
 
 The lowerer compares the operands, releases what the gate only tested, and
 gives each binding storage that both paths reach before they part. The values

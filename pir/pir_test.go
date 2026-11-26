@@ -156,9 +156,9 @@ func skipPlan() *AssignPlan {
 	return &AssignPlan{
 		Head: Head{Label: "assign kept, fresh, _", Source: "kept, fresh, _ = sarr[9], sarr[0], sarr[1]"},
 		Execute: []Node{
-			&Eval{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
-			&Eval{Result: 1, Expr: read("sarr", 0), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
-			&Eval{Result: 2, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&Eval{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			&Eval{Result: 1, Expr: read("sarr", 0), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			&Eval{Result: 2, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str)}, Checked: true},
 		},
 		Commit: []Mapping{
 			{Target: heapLocal("kept", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip},
@@ -175,7 +175,7 @@ func firstPlan() *AssignPlan {
 	return &AssignPlan{
 		Head: Head{Label: "assign s", Source: "s = sarr[9] || h"},
 		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
-			&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+			&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			&Eval{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
 		}}},
 		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
@@ -192,9 +192,9 @@ func chainPlan() *AssignPlan {
 		Execute: []Node{
 			&Eval{Result: 0, Expr: intLit(5), Slots: []Slot{unmanagedSlot(i64)}},
 			&First{Result: 1, Type: str, Sides: []Node{
-				&Eval{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-				&Eval{Result: 3, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
-				&Eval{Result: 4, Expr: read("sarr", 7), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+				&Eval{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Eval{Result: 3, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Eval{Result: 4, Expr: read("sarr", 7), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			}},
 			&Eval{Result: 5, Expr: intLit(7), Slots: []Slot{unmanagedSlot(i64)}},
 		},
@@ -214,7 +214,7 @@ func firstCheckPlan() *AssignPlan {
 	return &AssignPlan{
 		Head: Head{Label: "assign s", Source: `s = sarr[9] > "a" || h`},
 		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
-			&Check{Result: 1, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+			&Check{Result: 1, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			&Eval{Result: 2, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}},
 		}}},
 		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
@@ -239,6 +239,27 @@ func firstLastPlan() *AssignPlan {
 	}
 }
 
+// firstLastsPlan is `s = sarr[9] > "a" && sarr[8] || sarr[7] > "b" && sarr[6]`
+// over heap strings, before elaboration: each side is an && of its own whose
+// check and final side both read, and only the first has a fallback after it.
+func firstLastsPlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = sarr[9] > "a" && sarr[8] || sarr[7] > "b" && sarr[6]`},
+		Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
+			&Last{Result: NoOutcome, Type: str, Sides: []Node{
+				&Check{Result: 1, Expr: greater(read("sarr", 9), strLit("a")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Eval{Result: 2, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			}},
+			&Last{Result: NoOutcome, Type: str, Sides: []Node{
+				&Check{Result: 3, Expr: greater(read("sarr", 7), strLit("b")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Eval{Result: 4, Expr: read("sarr", 6), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			}},
+		}}},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+	}
+}
+
 // gatePlan is `s = sarr[1] > "m" sarr[9]` over heap strings, before
 // elaboration: the check reads a copy the gate only tests, and the gate's
 // region reads another into a binding that holds a value.
@@ -247,9 +268,9 @@ func gatePlan() *AssignPlan {
 	return &AssignPlan{
 		Head: Head{Label: "assign s", Source: `s = sarr[1] > "m" sarr[9]`},
 		Execute: []Node{
-			&Check{Result: 0, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+			&Check{Result: 0, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			&Gate{Cond: 0, Body: []Node{
-				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			}},
 		},
 		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip}},
@@ -265,7 +286,7 @@ func lastGatePlan() *AssignPlan {
 		Head: Head{Label: "assign s", Source: `s = sarr[1] > "m" && t > "a" u`},
 		Execute: []Node{
 			&Last{Result: 0, Type: str, Sides: []Node{
-				&Check{Result: 1, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+				&Check{Result: 1, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, Checked: true},
 				&Check{Result: 2, Expr: greater(ident("t"), strLit("a")), Slots: []Slot{borrowedSlot(str, "t")}},
 			}},
 			&Gate{Cond: 0, Body: []Node{
@@ -285,8 +306,8 @@ func lastValuePlan() *AssignPlan {
 		Head: Head{Label: "assign s", Source: `s = sarr[1] > "m" && sarr[9]`},
 		Execute: []Node{
 			&Last{Result: 0, Type: str, Sides: []Node{
-				&Check{Result: 1, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
-				&Eval{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+				&Check{Result: 1, Expr: greater(read("sarr", 1), strLit("m")), Slots: []Slot{ownedSlot(str)}, Checked: true},
+				&Eval{Result: 2, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			}},
 		},
 		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
@@ -432,7 +453,7 @@ func TestElaborate(t *testing.T) {
 			Head: Head{Label: "assign a, b", Source: "a, b = b, sarr[9]"},
 			Execute: []Node{
 				&Eval{Result: 0, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
-				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome},
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 			},
 			Commit: []Mapping{
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
@@ -443,7 +464,7 @@ func TestElaborate(t *testing.T) {
 		{"a borrow that may skip copies though its owner is replaced", &AssignPlan{
 			Head: Head{Label: "assign a, b", Source: `a, b = views[9], "new"`},
 			Execute: []Node{
-				&Eval{Result: 0, Expr: read("views", 9), Slots: []Slot{borrowedSlot(str, "b")}, OnOOB: SkipOutcome},
+				&Eval{Result: 0, Expr: read("views", 9), Slots: []Slot{borrowedSlot(str, "b")}, Checked: true},
 				&Eval{Result: 1, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
 			},
 			Commit: []Mapping{
@@ -457,7 +478,7 @@ func TestElaborate(t *testing.T) {
 			Head: Head{Label: "assign a, b", Source: `a, b = sarr[9] || b, "new"`},
 			Execute: []Node{
 				&First{Result: 0, Type: str, Sides: []Node{
-					&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+					&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 					&Eval{Result: 2, Expr: ident("b"), Slots: []Slot{borrowedSlot(str, "b")}},
 				}},
 				&Eval{Result: 3, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}},
@@ -470,7 +491,7 @@ func TestElaborate(t *testing.T) {
 		{"a discarded first releases each owned side where it ran", &AssignPlan{
 			Head: Head{Label: "assign _", Source: `_ = sarr[9] || h ⊕ "?"`},
 			Execute: []Node{&First{Result: 0, Type: str, Sides: []Node{
-				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, OnOOB: UseFallback},
+				&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
 				&Eval{Result: 2, Expr: concat(ident("h"), strLit("?")), Slots: []Slot{ownedSlot(str)}},
 			}}},
 			Commit: []Mapping{{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0}}},
@@ -656,47 +677,41 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 			p.Discarded = []OutcomeRef{{Outcome: 0}, {Outcome: 0}}
 		}, "%t0 slot 0 dropped twice"},
-		{"AccessWithoutScope", func(p *AssignPlan) { evalAt(p, 0).Expr = read("arr", 0) }, "eval %t0 holds a checked access with no out-of-bounds scope"},
-		{"ScopeWithoutAccess", func(p *AssignPlan) { evalAt(p, 0).OnOOB = SkipOutcome }, "eval %t0 has an out-of-bounds scope and no checked access"},
-		{"FallbackOutsideFirst", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), UseFallback
-		}, "eval %t0 falls back, but no fallback follows it"},
-		{"UnknownScope", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), 9
-		}, "eval %t0 has unknown out-of-bounds scope 9"},
+		{"AccessNotChecked", func(p *AssignPlan) { evalAt(p, 0).Expr = read("arr", 0) }, "eval %t0 holds a checked access and is not marked checked"},
+		{"CheckedWithoutAccess", func(p *AssignPlan) { evalAt(p, 0).Checked = true }, "eval %t0 is marked checked and holds no checked access"},
 		{"AccessInLiteralCell", func(p *AssignPlan) {
 			evalAt(p, 0).Expr = &ast.ArrayLiteral{Rows: [][]ast.Expression{{read("arr", 0)}}}
 		}, "eval %t0 holds a checked access in a literal cell"},
 		{"SkipWithoutPolicy", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 		}, "target a = %t0 slot 0 has skip policy none; its outcome and target require keep"},
 		{"KeepOnFreshTarget", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 			p.Commit[0].Target.Fresh = true
 			p.Commit[0].OnSkip = KeepOnSkip
 		}, "has skip policy keep; its outcome and target require zero"},
 		{"PolicyOnCertainOutcome", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "has skip policy keep; its outcome and target require none"},
 		{"PolicyOnDiscard", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 			p.Commit[0].OnSkip = KeepOnSkip
 		}, "target _ = %t0 slot 0 has skip policy keep; its outcome and target require none"},
 		{"MovedBorrowOfOwnerThatMaySkip", func(p *AssignPlan) {
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfers = []Transfer{Move}
-			evalAt(p, 1).Expr, evalAt(p, 1).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 1).Expr, evalAt(p, 1).Checked = read("arr", 0), true
 			p.Commit[1].Target.HoldsHeap = true
 			p.Commit[1].OnSkip = KeepOnSkip
 		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
 		{"MovedBorrowThatMaySkip", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 			evalAt(p, 0).Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
 			p.Commit[1].Target.HoldsHeap = true
 		}, "target a takes b's old value, but one of the two mappings may skip without the other"},
 		{"SkippedOwnedNeverReleased", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
@@ -707,7 +722,7 @@ func TestValidateRejects(t *testing.T) {
 			p.Skipped = []OutcomeRef{{Outcome: 0}}
 		}, "skip-path drop of %t0 slot 0"},
 		{"SkippedDroppedTwice", func(p *AssignPlan) {
-			evalAt(p, 0).Expr, evalAt(p, 0).OnOOB = read("arr", 0), SkipOutcome
+			evalAt(p, 0).Expr, evalAt(p, 0).Checked = read("arr", 0), true
 			evalAt(p, 0).Slots[0].Ownership = Owned
 			p.Commit[0].Transfers = []Transfer{Move}
 			p.Commit[0].OnSkip = KeepOnSkip
@@ -746,14 +761,10 @@ func TestValidateFirstRejects(t *testing.T) {
 			sideEvalAt(p, 0, 1).Slots = []Slot{borrowedSlot(str, "h"), borrowedSlot(str, "h")}
 		}, "side %t2 of first %t0 has 2 slots"},
 		{"SideTypeMismatch", func(p *AssignPlan) { sideEvalAt(p, 0, 1).Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit first %t0 of type Str"},
-		{"FallbackScopeWithoutAccess", func(p *AssignPlan) { sideEvalAt(p, 0, 0).Expr = ident("t") }, "eval %t1 has an out-of-bounds scope and no checked access"},
+		{"SideCheckedWithoutAccess", func(p *AssignPlan) { sideEvalAt(p, 0, 0).Expr = ident("t") }, "eval %t1 is marked checked and holds no checked access"},
 		{"FallbackAfterSideThatCannotFail", func(p *AssignPlan) {
-			sideEvalAt(p, 0, 0).Expr, sideEvalAt(p, 0, 0).OnOOB = ident("t"), NoChecks
+			sideEvalAt(p, 0, 0).Expr, sideEvalAt(p, 0, 0).Checked = ident("t"), false
 		}, "side %t1 of first %t0 cannot fail, so the fallback after it would never run"},
-		{"SkipBeforeFallback", func(p *AssignPlan) { sideEvalAt(p, 0, 0).OnOOB = SkipOutcome }, "eval %t1 skips a failed access, which the fallback after its side resolves"},
-		{"LastSideFallsBack", func(p *AssignPlan) {
-			sideEvalAt(p, 0, 1).Expr, sideEvalAt(p, 0, 1).OnOOB = read("sarr", 8), UseFallback
-		}, "eval %t2 falls back, but no fallback follows it"},
 		{"MappedSide", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 1 }, "commit references %t1, which sits inside first %t0"},
 		{"FirstSlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 		{"TransferPerSide", func(p *AssignPlan) { p.Commit[0].Transfers = []Transfer{Move} }, "has 1 transfers for the 2 nodes that can supply it"},
@@ -762,7 +773,7 @@ func TestValidateFirstRejects(t *testing.T) {
 		{"FailedSideNeverReleased", func(p *AssignPlan) { p.Skipped = nil }, "owned outcome %t1 slot 0 is never released where it fails"},
 		{"PolicyOnFirstThatAlwaysYields", func(p *AssignPlan) { p.Commit[0].OnSkip = KeepOnSkip }, "target s = %t0 slot 0 has skip policy keep; its outcome and target require none"},
 		{"NoPolicyOnFirstThatMaySkip", func(p *AssignPlan) {
-			firstAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, OnOOB: SkipOutcome}
+			firstAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: read("sarr", 8), Slots: []Slot{ownedSlot(str)}, Checked: true}
 		}, "target s = %t0 slot 0 has skip policy none; its outcome and target require keep"},
 		{"DiscardedFirstWithTransfer", func(p *AssignPlan) {
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
@@ -791,9 +802,9 @@ func TestValidateFirstSideRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"CheckSideSkipsBeforeFallback", firstCheckPlan, func(p *AssignPlan) {
-			sideCheckAt(p, 0, 0).OnOOB = SkipOutcome
-		}, "check %t1 skips a failed access, which the fallback after its side resolves"},
+		{"CheckSideNotChecked", firstCheckPlan, func(p *AssignPlan) {
+			sideCheckAt(p, 0, 0).Checked = false
+		}, "check %t1 holds a checked access and is not marked checked"},
 		{"CheckSideTypeMismatch", firstCheckPlan, func(p *AssignPlan) {
 			firstAt(p, 0).Type = testType("I64")
 		}, "side %t1 of type Str does not fit first %t0 of type I64"},
@@ -942,6 +953,37 @@ func TestRenderFirst(t *testing.T) {
 	if got := nested.Render(true); got != want {
 		t.Fatalf("nested last render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
+
+	// A failed read inside a last is resolved as the last's own failure is:
+	// by the fallback after its side, or by a skip in the side none follows.
+	lasts := firstLastsPlan()
+	Elaborate(lasts)
+	if err := Validate(lasts, sameSpelling); err != nil {
+		t.Fatalf("plan with a last for each side rejected: %v", err)
+	}
+	want = `assign s
+    source
+        s = sarr[9] > "a" && sarr[8] || sarr[7] > "b" && sarr[6]
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check Str sarr[9] > "a" [on-oob=fallback]
+                next
+                    %t2 = eval Str sarr[8] [on-oob=fallback]
+            fallback
+                last Str
+                    %t3 = check Str sarr[7] > "b" [on-oob=skip]
+                next
+                    %t4 = eval Str sarr[6] [on-oob=skip]
+
+    commit
+        s = %t0 [on-skip=keep]
+`
+	if got := lasts.Render(false); got != want {
+		t.Fatalf("render of a last for each side mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 // Plan §4, §9, §14: a gate's invariants, each broken on
@@ -968,8 +1010,7 @@ func TestValidateGateRejects(t *testing.T) {
 			p.Condition().(*Check).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "check %t0 has 2 slots"},
 		{"CheckSlotWithoutType", func(p *AssignPlan) { p.Condition().(*Check).Slots[0].Type = nil }, "check %t0 slot 0 has no type"},
-		{"CheckFallsBack", func(p *AssignPlan) { p.Condition().(*Check).OnOOB = UseFallback }, "check %t0 falls back, but no fallback follows it"},
-		{"CheckAccessWithoutScope", func(p *AssignPlan) { p.Condition().(*Check).OnOOB = NoChecks }, "check %t0 holds a checked access with no out-of-bounds scope"},
+		{"CheckAccessNotChecked", func(p *AssignPlan) { p.Condition().(*Check).Checked = false }, "check %t0 holds a checked access and is not marked checked"},
 		{"MappedCheck", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 0 }, "commit references unknown outcome %t0"},
 		{"NoPolicyUnderGate", func(p *AssignPlan) {
 			p.Gate().Body[0] = &Eval{Result: 1, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
@@ -1055,11 +1096,10 @@ func TestValidateLastRejects(t *testing.T) {
 		{"CheckSideUnvalidated", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[0].(*Check).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "check %t1 has 2 slots"},
-		{"FinalEvalUnvalidated", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).OnOOB = NoChecks }, "eval %t2 holds a checked access with no out-of-bounds scope"},
+		{"FinalEvalUnvalidated", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).Checked = false }, "eval %t2 holds a checked access and is not marked checked"},
 		{"FinalEvalWithTwoSlots", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[1].(*Eval).Slots = []Slot{ownedSlot(str), ownedSlot(str)}
 		}, "side %t2 of last %t0 has 2 slots"},
-		{"FinalEvalFallsBack", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).OnOOB = UseFallback }, "eval %t2 falls back, but no fallback follows it"},
 		{"FinalEvalOfAnotherType", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[1].(*Eval).Slots[0].Type = testType("I64") }, "side %t2 of type I64 does not fit last %t0 of type Str"},
 		{"MappedSide", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 2 }, "commit references %t2, which sits inside last %t0, whose outcome a mapping takes instead"},
 		{"SlotOutOfRange", lastValuePlan, func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
@@ -1149,7 +1189,7 @@ func TestValidateCheckRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).OnOOB = UseFallback }, "check %t0 falls back, but no fallback follows it"},
+		{"CheckUnvalidated", func(p *AssignPlan) { p.Execute[0].(*Check).Checked = true }, "check %t0 is marked checked and holds no checked access"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 1 }, "commit references %t0 slot 1 out of range"},
 	}
 	for _, tc := range cases {
@@ -1226,11 +1266,8 @@ func TestValidatePrint(t *testing.T) {
 		{"Unprinted", func(p *PrintPlan) { p.Args = p.Args[:2] }, "print takes 1 of 2 outcomes"},
 		{"ExtraOutcome", func(p *PrintPlan) { p.Args = append(p.Args, PrintArg{Outcome: 2}) }, "print takes 3 of 2 outcomes"},
 		{"MaySkip", func(p *PrintPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), SkipOutcome
+			p.Evals[0].Expr, p.Evals[0].Checked = read("arr", 0), true
 		}, "print takes %t0, which may fail"},
-		{"FallsBack", func(p *PrintPlan) {
-			p.Evals[0].Expr, p.Evals[0].OnOOB = read("arr", 0), UseFallback
-		}, "eval %t0 falls back, but no fallback follows it"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
