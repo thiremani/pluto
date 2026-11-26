@@ -1120,6 +1120,9 @@ func TestValidateNestedFirstRejects(t *testing.T) {
 			f := lastFirstAt(p, 0, 0)
 			f.Sides = f.Sides[1:]
 		}, "the first in side 1 of last %t0 has 1 sides and needs a fallback"},
+		{"TestedFirstCannotFail", testedFirstPlan, func(p *AssignPlan) {
+			lastFirstAt(p, 0, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
+		}, "the first in side 1 of last %t0 cannot fail, so the next after it would always run"},
 		{"SideAfterNestedFirst", testedFirstPlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[1].(*Eval).Result = 2
 		}, "eval 3 has result ID 2; IDs must be dense"},

@@ -2096,7 +2096,8 @@ The validator checks that a gate's condition is a check, a `last` or a
 reject. It holds a `first` that is a side of a `last` to a `first`'s own
 rules, checks that it binds no outcome, and checks that it fits the `last`'s
 type where it is the final side; a side before the final one is a check or a
-`first`, never an eval. One rule went: a gate's `last` no longer has to end
+`first` that can fail, never an eval, since the `next` after a side that
+cannot fail would always run. One rule went: a gate's `last` no longer has to end
 in a check, since a `last` that is only tested may end in an eval.
 
 The lowerer runs a node that is only tested for its bit alone, releasing

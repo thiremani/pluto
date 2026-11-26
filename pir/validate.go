@@ -156,9 +156,10 @@ func validateDense(plan, word string, id OutcomeID, next int) error {
 
 // validateLast checks a last, named as an error names it, whose sides start
 // at sideStart: at least two sides of one slot each, numbered in execution
-// order. Every side before the final one is only tested, a check or a first,
-// and the final one, a check, an eval or a first, fits the last's type. A
-// first that is a side binds no outcome.
+// order. Every side before the final one is only tested, a check or a first
+// that can fail, since the next after one that cannot would always run. The
+// final one, a check, an eval or a first, fits the last's type. A first that
+// is a side binds no outcome.
 func validateLast(plan, name string, sideStart int, l *Last, compatible func(target, outcome Type) bool) error {
 	if l.Type == nil {
 		return fmt.Errorf("plan %s: %s has no type", plan, name)
@@ -198,6 +199,9 @@ func validateLast(plan, name string, sideStart int, l *Last, compatible func(tar
 			}
 			if err := validateFirstSides(plan, nested, sideID, n, compatible); err != nil {
 				return err
+			}
+			if i < final && !n.MayFail() {
+				return fmt.Errorf("plan %s: %s cannot fail, so the next after it would always run", plan, nested)
 			}
 			if i == final && !compatible(l.Type, n.Type) {
 				return fmt.Errorf("plan %s: %s has type %s, which does not fit the last's type %s", plan, nested, n.Type.String(), l.Type.String())

@@ -92,8 +92,8 @@ type Last struct {
 	Sides  []Node
 }
 
-// MayFail reports a last that can fail to yield: every one, since its checks
-// may not hold.
+// MayFail reports a last that can fail to yield: every one, since a side
+// before its final one may not yield.
 func (l *Last) MayFail() bool { return true }
 
 // final returns the side whose outcome is the last's own.
@@ -479,7 +479,7 @@ func (p *AssignPlan) sources(ref OutcomeRef) []source {
 // maySkip reports a mapping whose own outcome may skip. A mapping takes the
 // outcome of a value, which no fallback follows, so the outcome skips wherever
 // the node that binds it fails: a first through its last side, and a last
-// always, its checks being able to fail. A gate's rejection is no skip of one
+// always, a side before its final one being able to fail. A gate's rejection is no skip of one
 // mapping: it leaves every mapping of the statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
 	return p.value(m.Outcome.Outcome).(Outcome).MayFail()
