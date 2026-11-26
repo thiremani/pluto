@@ -172,6 +172,14 @@ func TestSplitOperatorPlacesItsRemainder(t *testing.T) {
 	}
 }
 
+// An operator that is one prefix operator already is left as it is, with no
+// queue built for it. Queuing it again copies every token still waiting, once
+// for each operator of a run, which makes a long run quadratic.
+func TestSinglePrefixOperatorIsNotRequeued(t *testing.T) {
+	p := New(lexer.New("TestSinglePrefixOperatorIsNotRequeued", "-x\n"))
+	require.Zero(t, testing.AllocsPerRun(100, p.normalizeCurrentPrefixOperator))
+}
+
 // A run of operator characters that names no operator is reported as that,
 // once and whole, at the run. Only a run made of prefix operators begins a
 // value, and after a value only with a space before it, where a value may
