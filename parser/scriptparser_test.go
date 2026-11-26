@@ -187,6 +187,7 @@ func TestUndefinedOperatorRun(t *testing.T) {
 		{"x = [a*-b]", "1:7:operator *- is not defined"},
 		{"x = -*b", "1:5:operator -* is not defined"},
 		{"x, y = a, b @ c", "1:13:operator @ is not defined"},
+		{"x, y = a, b -√c", "1:13:operator -√ is not defined"},
 		{"x = *b", "1:5:no prefix parse function for * found"},
 	} {
 		sp := NewScriptParser(lexer.New("TestUndefinedOperatorRun", tt.input+"\nafter = 3"))

@@ -927,7 +927,8 @@ func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode, continued int) []
 		p.nextToken()
 		p.lineUp(&continued)
 		p.nextToken()
-		expList = append(expList, p.parseExpression(LOWEST, splitPrefix))
+		// A comma starts a positional value. Only the first expression can be a gate.
+		expList = append(expList, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 	return expList
 }
