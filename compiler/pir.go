@@ -442,14 +442,17 @@ func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.Outcome
 	}
 
 	var cond pir.Node
+	_, isOr := ast.IsLogicalOr(conds[0])
 	switch {
 	case len(conds) > 1:
 		t := c.ExprCache[key(c.FuncNameMangled, conds[len(conds)-1])].OutTypes[0]
 		cond = c.buildLast(conds, t, conditionID, conditionID+1)
 	case c.scalarComparison(conds[0]):
 		cond = c.buildCheck(conds[0].(*ast.InfixExpression), conditionID)
-	default:
+	case isOr:
 		cond = c.buildFirst(conds[0], conditionID, conditionID+1)
+	default:
+		panic(fmt.Sprintf("internal: gate condition %q is no comparison and no ||", conds[0].String()))
 	}
 	return cond, conditionID + pir.OutcomeID(pir.Outcomes(cond))
 }
