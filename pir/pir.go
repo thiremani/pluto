@@ -41,37 +41,21 @@ type Slot struct {
 	Owner     string // the borrowed-from binding; empty unless Borrowed
 }
 
-// OOBScope is what a failed checked access in an eval or a check does (plan
-// §9). The accesses of one node share one scope.
-type OOBScope int
-
-const (
-	// NoChecks: the node holds no checked access, so none skips its outcome.
-	NoChecks OOBScope = iota
-	// SkipOutcome: a failed access skips the node's outcome, every slot of it.
-	// An eval's mappings say in OnSkip what each target then holds, and a
-	// check's gate rejects the statement.
-	SkipOutcome
-	// UseFallback: the node is in a side of a first that a fallback follows,
-	// which runs where an access fails.
-	UseFallback
-)
-
 // Eval evaluates one solved source expression; the builder splits out
 // anything that affects evaluation strategy before an expression lands here.
 type Eval struct {
 	Result OutcomeID
 	Expr   ast.Expression
 	Slots  []Slot // one entry per output slot
-	OnOOB  OOBScope
+
+	// Checked says Expr holds an access that needs a bounds check (plan §9).
+	// What a failed one does is no fact of the node: its place in the plan
+	// says whether a fallback follows it or its outcome skips.
+	Checked bool
 }
 
 // MayFail reports an eval a failed check can keep from yielding.
-func (ev *Eval) MayFail() bool { return ev.OnOOB != NoChecks }
-
-// MaySkip reports an eval whose failure no fallback resolves, so it reaches
-// the commit.
-func (ev *Eval) MaySkip() bool { return ev.OnOOB == SkipOutcome }
+func (ev *Eval) MayFail() bool { return ev.Checked }
 
 // First is a value-position || (plan §4): its sides run in order until one
 // yields, and that side's value is its outcome. A side before the last falls
@@ -85,10 +69,10 @@ type First struct {
 	Sides  []Node
 }
 
-// MaySkip reports a first whose last side may skip, when no side yields.
-func (f *First) MaySkip() bool { return f.last().(Outcome).MaySkip() }
+// MayFail reports a first whose last side may fail, when no side yields.
+func (f *First) MayFail() bool { return f.last().(Outcome).MayFail() }
 
-// last returns the side no fallback follows, whose failure skips the outcome.
+// last returns the side no fallback follows, whose failure is the first's own.
 func (f *First) last() Node { return f.Sides[len(f.Sides)-1] }
 
 // Last is an && (plan §4), in value position or over a gate's conditions: its
@@ -104,9 +88,9 @@ type Last struct {
 	Sides  []Node
 }
 
-// MaySkip reports a last whose failure reaches the commit: every one, since
-// its checks may not hold and no fallback follows a last of its own.
-func (l *Last) MaySkip() bool { return true }
+// MayFail reports a last that can fail to yield: every one, since its checks
+// may not hold.
+func (l *Last) MayFail() bool { return true }
 
 // final returns the side whose outcome is the last's own.
 func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
@@ -116,27 +100,20 @@ func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
 // skips it as a failed comparison does. It has one slot. A gate only tests
 // the outcome, and a mapping takes it as a value.
 type Check struct {
-	Result OutcomeID
-	Expr   *ast.InfixExpression
-	Slots  []Slot
-	OnOOB  OOBScope
+	Result  OutcomeID
+	Expr    *ast.InfixExpression
+	Slots   []Slot
+	Checked bool // an operand holds a checked access, as Eval.Checked says
 }
 
 // MayFail reports a check that can fail to yield: every one, since its
 // comparison may not hold.
 func (ch *Check) MayFail() bool { return true }
 
-// MaySkip reports a check whose failure reaches the commit: every one, since
-// its comparison may not hold. A check that a fallback follows is a side of a
-// first, whose own MaySkip reads the side no fallback follows.
-func (ch *Check) MaySkip() bool { return true }
-
 // Supplier is a node whose value a mapping can take: an eval, or a check,
 // whose value is its left operand.
 type Supplier interface {
-	Node
-	MayFail() bool
-	MaySkip() bool
+	Outcome
 	slot(i int) Slot
 }
 
@@ -166,10 +143,11 @@ func (*Gate) node()  {}
 
 // Outcome is a node whose outcome a mapping can take: an eval, a check, a
 // first or a last. A gate is no outcome, and a last nested as a side of a
-// first binds none, though its value still reaches a mapping.
+// first binds none, though its value still reaches a mapping. MayFail reports
+// one a failure can keep from yielding, wherever it sits.
 type Outcome interface {
 	Node
-	MaySkip() bool
+	MayFail() bool
 }
 
 // result returns the outcome a node binds: none for a gate, or for a last
@@ -210,17 +188,6 @@ func supplier(node Node) Supplier {
 		return supplier(l.final())
 	}
 	return node.(Supplier)
-}
-
-// Fallible reports a node a failure can keep from yielding, so that a
-// fallback after it has something to resolve: an eval where it holds a
-// checked access, and a check or a last always, a comparison being able not
-// to hold. It is asked about a side of a first, and about no other node.
-func Fallible(node Node) bool {
-	if ev, isEval := node.(*Eval); isEval {
-		return ev.MayFail()
-	}
-	return true
 }
 
 // sidesOf returns the sides of a first or a last, and none for any other node.
@@ -499,12 +466,13 @@ func sourceOf(node Node) source {
 	return source{ref: OutcomeRef{Outcome: id}, node: sup}
 }
 
-// maySkip reports a mapping whose own outcome may skip, which the node that
-// binds it answers: a first through the side no fallback follows, and a last
+// maySkip reports a mapping whose own outcome may skip. A mapping takes the
+// outcome of a value, which no fallback follows, so the outcome skips wherever
+// the node that binds it fails: a first through its last side, and a last
 // always, its checks being able to fail. A gate's rejection is no skip of one
 // mapping: it leaves every mapping of the statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
-	return p.value(m.Outcome.Outcome).(Outcome).MaySkip()
+	return p.value(m.Outcome.Outcome).(Outcome).MayFail()
 }
 
 // mayNotCommit reports a mapping that some path leaves unapplied, so that its
