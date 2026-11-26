@@ -91,19 +91,20 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 }
 
 // Spelling is the source a statement is spelled with: the input from first
-// to the end of last, so a comment the statement does not reach is never in
-// it. Its lines keep the shape the file gives them: each later one loses the
+// to end, the line break that ends the statement, so a comment a line of the
+// statement ends with is in it and the lines around the statement are not.
+// Its lines keep the shape the file gives them: each later one loses the
 // indentation the statement stands at, which the layout rules give every
 // line of its own, and a blank or comment line loses what it has of that. A
 // line a string literal runs into keeps its characters as they are, since
 // those are what the string holds; literals are the string tokens the
-// statement spans, in source order. first and last are tokens this lexer
-// produced, each spelling source of its own, first at or before last: no
-// other pair names a span of this input, so a caller that hands one over has
+// statement spans, in source order. first is a token this lexer produced
+// that spells source, and end the line break it produced after it: no other
+// pair names a statement of this input, so a caller that hands one over has
 // a bug that checking here would only move.
-func (l *Lexer) Spelling(first, last token.Token, literals []token.Token) string {
+func (l *Lexer) Spelling(first, end token.Token, literals []token.Token) string {
 	indent := first.Column - 1
-	lines := spanLines(l.input, first.Pos, last.Pos+last.Len, literals)
+	lines := spanLines(l.input, first.Pos, end.Pos, literals)
 
 	spelled := make([]string, len(lines))
 	for i, line := range lines {

@@ -125,7 +125,6 @@ type StmtParser struct {
 	peekToken    token.Token
 	spelling     bool          // a statement is being parsed, so its tokens are kept
 	stmtStart    token.Token   // the first token of the statement being parsed
-	stmtEnd      token.Token   // the last token of it a source spells
 	stmtLiterals []token.Token // the string literals it spans
 	savedTokens  []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
 	open         brackets      // the brackets open where curToken stands
@@ -422,11 +421,10 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 }
 
 // noteSpelled keeps what a statement's spelling needs of the token now
-// current: the first and last tokens a source spells, and the string literals
-// between them, whose characters are the string's own rather than the file's
-// layout. Both ends are taken from what a source spells, so neither the
-// layout token a statement ends on nor the illegal one a recovered statement
-// starts after can reach past it.
+// current: the first token a source spells, and the string literals after
+// it, whose characters are the string's own rather than the file's layout.
+// The start is taken from what a source spells, so the illegal token a
+// recovered statement starts after cannot reach before it.
 func (p *StmtParser) noteSpelled(tok token.Token) {
 	if !p.spelling || tok.Len == 0 {
 		return
@@ -434,14 +432,15 @@ func (p *StmtParser) noteSpelled(tok token.Token) {
 	if p.stmtStart.Len == 0 {
 		p.stmtStart = tok
 	}
-	p.stmtEnd = tok
 	if tok.Type == token.STRING {
 		p.stmtLiterals = append(p.stmtLiterals, tok)
 	}
 }
 
+// sourceSpelling is the source of the statement that has just ended:
+// curToken is the line break it ends on.
 func (p *StmtParser) sourceSpelling() string {
-	return p.l.Spelling(p.stmtStart, p.stmtEnd, p.stmtLiterals)
+	return p.l.Spelling(p.stmtStart, p.curToken, p.stmtLiterals)
 }
 
 // parseStatement parses one statement and gives it the source its file
@@ -455,7 +454,6 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	p.spelling = true
 	defer func() { p.spelling = false }()
 	p.stmtStart = token.Token{}
-	p.stmtEnd = token.Token{}
 	p.stmtLiterals = p.stmtLiterals[:0]
 	p.noteSpelled(firstToken)
 	p.blankIdents = nil // reset for new statement

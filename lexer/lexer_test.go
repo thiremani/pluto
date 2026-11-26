@@ -1420,12 +1420,12 @@ func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
 }
 
 // spellAll quotes every token of src as one span, as a parser does for a
-// statement: from the first token a source spells to the last, with the
-// string literals between them.
+// statement: from the first token a source spells to the last line break,
+// with the string literals between them.
 func spellAll(t *testing.T, src string) string {
 	t.Helper()
 	l := New("spellAll", src)
-	var first, last token.Token
+	var first, end token.Token
 	var literals []token.Token
 	for {
 		tok, err := l.NextToken()
@@ -1434,6 +1434,9 @@ func spellAll(t *testing.T, src string) string {
 		}
 		if tok.Type == token.EOF {
 			break
+		}
+		if tok.Type == token.NEWLINE {
+			end = tok
 		}
 		if tok.Len == 0 {
 			continue
@@ -1441,12 +1444,11 @@ func spellAll(t *testing.T, src string) string {
 		if first.Len == 0 {
 			first = tok
 		}
-		last = tok
 		if tok.Type == token.STRING {
 			literals = append(literals, tok)
 		}
 	}
-	return l.Spelling(first, last, literals)
+	return l.Spelling(first, end, literals)
 }
 
 // spellFrom quotes the tokens of src from the first one on line from, as a
@@ -1454,7 +1456,7 @@ func spellAll(t *testing.T, src string) string {
 func spellFrom(t *testing.T, src string, from int) string {
 	t.Helper()
 	l := New("spellFrom", src)
-	var first, last token.Token
+	var first, end token.Token
 	var literals []token.Token
 	for {
 		tok, err := l.NextToken()
@@ -1464,18 +1466,20 @@ func spellFrom(t *testing.T, src string, from int) string {
 		if tok.Type == token.EOF {
 			break
 		}
+		if tok.Type == token.NEWLINE {
+			end = tok
+		}
 		if tok.Len == 0 || tok.Line < from {
 			continue
 		}
 		if first.Len == 0 {
 			first = tok
 		}
-		last = tok
 		if tok.Type == token.STRING {
 			literals = append(literals, tok)
 		}
 	}
-	return l.Spelling(first, last, literals)
+	return l.Spelling(first, end, literals)
 }
 
 // A span an indented statement makes moves left as one: each later line
@@ -1504,16 +1508,16 @@ func TestSpellingMovesASpanAsOne(t *testing.T) {
 }
 
 // Spelling quotes a statement as its file spells it: from its first token to
-// its last, so a comment it does not reach is never in it, with every later
-// line moved left to where the first stands and a line a string literal runs
-// through left as the string holds it.
+// the line break that ends it, so a comment any of its lines ends with is in
+// it, with every later line moved left to where the first stands and a line
+// a string literal runs through left as the string holds it.
 func TestSpelling(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
 		want string
 	}{
-		{"OneLineLeavesItsComment", "a = 1 # one\n", "a = 1"},
+		{"OneLineKeepsItsCommentWithoutItsBlanks", "a = 1 # one \t\n", "a = 1 # one"},
 		{"LinesKeepTheirShape", "m = [\n    2 3\n]\n", "m = [\n    2 3\n]"},
 		{"AnInteriorCommentStays", "m = [\n    # a row\n    2 3\n]\n", "m = [\n    # a row\n    2 3\n]"},
 		{"StringContentKeepsItsSpaces", "w = \"hello   \n \nworld\"\n", "w = \"hello   \n \nworld\""},

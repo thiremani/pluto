@@ -55,7 +55,7 @@ func TestAssign(t *testing.T) {
 // Plan §12: a statement carries the source its file spells it with, so a
 // plan quotes what its author wrote rather than the ast's own rendering: the
 // parens the ast adds are absent, an implicit multiplication reads as it was
-// typed, a comment the line ends with is cut, and a statement of several
+// typed, a comment the line ends with is kept, and a statement of several
 // lines keeps its own shape dedented to its first line.
 func TestStatementSpelling(t *testing.T) {
 	const script = `b = ((a))
@@ -78,7 +78,7 @@ world"
 		"b = ((a))",
 		"n = -a",
 		"imp = 5a",
-		"f = -8 >> 1",
+		"f = -8 >> 1 # arithmetic right shift",
 		"m = [\n    1 2\n    3 4\n]",
 		"long =\n    a + 1",
 		"w = \"hello   \n \n\t\nworld\"",
@@ -292,7 +292,7 @@ line two"
 			spelled = append(spelled, inner.(*ast.LetStatement).Src)
 		}
 	}
-	require.Equal(t, []string{"t = x * 2", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "v = [\n  : Name Score\n    \"Ada\" 1\n]", "r = t + 1"}, spelled)
+	require.Equal(t, []string{"t = x * 2 # doubled", "s = \"line one\nline two\"", "u =\n# flush left\n    x + 1", "v = [\n  : Name Score\n    \"Ada\" 1\n]", "r = t + 1"}, spelled)
 }
 
 func TestInvalidAssignment(t *testing.T) {
