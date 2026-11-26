@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -2363,6 +2364,34 @@ n, s, sarr`)
 	}
 }
 
+// A final side that is an || runs its second side only where the first one
+// failed, so that side has a bit and memory of its own: the block the
+// fallback admits sets the bit beside the value it stages, and only the block
+// a branch on that bit admits loads the value and releases it (plan §8).
+// Where the && stopped before the ||, neither side staged anything.
+func TestPlanLastReleasesEachSideOfFinalFirstWhereItRan(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "planFinalFirstRelease", `s = MkStr(x)
+    s = "s-x"
+`, `n = 3
+s = "kept"
+s = n > 9 && (MkStr(n) > "zzz" || MkStr(n) > "a")
+n, s`)
+
+	fallback := irBlock(ir, "first_fallback_if")
+	flag := irCapture(t, fallback, `store i1 true, ptr (%last_ran\.mem\w+),`)
+	slot := irCapture(t, fallback, `store ptr %\w+, ptr (%first_side\.mem\w+),`)
+	require.Less(t, strings.Index(ir, "store i1 false, ptr "+flag+","), strings.Index(ir, "last_next_if:"),
+		"the second side's bit must be cleared before the sides part")
+
+	ran := irCapture(t, ir, `(%\w+) = load i1, ptr `+regexp.QuoteMeta(flag)+`,`)
+	admitted := irBlock(ir, irCapture(t, ir, `br i1 `+regexp.QuoteMeta(ran)+`, label %(\w+),`))
+	staged := irCapture(t, admitted, `(%\w+) = load ptr, ptr `+regexp.QuoteMeta(slot)+`,`)
+	require.Contains(t, admitted, "call void @free(ptr "+staged+")")
+
+	released := regexp.MustCompile(`(%temp_free\w*) = load ptr, ptr `+regexp.QuoteMeta(slot)+`,`).FindAllString(ir, -1)
+	require.Len(t, released, 1, "the second side's value must be released only where its own bit admits")
+}
+
 // A last that is a side of a first stages its value on a path of its own, so
 // the bit that says its final side ran is cleared before the sides part and
 // read where the mappings land: a side that never ran staged nothing to
@@ -2392,6 +2421,15 @@ a, b, s`)
 	admitted := irBlock(ir, "ran_if")
 	require.Contains(t, admitted, "= load ptr, ptr %last_side.mem")
 	require.Contains(t, admitted, "call void @free(ptr %temp_free")
+}
+
+// irCapture returns what the one group of pattern captures at its first match
+// in text.
+func irCapture(t *testing.T, text, pattern string) string {
+	t.Helper()
+	match := regexp.MustCompile(pattern).FindStringSubmatch(text)
+	require.NotNil(t, match, "expected a match for %s", pattern)
+	return match[1]
 }
 
 // irBlock returns the instructions of the basic block labelled label in ir,
