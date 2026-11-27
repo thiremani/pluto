@@ -2112,10 +2112,11 @@ func finalAnd(and *ast.InfixExpression) *ast.InfixExpression {
 }
 
 // validateTestedAnds holds the last operand of an && whose value is never
-// used, only whether it yields, to the rule its other operands follow: it
-// must be able to fail, or it decides nothing, as 5 does in
-// (a > 2 && 5 || b > 5) && 7. A range there drives iteration, as a range
-// driver does in a gate. tested says only whether expr yields is used.
+// used, only whether it yields, to being able to fail: a condition, or a read,
+// which fails where its index is out of bounds. One that always yields decides
+// nothing, as 5 does in (a > 2 && 5 || b > 5) && 7. A range drives iteration
+// there, as a range driver does in a gate. tested says only whether expr
+// yields is used.
 func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 	if and, ok := ast.IsLogicalAnd(expr); ok {
 		sides := lastSides(expr)
@@ -2125,7 +2126,8 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 
 		final := finalAnd(and)
 		ranged := ts.ExprCache[key(ts.FuncNameMangled, final.Right)].HasRanges
-		if tested && !ranged && !ts.expressionCanFail(final.Right) {
+		canFail := ts.expressionCanFail(final.Right) || treeCanFail(final.Right, ts.unrangedRead)
+		if tested && !ranged && !canFail {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: final.Token,
 				Msg:   fmt.Sprintf("logical AND whose value is never used requires a conditional last operand, but its last operand is %s", final.Right),

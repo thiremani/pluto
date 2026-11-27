@@ -2083,7 +2083,7 @@ the `drop`. An eval can be one, as in `y = (arr[9] || b > 0) && 7`, whose
 read yields where it is in bounds, or in the gate `x = arr[9] || b > 0 5`.
 Only whether such a node yields is read, so it must be able to fail or drive
 a range (decided 2026-11-27): the solver rejects an `&&` whose value is never
-used and whose last operand is no condition, as the `5` in
+used and whose last operand can never fail, as the `5` in
 `z = (a > 9 && 5 || b > 0) && 7` and the `k` in
 `x = b > 9 || arr[1] > 0 && k 5`, which compiled before this slice, and the
 validator rejects an eval a plan only tests that cannot fail.
@@ -2136,9 +2136,9 @@ Pinned by `TestPlanGoldenNestedSelections`, `TestPlanRouterRejections` and
 `TestElaborate`, `TestValidateAccepts`, `TestValidateNestedFirstRejects`,
 `TestValidateLastRejects` and `TestRenderNestedFirst`, by the solver's
 `TestLogicalChainGrouping`, and at run time by `cond/logical_ops`
-(`NestedFirstSecondYields`) and the statements the fixtures already held,
-among them `cond/logical_ops`'s `CvOrTrue` and `NstOrGatesAnd` and
-`cond/value_cond_expr`.
+(`NestedFirstSecondYields`, `TestedRead`) and the statements the fixtures
+already held, among them `cond/logical_ops`'s `CvOrTrue` and `NstOrGatesAnd`
+and `cond/value_cond_expr`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

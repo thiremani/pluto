@@ -669,3 +669,11 @@ _ = sl > "zzz" || a > 0 && (sl ⊕ "?")
 # yields, so the && did, and the outer fallback does not run.
 nfA = a > 2 && (b > 5 || Loud(1) > 0) || Loud(2)
 "NestedFirstSecondYields: -nfA"
+
+# A read that ends an && whose value is never used asks whether its index
+# exists: in bounds the && yields, out of bounds the || falls back, and what
+# each read built is released either way.
+trA = (a > 2 && aoStrs[1] || aoStrs[0] > "z") && 7
+trB = 9
+trB = (a > 2 && aoStrs[9] || aoStrs[0] > "z") && 7
+"TestedRead: -trA -trB"
