@@ -56,6 +56,10 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 		next += Outcomes(node)
 	}
 
+	if err := p.validateTested(); err != nil {
+		return err
+	}
+
 	if len(p.Commit) != slots {
 		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Label, len(p.Commit), slots)
 	}
@@ -126,6 +130,18 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 		return 0, fmt.Errorf("plan %s: gate admits an empty region", p.Label)
 	}
 	return next, nil
+}
+
+// validateTested checks that every eval the plan only tests can fail: only
+// whether it yields is read, so one that always yields decides nothing. A
+// check can always fail, and a first or a last fails through what it holds.
+func (p *AssignPlan) validateTested() error {
+	for _, sup := range p.tests() {
+		if ev, isEval := sup.(*Eval); isEval && !ev.MayFail() {
+			return fmt.Errorf("plan %s: eval %%t%d is only tested and cannot fail, so it decides nothing", p.Label, ev.Result)
+		}
+	}
+	return nil
 }
 
 // validateCheck checks a check whose outcome is id: one well-formed slot, and

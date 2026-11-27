@@ -614,11 +614,10 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 
 // lowerTested runs a node whose outcome is only tested, a gate's condition or
 // a side before the final one of a last, and returns the bit that says
-// whether it yielded, nil for an eval that always does. Nothing takes what
-// its evals and checks built, so each releases that once it ran. A first or a
-// last runs its sides on paths of their own, so its bit sits in memory,
-// cleared before they part, and is read back from there even where the first
-// or the last always yields.
+// whether it yielded. Validation holds every such node to being able to fail,
+// so the bit is never nil. Nothing takes what its evals and checks built, so
+// each releases that once it ran. A first or a last runs its sides on paths
+// of their own, so its bit sits in memory, cleared before they part.
 func (c *Compiler) lowerTested(node pir.Node, tested []pir.OutcomeRef) llvm.Value {
 	switch n := node.(type) {
 	case *pir.First:

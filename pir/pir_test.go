@@ -1123,6 +1123,13 @@ func TestValidateNestedFirstRejects(t *testing.T) {
 		{"TestedFirstCannotFail", testedFirstPlan, func(p *AssignPlan) {
 			lastFirstAt(p, 0, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
 		}, "the first in side 1 of last %t0 cannot fail, so the next after it would always run"},
+		{"TestedSideEndsInEvalThatCannotFail", testedFirstPlan, func(p *AssignPlan) {
+			lastFirstAt(p, 0, 0).Sides[1] = &Last{Result: NoOutcome, Type: str, Sides: []Node{
+				&Check{Result: 2, Expr: greater(call("MkStr", ident("b")), strLit("a")), Slots: []Slot{ownedSlot(str)}},
+				&Eval{Result: 3, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}},
+			}}
+			lastAt(p, 0).Sides[1].(*Eval).Result = 4
+		}, "eval %t3 is only tested and cannot fail, so it decides nothing"},
 		{"SideAfterNestedFirst", testedFirstPlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[1].(*Eval).Result = 2
 		}, "eval 3 has result ID 2; IDs must be dense"},
@@ -1386,6 +1393,9 @@ func TestValidateLastRejects(t *testing.T) {
 			p.Commit[0].OnSkip = NoSkipPolicy
 		}, "target s = %t0 slot 0 has skip policy none; its outcome and target require keep"},
 		{"TestedSideNeverReleased", lastValuePlan, func(p *AssignPlan) { p.Tested = nil }, "owned outcome %t1 slot 0, which is only tested, is never released"},
+		{"ConditionEndsInEvalThatCannotFail", lastGatePlan, func(p *AssignPlan) {
+			lastAt(p, 0).Sides[1] = &Eval{Result: 2, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
+		}, "eval %t2 is only tested and cannot fail, so it decides nothing"},
 		{"ConditionOfAnotherType", lastGatePlan, func(p *AssignPlan) { lastAt(p, 0).Type = testType("I64") }, "side %t2 of type Str does not fit last %t0 of type I64"},
 		{"ConditionUnvalidated", lastGatePlan, func(p *AssignPlan) { lastAt(p, 0).Sides = lastAt(p, 0).Sides[:1] }, "last %t0 has 1 sides and needs a next"},
 		{"GateTakesASide", lastGatePlan, func(p *AssignPlan) { p.Gate().Cond = 2 }, "gate takes %t2 where its condition binds %t0"},
