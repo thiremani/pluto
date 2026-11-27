@@ -665,18 +665,7 @@ fsHeap = fsL > "zzz" || (fsL ⊕ "?") > "a" && fsR
 _ = sl > "zzz" || a > 0 && (sl ⊕ "?")
 "FirstLastDiscarded: -sl"
 
-# A value nothing takes is only tested, and yields wherever it ran: the &&
-# inside the || ends in 5, so the || yields and the outer && takes 7.
-teA = (a > 2 && 5 || b > 5) && 7
-"TestedValueYields: -teA"
-
 # An || that ends an && that is itself a side of an ||: its second side
 # yields, so the && did, and the outer fallback does not run.
 nfA = a > 2 && (b > 5 || Loud(1) > 0) || Loud(2)
 "NestedFirstSecondYields: -nfA"
-
-# An || that is only tested yields where its last side does, and a plain
-# value always yields, a zero included: the inner || gives 0, so the && around
-# it yields and the outer && takes 7.
-tfA = ((a > 0 && (a < 0 || 0)) || a < 0) && 7
-"TestedFallbackYields: -tfA"

@@ -1537,6 +1537,7 @@ func TestLogicalChainGrouping(t *testing.T) {
 	const andMsg = "logical AND in value position requires a conditional left operand"
 	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
 	const orNote = " (|| binds tighter than arithmetic)"
+	const unusedMsg = "logical AND whose value is never used requires a conditional last operand, but its last operand is "
 	cases := []struct {
 		name   string
 		script string
@@ -1558,6 +1559,17 @@ func TestLogicalChainGrouping(t *testing.T) {
 		{"AndConditionsGroupedRight", "n = 1\nx = (n > 0) && ((n > 1) && 8)\nx", "", 0},
 		{"OrConditionsGroupedLeft", "n = 1\nx = ((n > 0) || (n > 1)) || 8\nx", "", 0},
 		{"OrConditionsGroupedRight", "n = 1\nx = (n > 0) || ((n > 1) || 8)\nx", "", 0},
+
+		// An && whose value is never used, in a gate or before another &&'s
+		// last operand, must end in a condition or a range, however its chain
+		// is grouped; the && before that operand is reported.
+		{"UnusedAndEndsInValue", "n = 1\nx = (n > 0 && 5 || n > 1) && 7\nx", unusedMsg + "5", 12},
+		{"UnusedAndGroupedRight", "n = 1\nx = (n > 0 && (n > 1 && 5) || n > 2) && 7\nx", unusedMsg + "5", 22},
+		{"UnusedAndEndsInFallback", "n = 1\nx = ((n > 0 && (n < 0 || 0)) || n < 0) && 7\nx", unusedMsg + "((n < 0) || 0)", 13},
+		{"UnusedAndEndsInRead", "arr = [1 2]\nx = (arr[0] > 0 && arr[9] || arr[1] > 0) && 7\nx", unusedMsg + "arr[9]", 17},
+		{"UnusedAndInGate", "n = 1\nx = n > 9 || n > 0 && n 5\nx", unusedMsg + "n", 20},
+		{"UsedAndEndsInValue", "n = 1\nx = n > 0 && 5 || 7\nx", "", 0},
+		{"UnusedAndEndsInRange", "n = 1\nr = 0:3\nc = [(n > 0 && r || n > 9) && 7]\nc", "", 0},
 	}
 
 	for _, tc := range cases {

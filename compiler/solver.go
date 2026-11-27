@@ -780,6 +780,7 @@ func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	defer func() { ts.InValueExpr = savedInValueExpr }()
 
 	ts.TypeExpression(stmt.Expression, true)
+	ts.validateTestedAnds(stmt.Expression, false)
 }
 
 // ensureScalarCallVariant ensures the scalar variant of a function exists.
@@ -967,6 +968,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	for _, expr := range stmt.Condition {
 		condTypes := ts.TypeExpression(expr, true)
 		ts.validateStatementCondition(expr, condTypes)
+		ts.validateTestedAnds(expr, true)
 	}
 
 	condRanges := conditionRanges(ts.ExprCache, ts.FuncNameMangled, stmt.Condition)
@@ -979,6 +981,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	vars := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
+		ts.validateTestedAnds(expr, false)
 		ts.resolveBareRangeAssignment(expr, exprTypes, len(stmt.Condition) > 0)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
 		// A target copies or takes over a binding's stored value, so it stores
@@ -2097,6 +2100,50 @@ func lastAndOperand(expr ast.Expression) ast.Expression {
 		return lastAndOperand(and.Right)
 	}
 	return expr
+}
+
+// finalAnd returns the && of and's chain whose right side is the chain's last
+// operand.
+func finalAnd(and *ast.InfixExpression) *ast.InfixExpression {
+	if right, ok := ast.IsLogicalAnd(and.Right); ok {
+		return finalAnd(right)
+	}
+	return and
+}
+
+// validateTestedAnds holds the last operand of an && whose value is never
+// used, only whether it yields, to the rule its other operands follow: it
+// must be able to fail, or it decides nothing, as 5 does in
+// (a > 2 && 5 || b > 5) && 7. A range there drives iteration, as a range
+// driver does in a gate. tested says only whether expr yields is used.
+func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
+	if and, ok := ast.IsLogicalAnd(expr); ok {
+		sides := lastSides(expr)
+		for _, side := range sides[:len(sides)-1] {
+			ts.validateTestedAnds(side, true)
+		}
+
+		final := finalAnd(and)
+		ranged := ts.ExprCache[key(ts.FuncNameMangled, final.Right)].HasRanges
+		if tested && !ranged && !ts.expressionCanFail(final.Right) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: final.Token,
+				Msg:   fmt.Sprintf("logical AND whose value is never used requires a conditional last operand, but its last operand is %s", final.Right),
+			})
+		}
+		ts.validateTestedAnds(final.Right, tested)
+		return
+	}
+
+	if or, ok := ast.IsLogicalOr(expr); ok {
+		ts.validateTestedAnds(or.Left, tested)
+		ts.validateTestedAnds(or.Right, tested)
+		return
+	}
+
+	for _, child := range ast.ExprChildren(expr) {
+		ts.validateTestedAnds(child, false)
+	}
 }
 
 // countInvalid reports whether expr's count is invalid.
