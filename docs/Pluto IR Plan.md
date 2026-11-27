@@ -2080,10 +2080,13 @@ A node no mapping takes from is only tested, whatever its kind: every node of
 a gate's condition, and every node of a side before the final one of a
 `last`. What such a node built is released once it ran, with no word after
 the `drop`. An eval can be one, as in `y = (arr[9] || b > 0) && 7`, whose
-read yields where it is in bounds, and in `z = (a > 9 && 5 || b > 0) && 7`,
-whose `5` nothing takes. The parser keeps a plain value out of a gate's
-`&&`, but a gate's `||` may hold both: `x = arr[9] || b > 0 5` and
-`x = b > 9 || arr[1] > 0 && k 5` are gates today.
+read yields where it is in bounds, or in the gate `x = arr[9] || b > 0 5`.
+Only whether such a node yields is read, so it must be able to fail or drive
+a range (decided 2026-11-27): the solver rejects an `&&` whose value is never
+used and whose last operand is no condition, as the `5` in
+`z = (a > 9 && 5 || b > 0) && 7` and the `k` in
+`x = b > 9 || arr[1] > 0 && k 5`, which compiled before this slice, and the
+validator rejects an eval a plan only tests that cannot fail.
 
 A `last` supplies its value from its final side, so where that side is a
 `first` each `eval` or `check` the `first` can take its value from can supply
@@ -2101,8 +2104,9 @@ reject. It holds a `first` that is a side of a `last` to a `first`'s own
 rules, checks that it binds no outcome, and checks that it fits the `last`'s
 type where it is the final side; a side before the final one is a check or a
 `first` that can fail, never an eval, since the `next` after a side that
-cannot fail would always run. One rule went: a gate's `last` no longer has to end
-in a check, since a `last` that is only tested may end in an eval.
+cannot fail would always run. One rule went: a gate's `last` no longer has to
+end in a check, since it may end in a `first`; in its place, every eval a
+plan only tests must be able to fail.
 
 The lowerer runs a node that is only tested for its bit alone, releasing
 what it built, with a `first`'s or a `last`'s bit in memory that is cleared
@@ -2129,12 +2133,12 @@ as in `(a > 9 || 4) > 3 && 7`; a side of several slots; and an `||` or an
 
 Pinned by `TestPlanGoldenNestedSelections`, `TestPlanRouterRejections` and
 `TestPlanLastReleasesFinalSideWhereItRan`, on hand-built plans by `pir`'s
-`TestElaborate`, `TestValidateAccepts`, `TestValidateNestedFirstRejects` and
-`TestRenderNestedFirst`, and at run time by `cond/logical_ops`
-(`TestedValueYields`, `TestedFallbackYields`, `NestedFirstSecondYields`) and
-the statements the
-fixtures already held, among them `cond/logical_ops`'s `CvOrTrue` and
-`NstOrGatesAnd` and `cond/value_cond_expr`.
+`TestElaborate`, `TestValidateAccepts`, `TestValidateNestedFirstRejects`,
+`TestValidateLastRejects` and `TestRenderNestedFirst`, by the solver's
+`TestLogicalChainGrouping`, and at run time by `cond/logical_ops`
+(`NestedFirstSecondYields`) and the statements the fixtures already held,
+among them `cond/logical_ops`'s `CvOrTrue` and `NstOrGatesAnd` and
+`cond/value_cond_expr`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
