@@ -434,7 +434,7 @@ func resolverOf(node Node, id OutcomeID, by resolver) (resolver, bool) {
 	if bound, binds := result(node); binds && bound == id {
 		return by, true
 	}
-	if sidesOf(node) == nil {
+	if _, isSupplier := node.(Supplier); isSupplier {
 		return by, false
 	}
 

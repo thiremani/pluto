@@ -202,15 +202,15 @@ func Suppliers(node Node) []Supplier {
 	return []Supplier{node.(Supplier)}
 }
 
-// leaves returns every eval and check of node, in the order they run.
+// leaves returns every eval and check of node, in the order they run: an eval
+// or a check is its own, and a first or a last has those of its sides.
 func leaves(node Node) []Supplier {
-	sides := sidesOf(node)
-	if sides == nil {
-		return []Supplier{node.(Supplier)}
+	if sup, isSupplier := node.(Supplier); isSupplier {
+		return []Supplier{sup}
 	}
 
 	var sups []Supplier
-	for _, side := range sides {
+	for _, side := range sidesOf(node) {
 		sups = append(sups, leaves(side)...)
 	}
 	return sups
