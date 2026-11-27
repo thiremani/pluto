@@ -175,3 +175,4 @@ FirstLastDiscarded: hello
 TestedValueYields: 7
 called 1
 NestedFirstSecondYields: 1
+TestedFallbackYields: 7
