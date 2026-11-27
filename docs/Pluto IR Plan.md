@@ -1631,11 +1631,11 @@ time by `array/oob_skip`, `discard` and `mem/leak/oob_paths`.
 
 **Second slice landed — the fallback after a checked read.** `x = arr[oob] ||
 -1` assigns `-1` (matrix row 7b). The solver's rule is the fallback's own
-(`fallsBackFromRead`): an index read without a range fails the left side of
+(`canFailByRead`): an index read without a range fails the left side of
 `||` wherever a condition would, so a wrapped read `(arr[i] + 1) || -1` and a
 chain `a[i] || b[j] || -1` are accepted. `conditionPropagates` is unchanged,
-and a read still gates no statement and no `&&`. A left side only a ranged
-read can fail (row 7e) stays an error.
+and a read still gates no statement and is no `&&`'s left operand. A left
+side only a ranged read can fail (row 7e) stays an error.
 
 A value that is such a `||` plans as a `first` (§4, §12), in an assignment,
 when each of its sides is an expression an eval admits. A chain is one

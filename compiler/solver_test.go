@@ -1570,6 +1570,14 @@ func TestLogicalChainGrouping(t *testing.T) {
 		{"UnusedAndInGate", "n = 1\nx = n > 9 || n > 0 && n 5\nx", unusedMsg + "n", 20},
 		{"UsedAndEndsInValue", "n = 1\nx = n > 0 && 5 || 7\nx", "", 0},
 		{"UnusedAndEndsInRead", "arr = [1 2]\nx = (arr[0] > 0 && arr[9] || arr[1] > 0) && 7\nx", "", 0},
+
+		// A range the last operand drives keeps it, a format width's
+		// included. A root whose typing reported an error is not checked, so
+		// that error stands alone: an undefined name, or a table whose short
+		// row left a cell untyped.
+		{"UnusedAndEndsInFormatRange", "n = 1\nr = 0:3\nc = [((n > 0 && (\"-n%(-r)d\" ⊕ \"x\")) || \"b\" > \"z\") && 7]\nc", "", 0},
+		{"UnusedAndOverUndefinedName", "n = 1\nx = (n > 0 && (m > 0) || n > 1) && 7\nx", "undefined identifier: m", 16},
+		{"UnusedAndInMalformedTable", "n = 1\nt = [\n  : X Y\n    (n > 0 && 3)\n]\nt", "bracket literal row 1 has 1 cells, expected 2", 5},
 		{"UnusedAndEndsInRange", "n = 1\nr = 0:3\nc = [(n > 0 && r || n > 9) && 7]\nc", "", 0},
 	}
 
