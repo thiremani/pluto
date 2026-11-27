@@ -264,7 +264,7 @@ func (c *Compiler) planExprEligible(expr ast.Expression, reads bool) bool {
 		return false
 	}
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info.HasRanges || len(info.Ranges) > 0 || len(info.CollectRanges) > 0 {
+	if info.HasRangeDrivers() || len(info.CollectRanges) > 0 {
 		return false
 	}
 	for _, m := range info.CompareModes {
@@ -635,21 +635,11 @@ func (c *Compiler) lowerTested(node pir.Node, tested []pir.OutcomeRef) llvm.Valu
 	return src.yielded
 }
 
-// storeYielded records in flag whether a node yielded; a nil bit is a node
-// that always yields, which memory holds as true.
-func (c *Compiler) storeYielded(yielded, flag llvm.Value) {
-	i1 := Int{Width: 1}
-	if yielded.IsNil() {
-		yielded = llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
-	}
-	c.createStore(yielded, flag, i1)
-}
-
 // lowerTestedFirst runs the first of sides into yielded and, where it failed,
 // the sides after it.
 func (c *Compiler) lowerTestedFirst(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
 	held := c.lowerTested(sides[0], tested)
-	c.storeYielded(held, yielded)
+	c.createStore(held, yielded, Int{Width: 1})
 	if len(sides) == 1 {
 		return
 	}
@@ -664,7 +654,7 @@ func (c *Compiler) lowerTestedFirst(sides []pir.Node, tested []pir.OutcomeRef, y
 func (c *Compiler) lowerTestedLast(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
 	held := c.lowerTested(sides[0], tested)
 	if len(sides) == 1 {
-		c.storeYielded(held, yielded)
+		c.createStore(held, yielded, Int{Width: 1})
 		return
 	}
 
@@ -891,6 +881,16 @@ func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, sou
 	c.withCondBranch(c.lowerTested(sides[0], tested), "last_next", func() {
 		c.lowerLastSides(sides[1:], tested, sources, flags)
 	}, nil)
+}
+
+// storeYielded records in flag whether a node yielded; a nil bit is a node
+// that always yields, which memory holds as true.
+func (c *Compiler) storeYielded(yielded, flag llvm.Value) {
+	i1 := Int{Width: 1}
+	if yielded.IsNil() {
+		yielded = llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
+	}
+	c.createStore(yielded, flag, i1)
 }
 
 // lowerStaged runs an eval or a check inside a first or a last, stages its
