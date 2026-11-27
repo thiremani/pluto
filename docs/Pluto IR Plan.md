@@ -2131,7 +2131,8 @@ Pinned by `TestPlanGoldenNestedSelections`, `TestPlanRouterRejections` and
 `TestPlanLastReleasesFinalSideWhereItRan`, on hand-built plans by `pir`'s
 `TestElaborate`, `TestValidateAccepts`, `TestValidateNestedFirstRejects` and
 `TestRenderNestedFirst`, and at run time by `cond/logical_ops`
-(`TestedValueYields`, `NestedFirstSecondYields`) and the statements the
+(`TestedValueYields`, `TestedFallbackYields`, `NestedFirstSecondYields`) and
+the statements the
 fixtures already held, among them `cond/logical_ops`'s `CvOrTrue` and
 `NstOrGatesAnd` and `cond/value_cond_expr`.
 
