@@ -614,9 +614,10 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 
 // lowerTested runs a node whose outcome is only tested, a gate's condition or
 // a side before the final one of a last, and returns the bit that says
-// whether it yielded. Nothing takes what its evals and checks built, so each
-// releases that once it ran. A first or a last runs its sides on paths of
-// their own, so its bit sits in memory, cleared before they part.
+// whether it yielded, nil for a node that always does. Nothing takes what its
+// evals and checks built, so each releases that once it ran. A first or a
+// last runs its sides on paths of their own, so its bit sits in memory,
+// cleared before they part.
 func (c *Compiler) lowerTested(node pir.Node, tested []pir.OutcomeRef) llvm.Value {
 	switch n := node.(type) {
 	case *pir.First:
@@ -631,17 +632,24 @@ func (c *Compiler) lowerTested(node pir.Node, tested []pir.OutcomeRef) llvm.Valu
 
 	src := c.lowerSource(node.(pir.Supplier))
 	c.dropSourceSlots(tested, src, "check_free")
-	if src.yielded.IsNil() {
-		return llvm.ConstInt(c.mapToLLVMType(Int{Width: 1}), 1, false)
-	}
 	return src.yielded
+}
+
+// storeYielded records in flag whether a node yielded; a nil bit is a node
+// that always yields, which memory holds as true.
+func (c *Compiler) storeYielded(yielded, flag llvm.Value) {
+	i1 := Int{Width: 1}
+	if yielded.IsNil() {
+		yielded = llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
+	}
+	c.createStore(yielded, flag, i1)
 }
 
 // lowerTestedFirst runs the first of sides into yielded and, where it failed,
 // the sides after it.
 func (c *Compiler) lowerTestedFirst(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
 	held := c.lowerTested(sides[0], tested)
-	c.createStore(held, yielded, Int{Width: 1})
+	c.storeYielded(held, yielded)
 	if len(sides) == 1 {
 		return
 	}
@@ -656,7 +664,7 @@ func (c *Compiler) lowerTestedFirst(sides []pir.Node, tested []pir.OutcomeRef, y
 func (c *Compiler) lowerTestedLast(sides []pir.Node, tested []pir.OutcomeRef, yielded llvm.Value) {
 	held := c.lowerTested(sides[0], tested)
 	if len(sides) == 1 {
-		c.createStore(held, yielded, Int{Width: 1})
+		c.storeYielded(held, yielded)
 		return
 	}
 
@@ -895,19 +903,12 @@ func (c *Compiler) lowerStaged(n pir.Supplier, slot string, flags sideFlags) low
 	c.createStore(src.out[0].Val, mem, src.out[0].Type)
 	src.out = []*Symbol{{Val: mem, Type: Ptr{Elem: src.out[0].Type}}}
 
-	ok := llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
 	if !flags.ran.IsNil() {
-		c.createStore(ok, flags.ran, i1)
+		c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), flags.ran, i1)
 	}
-	if flags.yielded.IsNil() {
-		return src
+	if !flags.yielded.IsNil() {
+		c.storeYielded(src.yielded, flags.yielded)
 	}
-
-	held := src.yielded
-	if held.IsNil() {
-		held = ok
-	}
-	c.createStore(held, flags.yielded, i1)
 	return src
 }
 
