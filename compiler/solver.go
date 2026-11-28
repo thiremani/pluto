@@ -116,7 +116,7 @@ func (info *ExprInfo) HasCondExpr() bool {
 // HasRangeDrivers reports whether a range drives the expression. HandleRanges
 // records in Ranges, once the root is typed, every driver under a node it
 // visits, a format width's included; HasRanges, which typing sets, also marks
-// one under a dot, whose left side HandleRanges does not visit yet.
+// one where it does not go: under a dot, or in a block literal's cells.
 func (info *ExprInfo) HasRangeDrivers() bool {
 	return info.HasRanges || len(info.Ranges) > 0
 }
@@ -660,9 +660,20 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 // formatting markers so interpolation follows the same driver semantics as an
 // ordinary identifier expression.
 func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges []*RangeInfo, rew ast.Expression) {
-	// A main marker formats its value, so a bare Range there stays a
-	// descriptor. Width and precision operands are consumed as numbers, which
-	// makes a named Range in a specifier an iteration driver.
+	ranges = ts.formatRanges(lit)
+	info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
+	info.Ranges = append([]*RangeInfo(nil), ranges...)
+	info.HasRanges = len(ranges) > 0
+	info.Rewrite = lit
+	return ranges, lit
+}
+
+// formatRanges returns the ranges lit's format specifiers name. A main marker
+// formats its value, so a bare Range there stays a descriptor. Width and
+// precision operands are consumed as numbers, which makes a named Range in a
+// specifier an iteration driver.
+func (ts *TypeSolver) formatRanges(lit *ast.StringLiteral) []*RangeInfo {
+	var ranges []*RangeInfo
 	_, specs := formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined)
 	for _, name := range specs {
 		typ, ok := ts.GetIdentifier(name)
@@ -671,12 +682,7 @@ func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges 
 		}
 		ranges = mergeUses(ranges, []*RangeInfo{{Name: name}})
 	}
-
-	info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
-	info.Ranges = append([]*RangeInfo(nil), ranges...)
-	info.HasRanges = len(ranges) > 0
-	info.Rewrite = lit
-	return ranges, lit
+	return ranges
 }
 
 func rangeDriverNamed(ranges []*RangeInfo, name string) bool {
@@ -2117,9 +2123,9 @@ func finalAnd(and *ast.InfixExpression) *ast.InfixExpression {
 
 // typeRootExpression types one root of a statement, a condition, a value or a
 // print's arguments, and where that reported no error, so that every node in
-// it is typed and its range drivers are recorded, rejects each && in it whose
-// value is never used and whose last operand can never fail. tested says the
-// root's own value is never used, as a condition's is.
+// it is typed, rejects each && in it whose value is never used and whose last
+// operand can never fail. tested says the root's own value is never used, as a
+// condition's is.
 func (ts *TypeSolver) typeRootExpression(expr ast.Expression, tested bool) []Type {
 	errs := len(ts.Errors)
 	types := ts.TypeExpression(expr, true)
@@ -2132,9 +2138,9 @@ func (ts *TypeSolver) typeRootExpression(expr ast.Expression, tested bool) []Typ
 // validateTestedAnds holds the last operand of an && whose value is never
 // used, only whether it yields, to being able to fail: a condition, or a read,
 // which fails where its index is out of bounds. One that always yields decides
-// nothing, as 5 does in (a > 2 && 5 || b > 5) && 7, unless it drives a range,
-// a format width's included, as a range driver does in a gate. tested says
-// only whether expr yields is used.
+// nothing, as 5 does in (a > 2 && 5 || b > 5) && 7, unless it reads a range,
+// as a range driver does in a gate. tested says only whether expr yields is
+// used.
 func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 	if and, ok := ast.IsLogicalAnd(expr); ok {
 		sides := lastSides(expr)
@@ -2143,7 +2149,7 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 		}
 
 		final := finalAnd(and)
-		ranged := ts.ExprCache[key(ts.FuncNameMangled, final.Right)].HasRangeDrivers()
+		ranged := ts.readsRange(final.Right)
 		canFail := ts.expressionCanFail(final.Right) || ts.canFailByRead(final.Right)
 		if tested && !ranged && !canFail {
 			ts.Errors = append(ts.Errors, &token.CompileError{
@@ -2164,6 +2170,26 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 	for _, child := range ast.ExprChildren(expr) {
 		ts.validateTestedAnds(child, false)
 	}
+}
+
+// readsRange reports whether expr reads a range that no collector inside it
+// consumes. Typing marks such a read in HasRanges, except one a format width
+// names, which only HandleRanges records, and only where it walks: not in a
+// block literal's cells.
+func (ts *TypeSolver) readsRange(expr ast.Expression) bool {
+	if ts.ExprCache[key(ts.FuncNameMangled, expr)].HasRanges {
+		return true
+	}
+
+	switch e := expr.(type) {
+	case *ast.ArrayLiteral:
+		if isInlineArrayCollector(e) {
+			return false
+		}
+	case *ast.StringLiteral:
+		return len(ts.formatRanges(e)) > 0
+	}
+	return slices.ContainsFunc(ast.ExprChildren(expr), ts.readsRange)
 }
 
 // countInvalid reports whether expr's count is invalid.
