@@ -113,9 +113,10 @@ func (info *ExprInfo) HasCondExpr() bool {
 	return false
 }
 
-// HasRangeDrivers reports whether a range drives the expression. Typing marks
-// most drivers in HasRanges; HandleRanges records the rest in Ranges once the
-// root is typed, as a format width's.
+// HasRangeDrivers reports whether a range drives the expression. HandleRanges
+// records in Ranges, once the root is typed, every driver under a node it
+// visits, a format width's included; HasRanges, which typing sets, also marks
+// one under a dot, whose left side HandleRanges does not visit yet.
 func (info *ExprInfo) HasRangeDrivers() bool {
 	return info.HasRanges || len(info.Ranges) > 0
 }
