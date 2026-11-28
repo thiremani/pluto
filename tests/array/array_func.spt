@@ -55,6 +55,15 @@ gatedTableColumn = (1 > 0 && Identity([
 ])).Name > "K"
 "GatedTableColumn: -gatedTableColumn"
 
+# A per-slot commit releases a gated table once, after a field read off it
+# consumed it.
+gatedTableSlot, gatedTableProduct = SumAndProduct(1, 2) + ((1 > 0 && Identity([
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+])).Score[0] > 5)
+"GatedTableSlots: -gatedTableSlot -gatedTableProduct"
+
 conditionalTable = [
   : Name Score
     "Grace" 30

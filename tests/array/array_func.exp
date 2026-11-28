@@ -23,6 +23,7 @@ EmptyTableIdentity: [
 ]
 TableCallColumn: [10 12]
 GatedTableColumn: ["" "Lin"]
+GatedTableSlots: 13 12
 ConditionalTableBefore: [
   : Name Score
     "Grace" 30
