@@ -161,6 +161,18 @@ rejected like `(n > 0) && (7 && 8)`, since `7` is a value where a condition
 belongs. An `||` chain follows the same rule, which checking each `||` on its
 own already gives, since an `||` can fail only when its last fallback can.
 
+Where nothing uses a chain's value, in a statement's condition or in an
+operand of another `&&` before its last, the last operand only gates too, so
+it must be able to fail as the others must (decided 2026-11-27): in
+`(a > 2 && 5 || b > 5) && 7` the `&&` yields exactly where `a > 2` does, so
+the `5` decides nothing, and the chain is rejected. So are
+`((a > 0 && (a < 0 || 0)) || a < 0) && 7`, whose `|| 0` always yields, and
+the gate `x = b > 9 || n > 0 && n 5`. A read may end such a chain, though it
+is still no `&&` left side: it fails where its index is out of bounds, so
+`(n > 0 && arr[9] || b > 0) && 7` asks whether index 9 exists. So may a range:
+it runs the statement once per element, as a range driver does in a gate, so
+`[(a > 2 && r || b > 9) && 7]` holds one `7` for each element of `r`.
+
 ## Fallback `||` resolves the failure
 
 `||` supplies a chosen value when its left side fails to yield. Its left

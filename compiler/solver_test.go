@@ -1537,6 +1537,7 @@ func TestLogicalChainGrouping(t *testing.T) {
 	const andMsg = "logical AND in value position requires a conditional left operand"
 	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
 	const orNote = " (|| binds tighter than arithmetic)"
+	const unusedMsg = "logical AND whose value is never used requires a conditional last operand, but its last operand is "
 	cases := []struct {
 		name   string
 		script string
@@ -1558,6 +1559,28 @@ func TestLogicalChainGrouping(t *testing.T) {
 		{"AndConditionsGroupedRight", "n = 1\nx = (n > 0) && ((n > 1) && 8)\nx", "", 0},
 		{"OrConditionsGroupedLeft", "n = 1\nx = ((n > 0) || (n > 1)) || 8\nx", "", 0},
 		{"OrConditionsGroupedRight", "n = 1\nx = (n > 0) || ((n > 1) || 8)\nx", "", 0},
+
+		// An && whose value is never used, in a gate or before another &&'s
+		// last operand, must end in an operand that can fail, a read included,
+		// or in a range, however its chain is grouped; the && before that
+		// operand is reported.
+		{"UnusedAndEndsInValue", "n = 1\nx = (n > 0 && 5 || n > 1) && 7\nx", unusedMsg + "5", 12},
+		{"UnusedAndGroupedRight", "n = 1\nx = (n > 0 && (n > 1 && 5) || n > 2) && 7\nx", unusedMsg + "5", 22},
+		{"UnusedAndEndsInFallback", "n = 1\nx = ((n > 0 && (n < 0 || 0)) || n < 0) && 7\nx", unusedMsg + "((n < 0) || 0)", 13},
+		{"UnusedAndInGate", "n = 1\nx = n > 9 || n > 0 && n 5\nx", unusedMsg + "n", 20},
+		{"UsedAndEndsInValue", "n = 1\nx = n > 0 && 5 || 7\nx", "", 0},
+		{"UnusedAndEndsInRead", "arr = [1 2]\nx = (arr[0] > 0 && arr[9] || arr[1] > 0) && 7\nx", "", 0},
+
+		// A range the last operand reads keeps it, a format width's included,
+		// even in a block literal's cells, which range discovery does not
+		// walk. A root whose typing reported an error is not checked, so that
+		// error stands alone: an undefined name, or a table whose short row
+		// left a cell untyped.
+		{"UnusedAndEndsInFormatRange", "n = 1\nr = 0:3\nc = [((n > 0 && (\"-n%(-r)d\" ⊕ \"x\")) || \"b\" > \"z\") && 7]\nc", "", 0},
+		{"UnusedAndEndsInFormatRangeInBlock", "n = 1\nr = 1:4\nc = [([\n    [(n > 0 && \"-n%(-r)d\" || \"b\" > \"z\") && 7]\n][0][0][0]) + r]\nc", "", 0},
+		{"UnusedAndOverUndefinedName", "n = 1\nx = (n > 0 && (m > 0) || n > 1) && 7\nx", "undefined identifier: m", 16},
+		{"UnusedAndInMalformedTable", "n = 1\nt = [\n  : X Y\n    (n > 0 && 3)\n]\nt", "bracket literal row 1 has 1 cells, expected 2", 5},
+		{"UnusedAndEndsInRange", "n = 1\nr = 0:3\nc = [(n > 0 && r || n > 9) && 7]\nc", "", 0},
 	}
 
 	for _, tc := range cases {
@@ -1579,6 +1602,41 @@ func TestLogicalChainGrouping(t *testing.T) {
 			require.Equal(t, tc.msg, ts.Errors[0].Msg)
 			require.Equal(t, 2, ts.Errors[0].Token.Line)
 			require.Equal(t, tc.column, ts.Errors[0].Token.Column)
+		})
+	}
+}
+
+// A range inside an array literal in the last operand of an && whose value is
+// never used drives nothing: a collector consumes it, and range discovery does
+// not enter a block literal's cells. The operand reads none, and the &&
+// decides nothing.
+func TestUnusedAndEndsInCallOverArrayLiteral(t *testing.T) {
+	const unusedMsg = "logical AND whose value is never used requires a conditional last operand, but its last operand is "
+	cases := []struct {
+		name    string
+		script  string
+		operand string
+	}{
+		{"Collector", "n = 1\nr = 0:3\nx = (n > 0 && Head([r]) || n > 9) && 7\nx", "Head([r])"},
+		{"BlockCell", "n = 1\nr = 1:4\nx = (n > 0 && Take([\n    \"-n%(-r)d\"\n]) || n > 9) && 7\nx", "Take([\n    \"-n%(-r)d\"\n])"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			code := mustParseCode(t, "s = Head(a)\n    s = 0\n    s = a[0]\n\nt = Take(a)\n    _ = a\n    t = 3")
+			cc := NewCodeCompiler(ctx, tc.name, "", code)
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, unusedMsg+tc.operand, ts.Errors[0].Msg)
+			require.Equal(t, 3, ts.Errors[0].Token.Line)
+			require.Equal(t, 12, ts.Errors[0].Token.Column)
 		})
 	}
 }

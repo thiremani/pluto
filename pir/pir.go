@@ -16,8 +16,9 @@ type Type interface {
 type OutcomeID int
 
 // NoOutcome is the result of a first or a last that binds none: one nested as
-// a side of a first, whose value reaches a mapping through the first's own
-// outcome. Its name would be a name nothing could reference, so it has none.
+// a side of the other, which neither a mapping nor a gate names. Its value
+// reaches a mapping through the outcome of the selection around it, so its
+// name would be a name nothing could reference, and it has none.
 const NoOutcome OutcomeID = -1
 
 // Ownership is an outcome slot's annotation (plan §8).
@@ -57,12 +58,14 @@ type Eval struct {
 // MayFail reports an eval a failed check can keep from yielding.
 func (ev *Eval) MayFail() bool { return ev.Checked }
 
-// First is a value-position || (plan §4): its sides run in order until one
-// yields, and that side's value is its outcome. A side before the last falls
-// back to the next where it fails; where the last skips, the outcome skips.
-// A side is an eval, a check, or a last — an && of its own, which binds no
-// outcome. Each side yields one slot, and a chain of || is one First however
-// it is grouped. Its sides take the outcome IDs after Result.
+// First is an || (plan §4), in value position or over a gate's conditions: its
+// sides run in order until one yields, and that side's value is its outcome.
+// A side before the last falls back to the next where it fails; where the last
+// skips, the outcome skips. A side is an eval, a check, or a last — an && of
+// its own, which binds no outcome. Each side yields one slot, and a chain of
+// || is one First however it is grouped. Its sides take the outcome IDs after
+// Result, or the next IDs in execution order where it is a side of a last and
+// Result is NoOutcome.
 type First struct {
 	Result OutcomeID
 	Type   Type
@@ -77,19 +80,20 @@ func (f *First) last() Node { return f.Sides[len(f.Sides)-1] }
 
 // Last is an && (plan §4), in value position or over a gate's conditions: its
 // sides run in order while each yields, and its outcome is its final side's,
-// yielding where every side did. A side before the final one is a check,
-// which is only tested, and the final one is a check or an eval. Each side
-// has one slot, and a chain of && is one Last however it is grouped. Its
-// sides take the outcome IDs after Result, or the next IDs in execution order
-// where it is a side of a first and Result is NoOutcome.
+// yielding where every side did. A side before the final one is only tested:
+// a check, or a first — an || of its own, which binds no outcome. The final
+// one is a check, an eval or a first. Each side has one slot, and a chain of
+// && is one Last however it is grouped. Its sides take the outcome IDs after
+// Result, or the next IDs in execution order where it is a side of a first
+// and Result is NoOutcome.
 type Last struct {
 	Result OutcomeID
 	Type   Type
 	Sides  []Node
 }
 
-// MayFail reports a last that can fail to yield: every one, since its checks
-// may not hold.
+// MayFail reports a last that can fail to yield: every one, since a side
+// before its final one may not yield.
 func (l *Last) MayFail() bool { return true }
 
 // final returns the side whose outcome is the last's own.
@@ -97,8 +101,8 @@ func (l *Last) final() Node { return l.Sides[len(l.Sides)-1] }
 
 // Check evaluates one comparison (plan §4): its outcome is the left operand,
 // and it yields where the comparison holds. A failed access in an operand
-// skips it as a failed comparison does. It has one slot. A gate only tests
-// the outcome, and a mapping takes it as a value.
+// skips it as a failed comparison does. It has one slot. A mapping takes the
+// outcome as a value; where none does, it is only tested.
 type Check struct {
 	Result  OutcomeID
 	Expr    *ast.InfixExpression
@@ -114,11 +118,11 @@ func (ch *Check) MayFail() bool { return true }
 // whose value is its left operand.
 type Supplier interface {
 	Outcome
-	slot(i int) Slot
+	slots() []Slot
 }
 
-func (ev *Eval) slot(i int) Slot  { return ev.Slots[i] }
-func (ch *Check) slot(i int) Slot { return ch.Slots[i] }
+func (ev *Eval) slots() []Slot  { return ev.Slots }
+func (ch *Check) slots() []Slot { return ch.Slots }
 
 // Gate admits or rejects the statement for its whole region (plan §4, §9):
 // Body runs where the outcome Cond names yielded, and no mapping commits where
@@ -142,16 +146,16 @@ func (*Last) node()  {}
 func (*Gate) node()  {}
 
 // Outcome is a node whose outcome a mapping can take: an eval, a check, a
-// first or a last. A gate is no outcome, and a last nested as a side of a
-// first binds none, though its value still reaches a mapping. MayFail reports
-// one a failure can keep from yielding, wherever it sits.
+// first or a last. A gate is no outcome, and a first or a last nested as a
+// side of the other binds none, though its value still reaches a mapping.
+// MayFail reports one a failure can keep from yielding, wherever it sits.
 type Outcome interface {
 	Node
 	MayFail() bool
 }
 
-// result returns the outcome a node binds: none for a gate, or for a last
-// that is a side of a first.
+// result returns the outcome a node binds: none for a gate, or for a first or
+// a last that is a side of the other.
 func result(node Node) (OutcomeID, bool) {
 	switch n := node.(type) {
 	case *Eval:
@@ -181,13 +185,35 @@ func Outcomes(node Node) int {
 	return total
 }
 
-// supplier returns the node whose value node hands on: an eval or a check
-// supplies its own, and a last supplies its final side's.
-func supplier(node Node) Supplier {
-	if l, isLast := node.(*Last); isLast {
-		return supplier(l.final())
+// Suppliers returns the nodes a mapping can take node's value from, in the
+// order they run: an eval or a check supplies its own, a first supplies each
+// side's, and a last its final side's.
+func Suppliers(node Node) []Supplier {
+	switch n := node.(type) {
+	case *First:
+		var sups []Supplier
+		for _, side := range n.Sides {
+			sups = append(sups, Suppliers(side)...)
+		}
+		return sups
+	case *Last:
+		return Suppliers(n.final())
 	}
-	return node.(Supplier)
+	return []Supplier{node.(Supplier)}
+}
+
+// leaves returns every eval and check of node, in the order they run: an eval
+// or a check is its own, and a first or a last has those of its sides.
+func leaves(node Node) []Supplier {
+	if sup, isSupplier := node.(Supplier); isSupplier {
+		return []Supplier{sup}
+	}
+
+	var sups []Supplier
+	for _, side := range sidesOf(node) {
+		sups = append(sups, leaves(side)...)
+	}
+	return sups
 }
 
 // sidesOf returns the sides of a first or a last, and none for any other node.
@@ -302,8 +328,8 @@ const (
 // consumes it as recorded, never rematching by name or position. It commits
 // where its outcome yielded, under a gate only where the gate admitted, and
 // follows OnSkip elsewhere. Transfers holds one entry per node that can
-// supply the value: the outcome's own eval or check, each side of a first in
-// order, or a last's final side.
+// supply the value, as Suppliers lists them: the outcome's own eval or check,
+// each side of a first in order, or a last's final side.
 type Mapping struct {
 	Target    Target
 	Outcome   OutcomeRef
@@ -317,7 +343,7 @@ type Mapping struct {
 // follow every mapping. An OutcomeRef names an eval, a first's side included,
 // or a check.
 type Releases struct {
-	Tested    []OutcomeRef // an owned outcome a check built and nothing takes, released once the check has compared it
+	Tested    []OutcomeRef // an owned outcome nothing takes, which an eval or a check that is only tested built, released once it ran
 	Skipped   []OutcomeRef // what an eval or a check built before it failed, which its binding never took, released only where it failed
 	Discarded []OutcomeRef // an owned outcome mapped to `_`, released where its eval or check ran, whether or not it yielded
 	Replaced  []string     // a binding whose old value is released after every mapping, where the mapping that replaces it committed
@@ -359,8 +385,8 @@ func (p *AssignPlan) Gate() *Gate {
 }
 
 // Condition returns the node whose outcome a gate takes, the first node of a
-// gated region: a check, or a last of checks. It is nil for a statement
-// without a gate.
+// gated region: a check, a last or a first. It is nil for a statement without
+// a gate.
 func (p *AssignPlan) Condition() Node {
 	if p.Gate() == nil {
 		return nil
@@ -368,46 +394,36 @@ func (p *AssignPlan) Condition() Node {
 	return p.Execute[0]
 }
 
-// tests returns the checks whose outcomes are only tested, in the order they
-// run: a gate's condition, then the checks before the final side of each
-// value last, whose final side supplies its value.
-func (p *AssignPlan) tests() []*Check {
-	var checks []*Check
-	switch cond := p.Condition().(type) {
-	case *Check:
-		checks = append(checks, cond)
-	case *Last:
-		checks = appendChecks(checks, cond.Sides)
+// tests returns the evals and checks whose outcomes are only tested, in the
+// order they run: every one in a gate's condition, then those of each value
+// that no mapping takes from.
+func (p *AssignPlan) tests() []Supplier {
+	var tested []Supplier
+	if cond := p.Condition(); cond != nil {
+		tested = leaves(cond)
 	}
 
 	for _, node := range p.Values() {
-		checks = appendTested(checks, node)
+		tested = appendTested(tested, node)
 	}
-	return checks
+	return tested
 }
 
-// appendTested adds the checks of node whose outcomes are only tested: those
-// before the final side of a last, wherever the last sits.
-func appendTested(checks []*Check, node Node) []*Check {
+// appendTested adds the evals and checks of node that are only tested: those
+// of every side before the final one of a last, wherever the last sits.
+func appendTested(tested []Supplier, node Node) []Supplier {
 	switch n := node.(type) {
 	case *Last:
-		return appendChecks(checks, n.Sides[:len(n.Sides)-1])
+		for _, side := range n.Sides[:len(n.Sides)-1] {
+			tested = append(tested, leaves(side)...)
+		}
+		return appendTested(tested, n.final())
 	case *First:
 		for _, side := range n.Sides {
-			checks = appendTested(checks, side)
+			tested = appendTested(tested, side)
 		}
 	}
-	return checks
-}
-
-// appendChecks adds the checks among sides to checks.
-func appendChecks(checks []*Check, sides []Node) []*Check {
-	for _, side := range sides {
-		if ch, isCheck := side.(*Check); isCheck {
-			checks = append(checks, ch)
-		}
-	}
-	return checks
+	return tested
 }
 
 // Values returns the nodes whose outcomes the commit maps: a gate's region,
@@ -426,7 +442,7 @@ type source struct {
 	node Supplier
 }
 
-func (s source) slot() Slot { return s.node.slot(s.ref.Slot) }
+func (s source) slot() Slot { return s.node.slots()[s.ref.Slot] }
 
 // value returns the node among the values that binds outcome id, nil when
 // none does.
@@ -440,36 +456,30 @@ func (p *AssignPlan) value(id OutcomeID) Node {
 }
 
 // sources returns the nodes that can supply ref's value, in the order they
-// run: the outcome's own eval or check, each side of a first, or the final
-// side of a last. It is empty when ref names none of them.
+// run: the outcome's own eval or check, or the suppliers of a first or a last.
+// It is empty when ref names no value.
 func (p *AssignPlan) sources(ref OutcomeRef) []source {
-	switch n := p.value(ref.Outcome).(type) {
-	case Supplier:
-		return []source{{ref: ref, node: n}}
-	case *First:
-		sides := make([]source, len(n.Sides))
-		for i, side := range n.Sides {
-			sides[i] = sourceOf(side)
-		}
-		return sides
-	case *Last:
-		return []source{sourceOf(n)}
+	node := p.value(ref.Outcome)
+	if node == nil {
+		return nil
 	}
-	return nil
-}
+	if sup, isSupplier := node.(Supplier); isSupplier {
+		return []source{{ref: ref, node: sup}}
+	}
 
-// sourceOf is the node a mapping takes node's value from, and the slot it
-// gives.
-func sourceOf(node Node) source {
-	sup := supplier(node)
-	id, _ := result(sup)
-	return source{ref: OutcomeRef{Outcome: id}, node: sup}
+	sups := Suppliers(node)
+	sources := make([]source, len(sups))
+	for i, sup := range sups {
+		id, _ := result(sup)
+		sources[i] = source{ref: OutcomeRef{Outcome: id}, node: sup}
+	}
+	return sources
 }
 
 // maySkip reports a mapping whose own outcome may skip. A mapping takes the
 // outcome of a value, which no fallback follows, so the outcome skips wherever
 // the node that binds it fails: a first through its last side, and a last
-// always, its checks being able to fail. A gate's rejection is no skip of one
+// always, a side before its final one being able to fail. A gate's rejection is no skip of one
 // mapping: it leaves every mapping of the statement unapplied together.
 func (p *AssignPlan) maySkip(m Mapping) bool {
 	return p.value(m.Outcome.Outcome).(Outcome).MayFail()

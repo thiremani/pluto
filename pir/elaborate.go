@@ -57,12 +57,13 @@ func Elaborate(p *AssignPlan) {
 		}
 	}
 
-	// A check that is only tested hands its outcome to nothing, so what it
+	// A node that is only tested hands its outcome to nothing, so what it
 	// built is released.
-	for _, ch := range p.tests() {
-		for i, slot := range ch.Slots {
+	for _, sup := range p.tests() {
+		id, _ := result(sup)
+		for i, slot := range sup.slots() {
 			if slot.Ownership == Owned {
-				releases.Tested = append(releases.Tested, OutcomeRef{Outcome: ch.Result, Slot: i})
+				releases.Tested = append(releases.Tested, OutcomeRef{Outcome: id, Slot: i})
 			}
 		}
 	}

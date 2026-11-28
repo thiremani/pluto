@@ -182,7 +182,7 @@ machinery's last consumer is gone.
 | `check` | Evaluate one comparison: its outcome is the left operand, and it yields where the comparison holds |
 | `gate` | Admit one shared statement iteration to its whole region where the outcome it takes yielded, and reject it elsewhere |
 | `require` | Lazily evaluate a local value region only when the outcomes it requires yield: the work a failure scope's checks gate (§3) |
-| `first` | Take the first of its sides that yields: the value-position `||`, a chain of them as one list however it is grouped |
+| `first` | Take the first of its sides that yields: the `||`, in value position or over a gate's conditions, a chain of them as one list however it is grouped |
 | `fallback` | Lazily evaluate the next side of a `first`, where the side before it failed |
 | `last` | Run its sides in order while each yields, and take the final one's value: the `&&`, in value position or over a gate's conditions, a chain of them as one list however it is grouped |
 | `next` | Lazily evaluate the next side of a `last`, where the side before it yielded |
@@ -646,8 +646,9 @@ target (§6) is spelled with that word first, `output res = %t0`; an eval that
 holds a
 checked access ends with its out-of-bounds scope, named for what a failed
 access does: `[on-oob=skip]` where it skips the outcome, and
-`[on-oob=fallback]` where a `fallback` follows the node's side of a `first`,
-which a `check` carries as an `eval` does;
+`[on-oob=fallback]` where a `fallback` follows a side of a `first` that holds
+the node, however deep in that side the node sits, which a `check` carries as
+an `eval` does;
 each
 binding mapped from an outcome that may skip ends with what it holds then,
 `[on-skip=keep]` or `[on-skip=zero]` (§9), in both views, so `[on-oob=skip]`
@@ -659,10 +660,11 @@ for each side after the first, with every side one level further in, so the
 labels line up, the sides line up, and no column depends on a name's width;
 no side carries a `yield` line, a side's value being its last outcome; a
 side is spelled as the node it is — an `eval`, a `check`, or a `last`, an
-`&&` of its own — and a `first` or a `last` binds an outcome only where a
-mapping can take it, so a `last` that is a side of a `first` binds none and
-its head line sits where the outcome line would have gone, its own sides
-staying one level in from it (decided 2026-11-20);
+`&&` of its own, as a side of a `last` may be a `first` — and a `first` or a
+`last` binds an outcome only where a mapping or a gate names it, so one that
+is a side of the other binds none and its head line sits where the outcome
+line would have gone, its own sides staying one level in from it (decided
+2026-11-20 for a `last` in a `first`, 2026-11-26 for a `first` in a `last`);
 square brackets otherwise carry declarative policies, not
 executable code. The expanded view puts each eval slot's ownership before
 its type — the word `owned` or `borrowed`, and nothing for an unmanaged slot,
@@ -677,13 +679,15 @@ derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
-for a plain store; a mapping fed by a `first` names a transfer for each side
-where they differ, `[move %t1] [copy %t2]`, and one word where they agree —
+for a plain store; a mapping that several nodes can supply names a transfer
+for each `eval` or `check` among them where they differ,
+`[move %t1] [copy %t2]`, and one word where they agree —
 and follows the mappings with the derived releases,
-`drop %t1` for a discarded owned outcome, `drop %t0 [on-skip]` for what an
-owned outcome built before it skipped, `drop %t1 [on-fallback]` for what a
-side of a `first` built before its fallback ran, and `drop x [old]` for a
-replaced target's old value, in the order they run (§8). Each names the
+`drop %t1` for an owned outcome that is only tested or is discarded,
+`drop %t0 [on-skip]` for what an owned outcome built before it skipped,
+`drop %t1 [on-fallback]` for what a node built before a fallback resolved its
+failure, and `drop x [old]` for a replaced target's old value, in the order
+they run (§8). Each names the
 value it frees, which exists on one path only: a skipped outcome's target
 kept its old value, and an outcome that yielded was moved into its target.
 Read the two
@@ -792,7 +796,9 @@ The value-position `&&` prints the same way under `last` (decided
 side before it yielded. Its clause word is `next`, where a `first` has
 `fallback` (decided 2026-11-18). A chain is one `last` however it is grouped,
 and only its final side supplies the value, so a mapping takes it by one
-transfer (decided 2026-11-20).
+transfer (decided 2026-11-20). Where that final side is a `first`, the
+mapping takes one for each `eval` or `check` that can supply the value,
+which may be more than the `first` has sides (decided 2026-11-26).
 
 ```text
 assign v
@@ -814,8 +820,7 @@ A statement's condition is planned as a value is (decided 2026-11-18). A
 comparison binds its outcome on a `check` line, and the `gate` that takes
 that outcome follows on a line of its own, binding nothing, with its region
 one level in. An `&&` of comparisons reaches its gate as one `last`, and an
-`||` is planned to reach it as one `first`, so a gate line names one outcome
-whatever the condition.
+`||` as one `first`, so a gate line names one outcome whatever the condition.
 
 ```text
 assign x
@@ -1626,11 +1631,11 @@ time by `array/oob_skip`, `discard` and `mem/leak/oob_paths`.
 
 **Second slice landed — the fallback after a checked read.** `x = arr[oob] ||
 -1` assigns `-1` (matrix row 7b). The solver's rule is the fallback's own
-(`fallsBackFromRead`): an index read without a range fails the left side of
+(`canFailByRead`): an index read without a range fails the left side of
 `||` wherever a condition would, so a wrapped read `(arr[i] + 1) || -1` and a
 chain `a[i] || b[j] || -1` are accepted. `conditionPropagates` is unchanged,
-and a read still gates no statement and no `&&`. A left side only a ranged
-read can fail (row 7e) stays an error.
+and a read still gates no statement and is no `&&`'s left operand. A left
+side only a ranged read can fail (row 7e) stays an error.
 
 A value that is such a `||` plans as a `first` (§4, §12), in an assignment,
 when each of its sides is an expression an eval admits. A chain is one
@@ -1797,9 +1802,10 @@ machine code changes with this slice while what it does stays.
 
 Staying legacy: a gate that is not one comparison of one scalar slot over
 operands an eval admits. That is an `&&` of comparisons, which the second
-slice plans as a `last` (§12); an `||` of them, a chain and a comparison of
-several slots, each planned with the node that carries it; a gate over a value that
-does not plan; and a ranged gate (planned for Step 7). A mask is no gate at
+slice plans as a `last` (§12); an `||` of them, which the fifth slice plans
+as a `first`; a chain and a comparison of several slots, each planned with
+the node that carries it; a gate over a value that does not plan; and a
+ranged gate (planned for Step 7). A mask is no gate at
 all: the solver rejects an array as a statement condition.
 
 Over the fixtures as they stood before this slice, 79 more assignments plan,
@@ -2016,12 +2022,10 @@ same code as before. With the router admitting no condition for a side, all
 89 match the code before this slice and every plan's text is unchanged, so
 the slice touches no other statement.
 
-Staying legacy: an `||` as a statement's gate, which needs a `first` whose
-outcome is only tested; an `||` as a side of an `&&`, as in
-`(a > 9 || b > 0) && 7`, which needs a `first` that is a side of a `last`;
-a side of several slots; a side whose own `&&` does not plan; and an `||`
-under an operator, in a cell, in a call argument or in a print. The gate's
-slice is where both nestings arrive, since each needs one of those two.
+Staying legacy: an `||` as a statement's gate and an `||` as a side of an
+`&&`, as in `(a > 9 || b > 0) && 7`, both of which the fifth slice plans; a
+side of several slots; a side whose own `&&` does not plan; and an `||` under
+an operator, in a cell, in a call argument or in a print.
 
 Pinned by `TestPlanGoldenFirstConditions`, `TestPlanRouterRejections` and
 `TestPlanFirstReleasesLastSideWhereItRan`, on hand-built plans by `pir`'s
@@ -2031,6 +2035,110 @@ Pinned by `TestPlanGoldenFirstConditions`, `TestPlanRouterRejections` and
 and the statements the
 fixtures already held, among them `cond/value_cond_expr`,
 `numeric/divide_checked` and `array/oob_fallback`.
+
+**Fifth slice landed — an `||` as a gate and as a side of an `&&`.**
+`x = a > 9 || b > 0 7` and `x = (a > 9 || b > 0) && 7` plan (matrix rows 15,
+19). A side of a `last` takes its kind from the side itself, as a side of a
+`first` does, so an `||` there is a `first`, and the two nest in each other
+to any depth.
+
+```text
+assign t
+    source
+        t = n > 0 && (sarr[9] > "a" || sarr[8] > "b") || h
+
+    execute
+        %t0 =
+            first Str
+                last Str
+                    %t1 = check I64 n > 0
+                next
+                    first Str
+                        %t2 = check owned Str sarr[9] > "a" [on-oob=fallback]
+                    fallback
+                        %t3 = check owned Str sarr[8] > "b" [on-oob=fallback]
+            fallback
+                %t4 = eval borrowed Str h
+
+    commit
+        t = %t0 [move %t2] [move %t3] [copy %t4]
+        drop %t2 [on-fallback]
+        drop %t3 [on-fallback]
+        drop t [old]
+```
+
+A `first` or a `last` binds an outcome only where something names it, a
+mapping or a gate, so a `first` that is a side of a `last` binds none, as a
+`last` in a `first` binds none (decided 2026-11-26). A gate takes a `first`'s
+own outcome as it takes a `last`'s:
+`x = a > 9 || b > 0 7` prints `%t0 =`, the `first` of two checks, and then
+`gate %t0`. A selection that is only tested still prints the type the solver
+gives its `||` or `&&`, which for an `||` is the one type its sides share:
+the solver holds a gate's `||` to that rule too, though a gate takes no value.
+
+A node no mapping takes from is only tested, whatever its kind: every node of
+a gate's condition, and every node of a side before the final one of a
+`last`. What such a node built is released once it ran, with no word after
+the `drop`. An eval can be one, as in `y = (arr[9] || b > 0) && 7`, whose
+read yields where it is in bounds, or in the gate `x = arr[9] || b > 0 5`.
+Only whether such a node yields is read, so it must be able to fail or drive
+a range (decided 2026-11-27): the solver rejects an `&&` whose value is never
+used and whose last operand can never fail, as the `5` in
+`z = (a > 9 && 5 || b > 0) && 7` and the `k` in
+`x = b > 9 || arr[1] > 0 && k 5`, which compiled before this slice, and the
+validator rejects an eval a plan only tests that cannot fail.
+
+A `last` supplies its value from its final side, so where that side is a
+`first` each `eval` or `check` the `first` can take its value from can supply
+it, and the mapping names a transfer for each: a `first` of two sides gives
+three where one side is a `last` that itself ends in a `first`. A failed
+access goes to the nearest `fallback` that follows a side holding it, however
+deep, and skips the outcome where there is none: above, no `fallback` follows
+`%t3` inside its own `first`, and the outer one resolves it. A release
+carries the same word, so `t = n > 0 && (sarr[9] > "a" || sarr[1] > "zz")`
+drops its first check `[on-fallback]` and its second `[on-skip]`.
+
+The validator checks that a gate's condition is a check, a `last` or a
+`first`, and that it can fail, since a gate over one that cannot would never
+reject. It holds a `first` that is a side of a `last` to a `first`'s own
+rules, checks that it binds no outcome, and checks that it fits the `last`'s
+type where it is the final side; a side before the final one is a check or a
+`first` that can fail, never an eval, since the `next` after a side that
+cannot fail would always run. One rule went: a gate's `last` no longer has to
+end in a check, since it may end in a `first`; in its place, every eval a
+plan only tests must be able to fail.
+
+The lowerer runs a node that is only tested for its bit alone, releasing
+what it built, with a `first`'s or a `last`'s bit in memory that is cleared
+before its sides part. Where a mapping takes a `first` or a `last`, each node
+that can supply the value has memory of its own for it. One inside a `last`
+also has the bit that says it ran, since the sides before it may have
+stopped the `last`, and a side of a `first` that is a `last` yielded where
+any of its nodes did.
+
+Over the fixtures as they stood before this slice, 19 more assignments plan,
+each as one plan, all in `tests/cond`: 9 whose gate holds an `||` and 10
+with an `||` as a side of an `&&`. The machine code of 88 of the 89
+executables is unchanged; `cond/value_cond_expr` holds statements whose code
+differs, as earlier slices' did, while the 6 that plan in `cond/logical_ops`
+compile to the same code as before. With the router admitting no `||` as a
+node that is only tested or as the final side of a `last`, all 89 match the
+code before this slice and every plan's text is unchanged, so the slice
+touches no other statement.
+
+Staying legacy: a gate that is a bare range or array-selection driver, alone
+or as a side of an `||`; a comparison with an `||` or an `&&` for an operand,
+as in `(a > 9 || 4) > 3 && 7`; a side of several slots; and an `||` or an
+`&&` under an operator, in a cell, in a call argument or in a print.
+
+Pinned by `TestPlanGoldenNestedSelections`, `TestPlanRouterRejections` and
+`TestPlanLastReleasesFinalSideWhereItRan`, on hand-built plans by `pir`'s
+`TestElaborate`, `TestValidateAccepts`, `TestValidateNestedFirstRejects`,
+`TestValidateLastRejects` and `TestRenderNestedFirst`, by the solver's
+`TestLogicalChainGrouping`, and at run time by `cond/logical_ops`
+(`NestedFirstSecondYields`, `TestedRead`) and the statements the fixtures
+already held, among them `cond/logical_ops`'s `CvOrTrue` and `NstOrGatesAnd`
+and `cond/value_cond_expr`.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

@@ -94,12 +94,10 @@ func writeNodes(b *strings.Builder, indent string, nodes []Node, by resolver, ex
 		switch n := node.(type) {
 		case *Eval:
 			writeEval(b, indent, n, by, expanded)
-		case *First:
-			writeSelection(b, indent, selection{id: n.Result, word: "first", clause: "fallback", catches: true, t: n.Type, sides: n.Sides}, by, expanded)
+		case *First, *Last:
+			writeSelection(b, indent, selectionOf(n), by, expanded)
 		case *Check:
 			fmt.Fprintf(b, "%s%s\n", indent, outcomeLine(n.Result, "check", n.Slots, n.Expr, n.Checked, by, expanded))
-		case *Last:
-			writeSelection(b, indent, selection{id: n.Result, word: "last", clause: "next", t: n.Type, sides: n.Sides}, by, expanded)
 		case *Gate:
 			fmt.Fprintf(b, "%sgate %%t%d\n", indent, n.Cond)
 			writeNodes(b, indent+level, n.Body, by, expanded)
@@ -153,6 +151,15 @@ type selection struct {
 	catches bool
 	t       Type
 	sides   []Node
+}
+
+// selectionOf is how node, a first or a last, prints and resolves.
+func selectionOf(node Node) selection {
+	if l, isLast := node.(*Last); isLast {
+		return selection{id: l.Result, word: "last", clause: "next", t: l.Type, sides: l.Sides}
+	}
+	f := node.(*First)
+	return selection{id: f.Result, word: "first", clause: "fallback", catches: true, t: f.Type, sides: f.Sides}
 }
 
 // sideResolver is what resolves a failure in side i: the side after it where
@@ -344,8 +351,8 @@ func outcomeString(ev *Eval, i int) string {
 }
 
 // refString names what ref refers to: a slot of an eval outside a first or
-// a last, or one of those, a side of one or a check, each of which has one
-// slot.
+// a last, or one of those, a node inside one or a check, each of which has
+// one slot.
 func (p *AssignPlan) refString(ref OutcomeRef) string {
 	if ev := p.eval(ref.Outcome); ev != nil {
 		return outcomeString(ev, ref.Slot)
@@ -390,8 +397,8 @@ func (policy SkipPolicy) String() string {
 	return fmt.Sprintf("skip-policy(%d)", int(policy))
 }
 
-// writeReleases names each release by the value it frees: what a check built
-// and nothing takes, what a failed eval or check built, tagged with what its
+// writeReleases names each release by the value it frees: what a node that is
+// only tested built, what a failed eval or check built, tagged with what its
 // failure does, an outcome mapped to `_`, or a target's old value.
 func (p *AssignPlan) writeReleases(b *strings.Builder) {
 	for _, ref := range p.Tested {
@@ -409,21 +416,35 @@ func (p *AssignPlan) writeReleases(b *strings.Builder) {
 }
 
 // failure is what the failure of the node whose outcome is id does, which its
-// position says: a fallback runs where a side of a first that one follows
-// fails, and every other failure reaches the commit and skips the outcome.
+// place says as it says what a failed access does: the nearest fallback that
+// follows a side holding the node runs, and with none the failure reaches the
+// commit and skips the outcome.
 func (p *AssignPlan) failure(id OutcomeID) resolver {
 	for _, node := range p.Values() {
-		first, isFirst := node.(*First)
-		if !isFirst {
-			continue
-		}
-		for _, side := range first.Sides[:len(first.Sides)-1] {
-			if sup, _ := result(supplier(side)); sup == id {
-				return resolvedByFallback
-			}
+		if by, found := resolverOf(node, id, resolvedBySkip); found {
+			return by
 		}
 	}
 	return resolvedBySkip
+}
+
+// resolverOf finds the node that binds id, node itself or one inside its
+// sides, and returns what resolves its failure; by resolves a failure of node.
+func resolverOf(node Node, id OutcomeID, by resolver) (resolver, bool) {
+	if bound, binds := result(node); binds && bound == id {
+		return by, true
+	}
+	if _, isSupplier := node.(Supplier); isSupplier {
+		return by, false
+	}
+
+	sel := selectionOf(node)
+	for i, side := range sel.sides {
+		if sideBy, found := resolverOf(side, id, sel.sideResolver(i, by)); found {
+			return sideBy, true
+		}
+	}
+	return by, false
 }
 
 // eval finds the eval whose outcome is id among the values, the only place a
