@@ -509,10 +509,9 @@ parse today: the parser builds a `PrintStatement` only from a plain
 expression list. It is a parser/AST/solver feature with its own PR,
 semantics-doc entry, tests, and capability rows; its plan is a `PrintPlan`
 under the statement `gate` Step 6 adds for assignments. A gate admits the
-conditions an assignment's gate admits. The solver rejects an OOB read as a
-statement condition; where one is admitted, the gate must test the access's
-yielded/in-bounds bit rather than its value, so an in-bounds zero still
-admits the region.
+conditions an assignment's gate admits. An index read is one (Step 6's sixth
+slice), and the gate tests the access's in-bounds bit rather than its value,
+so an in-bounds zero still admits the region.
 
 | Failure site | PIR action |
 | --- | --- |
@@ -1634,8 +1633,9 @@ time by `array/oob_skip`, `discard` and `mem/leak/oob_paths`.
 (`canFailByRead`): an index read without a range fails the left side of
 `||` wherever a condition would, so a wrapped read `(arr[i] + 1) || -1` and a
 chain `a[i] || b[j] || -1` are accepted. `conditionPropagates` is unchanged,
-and a read still gates no statement and is no `&&`'s left operand. A left
-side only a ranged read can fail (row 7e) stays an error.
+and a read still gates no statement and is no `&&`'s left operand, until
+Step 6's sixth slice makes the rule every tested position's. A left side only
+a ranged read can fail (row 7e) stays an error.
 
 A value that is such a `||` plans as a `first` (§4, §12), in an assignment,
 when each of its sides is an expression an eval admits. A chain is one
@@ -1691,10 +1691,10 @@ under an operator or a gate, and beside a comparison. The solver's rule
 admits those too, and legacy lowering resolves them as the semantics doc
 says: the read's failure is one of its lane's conditions there already.
 
-Pinned by `TestFallbackAfterRead`, `TestPlanGoldenFallbacks` and
-`TestPlanRouterRejections`, on hand-built plans by `pir`'s `TestElaborate`,
-`TestValidateFirstRejects` and `TestRenderFirst`, and at run time by
-`array/oob_fallback`.
+Pinned by `TestReadAsCondition` (then `TestFallbackAfterRead`),
+`TestPlanGoldenFallbacks` and `TestPlanRouterRejections`, on hand-built plans
+by `pir`'s `TestElaborate`, `TestValidateFirstRejects` and `TestRenderFirst`,
+and at run time by `array/oob_fallback`.
 
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 
@@ -2139,6 +2139,79 @@ Pinned by `TestPlanGoldenNestedSelections`, `TestPlanRouterRejections` and
 (`NestedFirstSecondYields`, `TestedRead`) and the statements the fixtures
 already held, among them `cond/logical_ops`'s `CvOrTrue` and `NstOrGatesAnd`
 and `cond/value_cond_expr`.
+
+**Sixth slice landed — a read as a condition.**
+`y = arr[i] 7`, `y = i < n && arr[i] 7`, `v = arr[i] && 7` and
+`v = (b > 0 || arr[i]) && 7` compile and plan (matrix rows 15, 19). An index
+read without a range is a condition wherever only whether a value yields is
+read: it yields where its index is in bounds, never by its value, so an
+in-bounds zero yields (decided 2026-11-28: a node that is only tested must be
+able to fail, and a read can). Before this slice only a fallback took one
+(Step 5's `canFailByRead`), and a gate or an `&&` left side rejected it.
+
+```text
+assign c
+    source
+        c = sarr[n] && n > 0 7
+
+    execute
+        %t0 =
+            last I64
+                %t1 = eval owned Str sarr[n] [on-oob=skip]
+            next
+                %t2 = check I64 n > 0
+        gate %t0
+            %t3 = eval I64 7
+
+    commit
+        c = %t3 [on-skip=zero]
+        drop %t1
+```
+
+The solver has one rule for it: `expressionCanFail`, which a gate, an `&&`
+left side, an `||` left side and the last operand of an `&&` whose value is
+never used all ask, counts an index read without a range as a node that can
+fail, beside a comparison and a gating `&&`, and `canFailByRead` goes. A read
+driven by a range still cannot fail a side alone (row 7e, Step 7).
+
+The builder plans such a read as an eval that is only tested: a gate takes it
+as its condition, and a `last` holds it as a side before its final one. The
+router admits it where an eval admits the expression, so its read sits outside
+a call argument and a literal cell. What it built is released whether or not
+it yielded (`drop %t1`), and its reads carry `[on-oob=skip]`, or
+`[on-oob=fallback]` under a fallback, as a check's do.
+
+The validator lets a gate take an eval and a `last` test one before its final
+side, whose type that side need not share. `validateTested` already held every
+eval a plan only tests to being able to fail, and that is the rule here too.
+
+The lowerer needed no change: a tested eval runs for its bit alone, as in the
+fifth slice. Legacy lowering, which keeps a gate whose value or range does not
+plan, now evaluates a gate's condition as a spine (`prepareSpine`), so a read
+in it is a leaf whose bounds guard gives the bit, where extraction had
+compiled only the comparisons in it.
+
+Over the fixtures as they stood before this slice, no statement plans that
+did not plan before, since the solver rejected every shape this slice plans,
+and every plan's text is unchanged. The machine code and pre-optimization IR
+of 87 of the 88 executables are unchanged. `struct` differs in one statement,
+the selection guard `count = Tagged((count < 1 && "-n%(-k)d")).id[j]
+count + 1`, whose read legacy lowering now runs and bounds-checks where it
+tested only the condition inside it. Its output stays `count: 1`; with a
+condition that always holds, that guard counted 6 iterations where its table
+has 2 of the points, and counts 2 now.
+
+Staying legacy: a read gate over a value that does not plan, a read in a call
+argument or a literal cell, and a read among the conjuncts of a ranged gate
+(Step 7). A row read as a gate is still rejected, as any condition of array
+type is.
+
+Pinned by `TestReadAsCondition`, `TestPlanGoldenReadConditions` and
+`TestPlanRouterRejections` (`rg`, `ra`), on hand-built plans by `pir`'s
+`TestValidateAccepts`, `TestValidateGateRejects` and
+`TestValidateLastRejects`, and at run time by `cond/logical_ops`
+(`ReadGate`, `ReadConjunct`, `ReadAndLeft`, `ReadEndsTestedOr`,
+`RangedReadGate`, `PrintReadAnd`).
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

@@ -116,6 +116,14 @@ for a two-sided bound. A `||` in a condition is an OR gate (`a > 2 || b > 2`);
 its operands must have matching types and it must be able to fail (a `|| value`
 fallback that always yields cannot gate).
 
+An index read is a condition too, wherever one is tested: as a gate or one of
+its conjuncts, as an `&&` left side, and as the last side of an `||` that is
+only tested. It yields where its index is in bounds, never by its value, so
+`y = arr[i]  7` admits the statement where index `i` exists, an in-bounds zero
+included, and keeps `y` where it does not; so do `y = i < n && arr[i]  7` and
+`y = arr[i] && 7`. A read driven by a range is not a condition yet; it waits
+for the PIR migration's Step 7.
+
 ## Value position: propagate to the nearest resolver
 
 A conditional inside the value does not resolve on the spot. It yields when its
@@ -167,8 +175,8 @@ it must be able to fail as the others must (decided 2026-11-27): in
 `(a > 2 && 5 || b > 5) && 7` the `&&` yields exactly where `a > 2` does, so
 the `5` decides nothing, and the chain is rejected. So are
 `((a > 0 && (a < 0 || 0)) || a < 0) && 7`, whose `|| 0` always yields, and
-the gate `x = b > 9 || n > 0 && n 5`. A read may end such a chain, though it
-is still no `&&` left side: it fails where its index is out of bounds, so
+the gate `x = b > 9 || n > 0 && n 5`. A read may end such a chain, as it may
+stand anywhere a condition does: it fails where its index is out of bounds, so
 `(n > 0 && arr[9] || b > 0) && 7` asks whether index 9 exists. So may a range:
 it runs the statement once per element, as a range driver does in a gate, so
 `[(a > 2 && r || b > 9) && 7]` holds one `7` for each element of `r`.
@@ -493,8 +501,7 @@ whole output tuple as a unit. The **nearest enclosing resolver** then decides:
 expressions in one statement commit independently (`a, b = arr[oob], 5` keeps
 `a`, sets `b`); `x = arr[oob] > 0 || -1` and `x = arr[oob] || -1` take `-1`; and
 `Id(arr[oob]) || -1` reaches the fallback after the call propagates its tuple
-failure (decided — see "Checked-access fallback" under Status; today the
-solver rejects a `||` whose left side fails only through a call's argument).
+failure (see "Checked-access fallback" under Status).
 An unevaluated `||` right side cannot fail anything. Inside a collector
 or fixed-array cell, an **unresolved** OOB zero-fills that cell to preserve
 shape — unresolved meaning no closer resolver claimed it first: in
@@ -529,8 +536,9 @@ keeps text order (`v = io()`, then `x = v + (v > 0)`).
 
 **Status (decided; PIR Steps 6–8):** today's lowering follows this order for
 comparisons: after a failed comparison, the calls and divides in that slot's
-later checks and other work don't run. An out-of-bounds read isn't a check yet.
-It is tested where it is read, so `Loud(1) + arr[oob]` calls `Loud`. An `||` runs
+later checks and other work don't run. An out-of-bounds read is a condition
+wherever one is tested, but not yet a check that runs first: it is tested where
+it is read, so `Loud(1) + arr[oob]` calls `Loud`. An `||` runs
 where it stands among the checks, so `((1 > 9) || Loud(2)) + (1 > 2)` calls
 `Loud`. A comparison with no range runs before the loop of a ranged check beside
 it. A zero divisor stops the program unless a check of its own scope and slot has
@@ -578,7 +586,9 @@ follow when they migrate in Steps 7 and 8.
   and `||` bind tighter than arithmetic (#151, "Precedence"); conditions are
   value positions, so chained comparisons gate directly (`i > 2 < 8`,
   leftmost-binding, including chained multi-return gates) in every condition
-  slot; collector zero-fill; array masks (element-wise, length-preserving).
+  slot, and an index read without a range is a condition there too, testing
+  its in-bounds bit; collector zero-fill; array masks (element-wise,
+  length-preserving).
 - **Conjunction conditions:** short-circuit `&&`/`||` over conditions; a
   multi-cell comparison in a condition slot gates on the cell-wise AND —
   every cell must hold. Heap operands (e.g. string cells via `⊕`) are freed
@@ -628,13 +638,15 @@ follow when they migrate in Steps 7 and 8.
   `Id(arr[i]) || -1`), or as the last alternative of the `||` before it, so
   `a[i] || b[j] || -1` tries each in turn; where the last side is a read
   that fails too, nothing yields and the target keeps its value. The rule is
-  the fallback's own: a read is still no statement gate and no `&&` left
-  side. Not yet legal, and rejected with "logical OR in value position
+  not the fallback's own: a read is a condition wherever one is tested, a
+  statement gate and an `&&` left side included ("Conditions are value
+  positions"). Not yet legal, and rejected with "logical OR in value position
   requires a conditional left operand": a left side whose only read is
   driven by a range (`arr[i] || -1` or `(arr[i] + 1) || -1` with `i` a
   range), planned with the PIR migration's Step 7. Beside a read without a
   range or a condition, a ranged read already falls back per iteration.
-  `tests/array/oob_fallback` pins the behavior.
+  `tests/array/oob_fallback` pins the behavior, and `tests/cond/logical_ops`
+  the read as a gate and as an `&&` left side.
 - **Gated print (planned with PIR Step 6; not current syntax):** a no-comma
   prefix form, `c > 5 a, b`, rejects the whole line without evaluating its
   values, as an assignment's gate does for its statement. It prints what
@@ -644,10 +656,9 @@ follow when they migrate in Steps 7 and 8.
   one slot, and only the print invocation boundary makes it guard a line. A
   failed argument still suppresses the whole line, gated or not ("Print
   invocation atomicity"). It does not parse today — `PrintStatement` has no
-  gate — and needs its own parser, AST, and solver work, in its own PR. Where
-  a checked read is admitted as a gate, the gate must test the access's
-  yielded/in-bounds bit rather than its value, so an in-bounds zero still
-  admits the region.
+  gate — and needs its own parser, AST, and solver work, in its own PR. A
+  read as its gate tests the access's in-bounds bit rather than its value, as
+  an assignment's gate does, so an in-bounds zero still admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
   `[i > 2 && (i * 10)]` → `[0 0 0 30 40]`); at an assignment root failing

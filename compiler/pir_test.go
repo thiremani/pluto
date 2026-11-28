@@ -221,9 +221,11 @@ fl = (x > 9 || x > 0) && 7
 fh = x > 2 < 9 || x < 0 13
 fk = x > 2 && (x > 9 < 20 || x > 0)
 fm, fn = arr[9] || Both(x)
-g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fl, fh, fk, fm, fn`)
+rg = arr[0] 13
+ra = arr[9] && 10
+g, ga, gc, gp, gs, gm, la, ln, lb, lc, ld, le, y, sg, shc, z, zc, w, lr, d, dq, dz, dc, m, tbl, rc, cc, f, fo, fc, fd, fx, fa, fq, fg, fl, fh, fk, fm, fn, rg, ra`)
 
-	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa", "assign fg", "assign fl"}, planLabels(plans))
+	require.Equal(t, []string{"assign x", "assign g", "assign ga", "assign la", "assign ln", "assign lb", "assign y", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign z", "assign q", "assign _", "assign d", "assign m", "assign tbl", "assign f", "assign fx", "assign fa", "assign fg", "assign fl", "assign rg", "assign ra"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -2302,6 +2304,71 @@ x, v, t, u, y`)
         drop %t1
         drop %t2
 `, plans[14].Render(true))
+}
+
+// A read is a condition wherever one is only tested: an eval that yields
+// where its index is in bounds, as a gate's condition and as a side before
+// the final one of a last, in a gate and in a value, whose type it need not
+// share. What the read built is released whether or not it yielded.
+func TestPlanGoldenReadConditions(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planReadConditions", "", `n = 3
+sarr = ["x" "y"]
+s = "old" ⊕ "!"
+s = sarr[9] "new"
+c = sarr[n] && n > 0 7
+v = sarr[n] && 7
+s, c, v`)
+
+	require.Equal(t, []string{"assign n", "assign sarr", "assign s", "assign s", "assign c", "assign v"}, planLabels(plans))
+	require.Equal(t, `assign s
+    source
+        s = sarr[9] "new"
+
+    execute
+        %t0 = eval owned Str sarr[9] [on-oob=skip]
+        gate %t0
+            %t1 = eval Str "new"
+
+    commit
+        s = %t1 [copy] [on-skip=keep]
+        drop %t0
+        drop s [old]
+`, plans[3].Render(true))
+	require.Equal(t, `assign c
+    source
+        c = sarr[n] && n > 0 7
+
+    execute
+        %t0 =
+            last I64
+                %t1 = eval owned Str sarr[n] [on-oob=skip]
+            next
+                %t2 = check I64 n > 0
+        gate %t0
+            %t3 = eval I64 7
+
+    commit
+        c = %t3 [on-skip=zero]
+        drop %t1
+`, plans[4].Render(true))
+	require.Equal(t, `assign v
+    source
+        v = sarr[n] && 7
+
+    execute
+        %t0 =
+            last I64
+                %t1 = eval owned Str sarr[n] [on-oob=skip]
+            next
+                %t2 = eval I64 7
+
+    commit
+        v = %t0 [on-skip=zero]
+        drop %t1
+`, plans[5].Render(true))
 }
 
 // A gate reads whether its check yielded and takes nothing, so what the check

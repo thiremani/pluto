@@ -18,22 +18,19 @@ type condTemp struct {
 }
 
 // compileGate lowers a value-position condition expression to its i1 gate: the
-// conjunction of the comparisons it contains. A condition is just a value-position
+// conjunction of the checks it contains. A condition is just a value-position
 // expression we ask "did it yield?" of — comparisons yield their LHS and chain, so
-// `i > 2 < 8` gates on `i > 2 AND i < 8`. The retained LHS values drive the gate
-// but are not a result, so they are freed here (a heap LHS computed only to test a
-// gate must not leak). Returns a nil value when expr contributes no comparison
-// (e.g. a bare range driver, whose admitted domain is handled by the loop).
+// `i > 2 < 8` gates on `i > 2 AND i < 8`, and a read yields where its index is in
+// bounds. The retained values drive the gate but are not a result, so they are
+// freed here (a heap LHS computed only to test a gate must not leak).
 func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
-	// The gate is the conjunction of the per-slot conditions extraction
+	// The gate is the conjunction of the per-slot conditions the spine
 	// returns: for comparisons "did every cell hold", for a value-position ||
 	// "did every slot yield" — a > 2 || b > 3 gates on a>2 OR b>3, which IS its
-	// yield flag. The retained LHS values drive the gate but are not a result,
-	// so they are freed here (a heap LHS computed only to test a gate must not
-	// leak).
+	// yield flag — and for a read, evaluated as a leaf, its in-bounds bit.
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
-	conds, temps := c.extractSlotConds(expr, nil)
+	conds, temps := c.prepareSpine(expr, nil, nil)
 	c.cleanupCondExprElse(temps)
 	return c.foldSlotConds(conds)
 }

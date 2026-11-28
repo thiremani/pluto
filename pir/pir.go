@@ -80,9 +80,9 @@ func (f *First) last() Node { return f.Sides[len(f.Sides)-1] }
 
 // Last is an && (plan §4), in value position or over a gate's conditions: its
 // sides run in order while each yields, and its outcome is its final side's,
-// yielding where every side did. A side before the final one is only tested:
-// a check, or a first — an || of its own, which binds no outcome. The final
-// one is a check, an eval or a first. Each side has one slot, and a chain of
+// yielding where every side did. Each side is a check, an eval or a first —
+// an || of its own, which binds no outcome — and one before the final side is
+// only tested, so it can fail. Each side has one slot, and a chain of
 // && is one Last however it is grouped. Its sides take the outcome IDs after
 // Result, or the next IDs in execution order where it is a side of a first
 // and Result is NoOutcome.
@@ -385,8 +385,8 @@ func (p *AssignPlan) Gate() *Gate {
 }
 
 // Condition returns the node whose outcome a gate takes, the first node of a
-// gated region: a check, a last or a first. It is nil for a statement without
-// a gate.
+// gated region: a check, a last, a first or an eval. It is nil for a statement
+// without a gate.
 func (p *AssignPlan) Condition() Node {
 	if p.Gate() == nil {
 		return nil

@@ -1298,7 +1298,7 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1, "scalar-valued statement condition should emit one diagnostic")
-	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-selection driver, got I64")
+	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison, an index read or a bare range/array-selection driver, got I64")
 }
 
 func TestLogicalAndDiagnostics(t *testing.T) {
@@ -1484,18 +1484,23 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
-// TestFallbackAfterRead pins the fallback's own rule: an index read without a
-// range fails the left side of || wherever a condition would, alone, wrapped,
-// or as the last alternative of the || before it. Nothing else widens: a left
-// side only a ranged read can fail, a read in a literal's cell, which
-// zero-fills, a read before && and a read as a gate stay errors.
-func TestFallbackAfterRead(t *testing.T) {
+// TestReadAsCondition pins one rule wherever only whether a value yields is
+// read: an index read without a range can fail there, as a condition can,
+// alone, wrapped, or as the last alternative of an || before it. That holds
+// for a gate and its conjuncts, an && left side, an || left side, and the last
+// side of an || that is only tested. A side only a ranged read can fail and a
+// read in a literal's cell, which zero-fills, stay errors.
+func TestReadAsCondition(t *testing.T) {
 	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
 	cases := []struct {
 		name   string
 		script string
 		want   string // empty when the script types cleanly
 	}{
+		{"Gate", "arr = [1 2]\nx = 4\nx = arr[9] 7\nx", ""},
+		{"GateConjunct", "arr = [1 2]\nn = 3\nx = 4\nx = arr[9] && n > 0 7\nx", ""},
+		{"AndLeft", "arr = [1 2]\nx = arr[9] && 5\nx", ""},
+		{"TestedOrLast", "arr = [1 2]\nn = 3\nx = (n > 5 || arr[9]) && 5\nx", ""},
 		{"Read", "arr = [1 2]\nx = arr[9] || -1\nx", ""},
 		{"Chain", "arr = [1 2]\nx = arr[9] || arr[8] || -1\nx", ""},
 		{"ChainGroupedRight", "arr = [1 2]\nx = arr[9] || (arr[8] || -1)\nx", ""},
@@ -1505,8 +1510,6 @@ func TestFallbackAfterRead(t *testing.T) {
 		{"WrappedRangedRead", "arr = [1 2]\ni = 0:5\nx = (arr[i] + 1) || -1\nx", orMsg + "(arr[i] + 1)"},
 		{"ChainPastValue", "arr = [1 2]\nx = (arr[9] || 5) || 7\nx", orMsg + "(arr[9] || 5)"},
 		{"ReadInCell", "arr = [1 2]\nx = [arr[9]] || [7]\nx", orMsg + "[arr[9]]"},
-		{"ReadBeforeAnd", "arr = [1 2]\nx = arr[9] && 5\nx", "logical AND in value position requires a conditional left operand"},
-		{"ReadAsGate", "arr = [1 2]\nx = 4\nx = arr[9] 7\nx", "statement condition must be a comparison or bare range/array-selection driver"},
 	}
 
 	for _, tc := range cases {

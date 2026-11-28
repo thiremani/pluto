@@ -76,13 +76,16 @@ func (c *Compiler) planGateEligible(conds []ast.Expression) bool {
 }
 
 // planTestedEligible admits a condition that is only tested, a gate's or a
-// side before the final one of a last: an || is a first, and any other is a
-// check.
+// side before the final one of a last: an || is a first, a comparison is a
+// check, and any other is an eval, which the solver has left able to fail.
 func (c *Compiler) planTestedEligible(cond ast.Expression) bool {
 	if _, isOr := ast.IsLogicalOr(cond); isOr {
 		return c.planFirstEligible(cond)
 	}
-	return c.planCheckEligible(cond)
+	if c.scalarComparison(cond) {
+		return c.planCheckEligible(cond)
+	}
+	return c.planExprEligible(cond, true)
 }
 
 // planCheckEligible admits a condition as one check: a scalar comparison
@@ -433,9 +436,9 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement, fn string) *pir.AssignPl
 const conditionID = pir.OutcomeID(0)
 
 // buildCondition plans a gate's conditions as the node the gate takes, and
-// returns the outcome ID after it: one condition is a check or a first, and
-// the conjuncts of an && are the sides of a last of the final one's type. It
-// returns no node for a statement without a gate.
+// returns the outcome ID after it: one condition is a check, a first or an
+// eval, and the conjuncts of an && are the sides of a last of the final one's
+// type. It returns no node for a statement without a gate.
 func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.OutcomeID) {
 	if len(conds) == 0 {
 		return nil, conditionID
@@ -452,7 +455,7 @@ func (c *Compiler) buildCondition(conds []ast.Expression) (pir.Node, pir.Outcome
 	case isOr:
 		cond = c.buildFirst(conds[0], conditionID, conditionID+1)
 	default:
-		panic(fmt.Sprintf("internal: gate condition %q is no comparison and no ||", conds[0].String()))
+		cond = c.buildEval(conds[0], conditionID)
 	}
 	return cond, conditionID + pir.OutcomeID(pir.Outcomes(cond))
 }

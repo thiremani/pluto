@@ -84,10 +84,10 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 
 // validateGate checks what a gated plan's execute region holds beside its
 // values: one condition, then the gate that takes it and admits a region. The
-// condition is a check, a last or a first, which the gate only tests, and it
-// can fail, or the gate would never reject. It returns the outcome ID the
-// values start at. A gate anywhere else is no value, and the values' own
-// validation rejects it.
+// condition is a check, a last, a first or an eval, which the gate only tests,
+// and it can fail, or the gate would never reject; validateTested holds an
+// eval to that. It returns the outcome ID the values start at. A gate
+// anywhere else is no value, and the values' own validation rejects it.
 func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (int, error) {
 	gate := p.Gate()
 	if gate == nil {
@@ -102,6 +102,10 @@ func (p *AssignPlan) validateGate(compatible func(target, outcome Type) bool) (i
 	switch cond := before[0].(type) {
 	case *Check:
 		if err := validateCheck(p.Label, 0, cond); err != nil {
+			return 0, err
+		}
+	case *Eval:
+		if err := validateEval(p.Label, 0, cond); err != nil {
 			return 0, err
 		}
 	case *Last:
@@ -172,10 +176,10 @@ func validateDense(plan, word string, id OutcomeID, next int) error {
 
 // validateLast checks a last, named as an error names it, whose sides start
 // at sideStart: at least two sides of one slot each, numbered in execution
-// order. Every side before the final one is only tested, a check or a first
-// that can fail, since the next after one that cannot would always run. The
-// final one, a check, an eval or a first, fits the last's type. A first that
-// is a side binds no outcome.
+// order, each a check, an eval or a first. Every side before the final one is
+// only tested and can fail, since the next after one that cannot would always
+// run; validateTested holds an eval to that. The final one fits the last's
+// type. A first that is a side binds no outcome.
 func validateLast(plan, name string, sideStart int, l *Last, compatible func(target, outcome Type) bool) error {
 	if l.Type == nil {
 		return fmt.Errorf("plan %s: %s has no type", plan, name)
@@ -196,16 +200,13 @@ func validateLast(plan, name string, sideStart int, l *Last, compatible func(tar
 				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit %s of type %s", plan, sideID, n.Slots[0].Type.String(), name, l.Type.String())
 			}
 		case *Eval:
-			if i < final {
-				return fmt.Errorf("plan %s: side %%t%d of %s is an eval before the final side, where a side is a check or a first", plan, sideID, name)
-			}
 			if err := validateEval(plan, sideID, n); err != nil {
 				return err
 			}
 			if len(n.Slots) != 1 {
 				return fmt.Errorf("plan %s: side %%t%d of %s has %d slots", plan, sideID, name, len(n.Slots))
 			}
-			if !compatible(l.Type, n.Slots[0].Type) {
+			if i == final && !compatible(l.Type, n.Slots[0].Type) {
 				return fmt.Errorf("plan %s: side %%t%d of type %s does not fit %s of type %s", plan, sideID, n.Slots[0].Type.String(), name, l.Type.String())
 			}
 		case *First:
