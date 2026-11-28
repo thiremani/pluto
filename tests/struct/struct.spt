@@ -80,3 +80,9 @@ g = Pick((9:0:-1) > 5).age
 # A receiver gated with && iterates a range literal in its call.
 h = (n > 0 && Pick(0:9)).age
 "h: -h"
+
+# A selection whose receiver ranges through a format width is no bare
+# driver, so the condition in that receiver still gates each element.
+count = 0
+count = Tagged((count < 1 && "-n%(-k)d")).id[j] count + 1
+"count: -count"

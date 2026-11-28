@@ -858,7 +858,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 		return true
 	case *ast.ArrayRangeExpression:
 		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
+		return !arrInfo.HasRangeDrivers() && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
 	}
