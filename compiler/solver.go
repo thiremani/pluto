@@ -2172,10 +2172,11 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 	}
 }
 
-// readsRange reports whether expr reads a range that no collector inside it
-// consumes. Typing marks such a read in HasRanges, except one a format width
-// names, which only HandleRanges records, and only where it walks: not in a
-// block literal's cells.
+// readsRange reports whether expr reads a range outside every array literal
+// in it, the only range that can drive it: a collector consumes its own, and
+// range discovery does not enter a block literal's cells. HasRanges marks such
+// a read, but marks one a format width names only where HandleRanges walks:
+// not under a dot, nor in a block literal's cell, where expr itself can sit.
 func (ts *TypeSolver) readsRange(expr ast.Expression) bool {
 	if ts.ExprCache[key(ts.FuncNameMangled, expr)].HasRanges {
 		return true
@@ -2183,9 +2184,7 @@ func (ts *TypeSolver) readsRange(expr ast.Expression) bool {
 
 	switch e := expr.(type) {
 	case *ast.ArrayLiteral:
-		if isInlineArrayCollector(e) {
-			return false
-		}
+		return false
 	case *ast.StringLiteral:
 		return len(ts.formatRanges(e)) > 0
 	}

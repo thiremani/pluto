@@ -1606,24 +1606,39 @@ func TestLogicalChainGrouping(t *testing.T) {
 	}
 }
 
-// A collector inside the last operand of an && whose value is never used
-// consumes its range, so the operand reads none and the && decides nothing.
-func TestUnusedAndEndsInCallOverCollector(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
+// A range inside an array literal in the last operand of an && whose value is
+// never used drives nothing: a collector consumes it, and range discovery does
+// not enter a block literal's cells. The operand reads none, and the &&
+// decides nothing.
+func TestUnusedAndEndsInCallOverArrayLiteral(t *testing.T) {
+	const unusedMsg = "logical AND whose value is never used requires a conditional last operand, but its last operand is "
+	cases := []struct {
+		name    string
+		script  string
+		operand string
+	}{
+		{"Collector", "n = 1\nr = 0:3\nx = (n > 0 && Head([r]) || n > 9) && 7\nx", "Head([r])"},
+		{"BlockCell", "n = 1\nr = 1:4\nx = (n > 0 && Take([\n    \"-n%(-r)d\"\n]) || n > 9) && 7\nx", "Take([\n    \"-n%(-r)d\"\n])"},
+	}
 
-	code := mustParseCode(t, "s = Head(a)\n    s = 0\n    s = a[0]")
-	cc := NewCodeCompiler(ctx, t.Name(), "", code)
-	require.Empty(t, cc.Compile())
-	script := "n = 1\nr = 0:3\nx = (n > 0 && Head([r]) || n > 9) && 7\nx"
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, script), cc)
-	ts := NewTypeSolver(sc)
-	ts.Solve()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
 
-	require.Len(t, ts.Errors, 1)
-	require.Equal(t, "logical AND whose value is never used requires a conditional last operand, but its last operand is Head([r])", ts.Errors[0].Msg)
-	require.Equal(t, 3, ts.Errors[0].Token.Line)
-	require.Equal(t, 12, ts.Errors[0].Token.Column)
+			code := mustParseCode(t, "s = Head(a)\n    s = 0\n    s = a[0]\n\nt = Take(a)\n    _ = a\n    t = 3")
+			cc := NewCodeCompiler(ctx, tc.name, "", code)
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, unusedMsg+tc.operand, ts.Errors[0].Msg)
+			require.Equal(t, 3, ts.Errors[0].Token.Line)
+			require.Equal(t, 12, ts.Errors[0].Token.Column)
+		})
+	}
 }
 
 func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
