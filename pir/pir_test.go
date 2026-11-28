@@ -314,6 +314,36 @@ func lastValuePlan() *AssignPlan {
 	}
 }
 
+// readGatePlan is `s = sarr[9] u` over heap strings, before elaboration: the
+// gate takes a read it only tests, which yields where its index is in bounds.
+func readGatePlan() *AssignPlan {
+	str := testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign s", Source: `s = sarr[9] u`},
+		Execute: []Node{
+			&Eval{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			&Gate{Cond: 0, Body: []Node{
+				&Eval{Result: 1, Expr: ident("u"), Slots: []Slot{borrowedSlot(str, "u")}},
+			}},
+		},
+		Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 1}, OnSkip: KeepOnSkip}},
+	}
+}
+
+// testedReadPlan is `x = sarr[9] && 7`, before elaboration: a last of an
+// integer whose side before the final one reads a string it only tests.
+func testedReadPlan() *AssignPlan {
+	i64, str := testType("I64"), testType("Str")
+	return &AssignPlan{
+		Head: Head{Label: "assign x", Source: `x = sarr[9] && 7`},
+		Execute: []Node{&Last{Result: 0, Type: i64, Sides: []Node{
+			&Eval{Result: 1, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}, Checked: true},
+			&Eval{Result: 2, Expr: intLit(7), Slots: []Slot{unmanagedSlot(i64)}},
+		}}},
+		Commit: []Mapping{{Target: local("x", i64), Outcome: OutcomeRef{Outcome: 0}, OnSkip: KeepOnSkip}},
+	}
+}
+
 // checkPlan is `s = MkStr(n) > "a"` over heap strings, before elaboration: the
 // binding takes the string the check built, where the comparison holds.
 func checkPlan() *AssignPlan {
@@ -435,6 +465,10 @@ func TestValidateAccepts(t *testing.T) {
 	Elaborate(firstLast)
 	testedFirst := testedFirstPlan()
 	Elaborate(testedFirst)
+	readGate := readGatePlan()
+	Elaborate(readGate)
+	testedRead := testedReadPlan()
+	Elaborate(testedRead)
 	for name, p := range map[string]*AssignPlan{
 		"scalar swap":    scalarSwap,
 		"heap swap":      heapSwap,
@@ -442,6 +476,8 @@ func TestValidateAccepts(t *testing.T) {
 		"check side":     firstCheck,
 		"&& side":        firstLast,
 		"tested || side": testedFirst,
+		"read gate":      readGate,
+		"tested read":    testedRead,
 	} {
 		if err := Validate(p, sameSpelling); err != nil {
 			t.Fatalf("%s: valid plan rejected: %v", name, err)
@@ -1282,9 +1318,13 @@ func TestValidateGateRejects(t *testing.T) {
 		{"TwoChecksBeforeGate", func(p *AssignPlan) {
 			p.Execute = []Node{p.Execute[0], p.Execute[0], p.Execute[1]}
 		}, "gate follows 2 nodes and takes one condition"},
-		{"EvalBeforeGate", func(p *AssignPlan) {
+		{"NoConditionBeforeGate", func(p *AssignPlan) { p.Execute[0] = unknownNode(0) }, "gate follows pir.unknownNode, which is no condition"},
+		{"GateEvalCannotFail", func(p *AssignPlan) {
 			p.Execute[0] = &Eval{Result: 0, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
-		}, "gate follows *pir.Eval, which is no condition"},
+		}, "eval %t0 is only tested and cannot fail, so it decides nothing"},
+		{"GateEvalUnvalidated", func(p *AssignPlan) {
+			p.Execute[0] = &Eval{Result: 0, Expr: read("sarr", 9), Slots: []Slot{ownedSlot(str)}}
+		}, "eval %t0 holds a checked access and is not marked checked"},
 		{"GateInsideGate", func(p *AssignPlan) { p.Gate().Body = []Node{&Gate{Cond: 0, Body: p.Gate().Body}} }, "unknown execute node *pir.Gate"},
 		{"EmptyRegion", func(p *AssignPlan) { p.Gate().Body = nil }, "gate admits an empty region"},
 		{"GateTakesAnotherOutcome", func(p *AssignPlan) { p.Gate().Cond = 1 }, "gate takes %t1 where its condition binds %t0"},
@@ -1373,9 +1413,12 @@ func TestValidateLastRejects(t *testing.T) {
 		{"SparseID", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Result = 1 }, "last has result ID 1 where 0 is next; IDs must be dense"},
 		{"NoType", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Type = nil }, "last %t0 has no type"},
 		{"OneSide", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides = lastAt(p, 0).Sides[1:] }, "last %t0 has 1 sides and needs a next"},
-		{"EvalBeforeFinal", lastValuePlan, func(p *AssignPlan) {
+		{"TestedEvalCannotFail", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[0] = &Eval{Result: 1, Expr: ident("t"), Slots: []Slot{borrowedSlot(str, "t")}}
-		}, "side %t1 of last %t0 is an eval before the final side, where a side is a check or a first"},
+		}, "eval %t1 is only tested and cannot fail, so it decides nothing"},
+		{"TestedEvalWithTwoSlots", lastValuePlan, func(p *AssignPlan) {
+			lastAt(p, 0).Sides[0] = &Eval{Result: 1, Expr: read("sarr", 1), Slots: []Slot{ownedSlot(str), ownedSlot(str)}, Checked: true}
+		}, "side %t1 of last %t0 has 2 slots"},
 		{"SideIsNoCheckEvalOrFirst", lastValuePlan, func(p *AssignPlan) { lastAt(p, 0).Sides[0] = &Gate{} }, "side 1 of last %t0 is *pir.Gate, which is no check, eval or first"},
 		{"CheckSideUnvalidated", lastValuePlan, func(p *AssignPlan) {
 			lastAt(p, 0).Sides[0].(*Check).Slots = []Slot{ownedSlot(str), ownedSlot(str)}

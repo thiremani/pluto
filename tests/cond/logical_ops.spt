@@ -677,3 +677,51 @@ trA = (a > 2 && aoStrs[1] || aoStrs[0] > "z") && 7
 trB = 9
 trB = (a > 2 && aoStrs[9] || aoStrs[0] > "z") && 7
 "TestedRead: -trA -trB"
+
+# A read as a statement gate asks whether its index exists: an in-bounds zero
+# admits the statement, an index past the end keeps the old value, and what a
+# string read built is released either way (leak-checked).
+rgArr = [10 0 30]
+rgIn = 5
+rgIn = rgArr[1] 7
+rgOut = 5
+rgOut = rgArr[9] 7
+rgStr = "kept"
+rgStr = aoStrs[9] "new"
+"ReadGate: -rgIn -rgOut -rgStr"
+
+# A read among a gate's conjuncts is one of its checks, before a comparison
+# or after one, whatever its type.
+rcIn = 5
+rcIn = b < 9 && rgArr[2] 8
+rcOut = 5
+rcOut = aoStrs[9] && b < 9 8
+"ReadConjunct: -rcIn -rcOut"
+
+# A read before && in a value yields the right side where its index exists
+# and keeps the old value where it does not.
+raIn = 5
+raIn = rgArr[1] && 7
+raOut = 5
+raOut = aoStrs[9] && 7
+"ReadAndLeft: -raIn -raOut"
+
+# A read that ends an || an && only tests is its last alternative.
+roIn = 5
+roIn = (b > 9 || rgArr[0]) && 7
+roOut = 5
+roOut = (b > 9 || rgArr[9]) && 7
+"ReadEndsTestedOr: -roIn -roOut"
+
+# A read among a ranged gate's conjuncts is tested on every iteration.
+rlIter = 0:3
+rlCount = 0
+rlCount = rlIter && rgArr[1] rlCount + 1
+rlNone = 0
+rlNone = rlIter && rgArr[9] rlNone + 1
+"RangedReadGate: -rlCount -rlNone"
+
+# A read before && in a print yields the right side where its index exists,
+# and one past the end suppresses the line.
+"PrintReadAnd:", rgArr[1] && 7
+"PrintReadAndOut:", rgArr[9] && 7

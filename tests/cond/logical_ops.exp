@@ -175,3 +175,9 @@ FirstLastDiscarded: hello
 called 1
 NestedFirstSecondYields: 1
 TestedRead: 7 9
+ReadGate: 7 5 kept
+ReadConjunct: 8 5
+ReadAndLeft: 7 5
+ReadEndsTestedOr: 7 5
+RangedReadGate: 3 0
+PrintReadAnd: 7

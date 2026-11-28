@@ -844,6 +844,10 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression, info *Expr
 	}
 }
 
+// isRangeDriverCond reports a statement condition that only drives the
+// statement's loop: a bare range, or a selection by one from an array that
+// neither drives a range nor can fail. A driver is never evaluated, so a
+// selection from an array that can fail is a guard instead (#184).
 func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
 	if len(condTypes) != 1 {
 		return false
@@ -858,7 +862,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 		return true
 	case *ast.ArrayRangeExpression:
 		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		return !arrInfo.HasRangeDrivers() && ts.isBareRangeExpr(e.Range)
+		return !arrInfo.HasRangeDrivers() && !ts.expressionCanFail(e.Array) && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
 	}
@@ -887,16 +891,6 @@ func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool 
 	return false
 }
 
-// conditionPropagates classifies one node for the solver: a root scalar
-// comparison or gating &&. Conditions only, because this also decides which
-// programs are valid — ||, && and statement conditions all require an operand
-// that can fail — so anything that merely fails to yield at runtime, such as an
-// out-of-bounds read, must not be folded in.
-func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info.HasCondScalar() || info.HasCondAnd()
-}
-
 // expressionCanFail gates the diagnostics that need an operand able to fail.
 // A node whose type a later pass can still settle counts as able to fail: it
 // may yet become a comparison, and the settling pass judges it fully typed.
@@ -904,11 +898,14 @@ func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
 	return treeCanFail(expr, ts.nodeMayFail)
 }
 
+// nodeMayFail classifies one node for the solver: a scalar comparison or a
+// gating && in value position, or an index read without a range, which fails
+// where its index is out of bounds.
 func (ts *TypeSolver) nodeMayFail(expr ast.Expression) bool {
-	if ts.conditionPropagates(expr) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	if info.HasCondScalar() || info.HasCondAnd() || ts.unrangedRead(expr) {
 		return true
 	}
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	return slices.ContainsFunc(info.OutTypes, ts.awaitingType)
 }
 
@@ -955,8 +952,8 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	}
 
 	// In value context a comparison yields its LHS (so the condition's type is the
-	// operand type, not i1); it gates as long as it can fail — the gate is the
-	// conjunction of its comparisons ("did the value-position expression yield?").
+	// operand type, not i1); it gates as long as it can fail, as a read can where
+	// its index is out of bounds ("did the value-position expression yield?").
 	if ts.expressionCanFail(expr) {
 		return
 	}
@@ -973,7 +970,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	ts.Errors = append(ts.Errors, &token.CompileError{
 		Token: expr.Tok(),
-		Msg:   fmt.Sprintf("statement condition must be a comparison or bare range/array-selection driver, got %s", condType),
+		Msg:   fmt.Sprintf("statement condition must be a comparison, an index read or a bare range/array-selection driver, got %s", condType),
 	})
 }
 
@@ -2027,8 +2024,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1. Naming the
 	// left operand shows when arithmetic took the rest: in b > 2 && 10 + 2 || 7
 	// it is 2.
-	leftCanFail := ts.expressionCanFail(expr.Left) || ts.canFailByRead(expr.Left)
-	if !leftCanFail {
+	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   fmt.Sprintf("logical OR in value position requires a conditional left operand, but its left operand is %s (|| binds tighter than arithmetic)", expr.Left),
@@ -2053,15 +2049,6 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		CompareModes: compareModes,
 	}
 	return types
-}
-
-// canFailByRead reports an operand an index read without a range can fail,
-// where only whether it yields is read: the left side of an ||, or the last
-// operand of an && whose value is never used. A failed read fails the value
-// around it as a condition does. conditionPropagates leaves reads out, since
-// a statement gate and an &&'s left operand share it and a read is neither.
-func (ts *TypeSolver) canFailByRead(expr ast.Expression) bool {
-	return treeCanFail(expr, ts.unrangedRead)
 }
 
 // unrangedRead reports an index read without a range. A ranged read alone
@@ -2173,9 +2160,7 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 		}
 
 		final := finalAnd(and)
-		ranged := ts.readsRange(final.Right)
-		canFail := ts.expressionCanFail(final.Right) || ts.canFailByRead(final.Right)
-		if tested && !ranged && !canFail {
+		if tested && !ts.readsRange(final.Right) && !ts.expressionCanFail(final.Right) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: final.Token,
 				Msg:   fmt.Sprintf("logical AND whose value is never used requires a conditional last operand, but its last operand is %s", final.Right),
