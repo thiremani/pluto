@@ -31,6 +31,16 @@ n = 1
 e = Label("-n%(-k)d").age
 "e: -e"
 
+# A call around the read runs once per element of that range.
+total = 0
+total = Acc(total, Label("-n%(-k)d").age)
+"total: -total"
+
+# So does a call around a range of the read's column.
+idTotal = 0
+idTotal = Acc(idTotal, Tagged("-n%(-k)d").id[0:1])
+"idTotal: -idTotal"
+
 # A collector over the read gathers each element's field.
 c = [Pick(0:9).age]
 c

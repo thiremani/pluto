@@ -2568,7 +2568,9 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	for i, e := range exprs {
 		outerTypes[i] = ts.TypeExpression(e, isRoot)
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if !info.HasRanges {
+		// A root call's arguments are typed as roots, so range discovery has
+		// already recorded the drivers typing misses, a format width's among them.
+		if !info.HasRangeDrivers() {
 			continue
 		}
 		hasRanges = true
@@ -2631,7 +2633,7 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 
 	arrInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Array)]
 	idxInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Range)]
-	if arrInfo.HasRanges || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
+	if arrInfo.HasRangeDrivers() || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
 		return ArrayRange{}, nil, false
 	}
 

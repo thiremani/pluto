@@ -27,3 +27,14 @@ out = Row(n)
       : name
         "row-n"
     ]
+
+# A one-row table whose id is 7.
+out = Tagged(s)
+    _ = s
+    out = [
+      : id
+        7
+    ]
+
+out = Acc(a, x)
+    out = a + x
