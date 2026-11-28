@@ -844,6 +844,10 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression, info *Expr
 	}
 }
 
+// isRangeDriverCond reports a statement condition that only drives the
+// statement's loop: a bare range, or a selection by one from an array that
+// neither drives a range nor can fail. A driver is never evaluated, so a
+// selection from an array that can fail is a guard instead (#184).
 func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
 	if len(condTypes) != 1 {
 		return false
@@ -858,7 +862,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 		return true
 	case *ast.ArrayRangeExpression:
 		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		return !arrInfo.HasRangeDrivers() && ts.isBareRangeExpr(e.Range)
+		return !arrInfo.HasRangeDrivers() && !ts.expressionCanFail(e.Array) && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
 	}

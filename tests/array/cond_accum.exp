@@ -9,6 +9,8 @@ RangeSelectionMixedTupleA: [8 8 8]. RangeSelectionMixedTupleB: 40
 NestedDrivers: [0 1 2 10 11 12]
 MixedDrivers: [9 9 9 9 9 9]
 NestedRangeSelectionDriver: [1 1]
+SelectionGuards: 1 3
+SelectionFromMissingRow: 0
 MixedGateCollectorBlocked: [90]
 MixedGateScalarBlocked: 30
 MixedGateAdmitted: [0 1 2 3 4]

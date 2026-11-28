@@ -68,7 +68,10 @@ top-level `&&` chain is the statement's condition list, each conjunct
 validated separately and short-circuited left to right, so
 `x = a > 2 && b > 3  7` gates on both,
 and bare range drivers conjoin into iteration domains — `grid = i && j [...]`
-walks the cartesian product, `i < 8 && j > 2  v` a filtered one. A multi-cell
+walks the cartesian product, `i < 8 && j > 2  v` a filtered one. A selection
+by a bare range drives only from an array that cannot fail: `(n > 0 && arr)[j]`
+is a guard on each iteration instead, which tests its condition and whether
+each point exists (#184). A multi-cell
 comparison (`Pair > Pair`, including string pairs) likewise gates on the
 conjunction of its cells — every cell must hold.
 

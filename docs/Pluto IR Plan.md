@@ -2172,7 +2172,11 @@ The solver has one rule for it: `expressionCanFail`, which a gate, an `&&`
 left side, an `||` left side and the last operand of an `&&` whose value is
 never used all ask, counts an index read without a range as a node that can
 fail, beside a comparison and a gating `&&`, and `canFailByRead` goes. A read
-driven by a range still cannot fail a side alone (row 7e, Step 7).
+driven by a range still cannot fail a side alone (row 7e, Step 7). A
+selection by a bare range is a driver only where its array cannot fail
+(#184): `count = (count < 1 && arr)[j] count + 1` over `j = 0:3` counted 3,
+since a driver is never evaluated, and counts 1 now that the selection guards
+each iteration; `rows[9][j]` selects nothing where row 9 is missing.
 
 The builder plans such a read as an eval that is only tested: a gate takes it
 as its condition, and a `last` holds it as a side before its final one. The
@@ -2211,7 +2215,8 @@ Pinned by `TestReadAsCondition`, `TestPlanGoldenReadConditions` and
 `TestValidateAccepts`, `TestValidateGateRejects` and
 `TestValidateLastRejects`, and at run time by `cond/logical_ops`
 (`ReadGate`, `ReadConjunct`, `ReadAndLeft`, `ReadEndsTestedOr`,
-`RangedReadGate`, `PrintReadAnd`).
+`RangedReadGate`, `PrintReadAnd`) and `array/cond_accum` (`SelectionGuards`,
+`SelectionFromMissingRow`).
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

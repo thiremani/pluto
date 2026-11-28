@@ -54,6 +54,27 @@ nestedDriverData = [10 20]
 nestedDriverOut = nestedDriverData[nestedDriverIdx[0:2]] [1]
 "NestedRangeSelectionDriver: -nestedDriverOut"
 
+# A selection from an array that can fail is no bare driver but a guard on
+# every iteration: the condition in the array stops the count at one (#184),
+# and a point past the end selects nothing.
+guardSrc = [1 2 3]
+guardIdx = 0:3
+guardCount = 0
+guardCount = (guardCount < 1 && guardSrc)[guardIdx] guardCount + 1
+guardWide = 0
+guardWide = (guardCount > 0 && guardSrc)[0:5] guardWide + 1
+"SelectionGuards: -guardCount -guardWide"
+
+# So is a selection from a row read, and a row past the end selects nothing.
+guardRows = [
+    1 2
+    3 4
+]
+guardRow = 9
+rowCount = 0
+rowCount = guardRows[guardRow][guardIdx] rowCount + 1
+"SelectionFromMissingRow: -rowCount"
+
 # Scalar conjuncts remain per-iteration guards when another conjunct supplies
 # the range, regardless of their order or destination shape.
 mixedGateDriver = 0:7
