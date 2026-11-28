@@ -761,7 +761,7 @@ func (c *Compiler) lowerEval(ev *pir.Eval) ([]*Symbol, llvm.Value) {
 // yielded says that value is the outcome. Only a source inside a last needs
 // ran, since a last's final side runs only where the sides before it held,
 // while a side of the outermost first runs wherever the one before it failed.
-// A source that cannot fail and is no part of a last needs no yielded.
+// A source that cannot fail yielded wherever it ran, so its yielded is its ran.
 type sideFlags struct {
 	ran     llvm.Value
 	yielded llvm.Value
@@ -816,7 +816,8 @@ func (c *Compiler) appendSideFlags(flags []sideFlags, node pir.Node, inLast bool
 	if inLast {
 		own.ran = c.clearedFlag(names.ran + ".mem")
 	}
-	if inLast || node.(pir.Outcome).MayFail() {
+	own.yielded = own.ran
+	if node.(pir.Outcome).MayFail() {
 		own.yielded = c.clearedFlag(names.yielded + ".mem")
 	}
 	return append(flags, own)
@@ -883,19 +884,9 @@ func (c *Compiler) lowerLastSides(sides []pir.Node, tested []pir.OutcomeRef, sou
 	}, nil)
 }
 
-// storeYielded records in flag whether a node yielded; a nil bit is a node
-// that always yields, which memory holds as true.
-func (c *Compiler) storeYielded(yielded, flag llvm.Value) {
-	i1 := Int{Width: 1}
-	if yielded.IsNil() {
-		yielded = llvm.ConstInt(c.mapToLLVMType(i1), 1, false)
-	}
-	c.createStore(yielded, flag, i1)
-}
-
 // lowerStaged runs an eval or a check inside a first or a last, stages its
-// value in memory named slot, and sets the flags it has: that it ran, and
-// whether it yielded.
+// value in memory named slot, and sets the flags it has: that it ran, and,
+// where it can fail, whether it yielded.
 func (c *Compiler) lowerStaged(n pir.Supplier, slot string, flags sideFlags) loweredSource {
 	i1 := Int{Width: 1}
 	src := c.lowerSource(n)
@@ -906,8 +897,8 @@ func (c *Compiler) lowerStaged(n pir.Supplier, slot string, flags sideFlags) low
 	if !flags.ran.IsNil() {
 		c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), flags.ran, i1)
 	}
-	if !flags.yielded.IsNil() {
-		c.storeYielded(src.yielded, flags.yielded)
+	if !src.yielded.IsNil() {
+		c.createStore(src.yielded, flags.yielded, i1)
 	}
 	return src
 }
