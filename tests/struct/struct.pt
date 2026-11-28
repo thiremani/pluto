@@ -11,3 +11,19 @@ r = Person
 out, tag = Copy(current)
     out = current
     tag = out.name
+
+# p up to n = 5, q from n = 6 on.
+out = Pick(n)
+    out = p
+    out = n > 5 q
+
+out = Label(s)
+    _ = s
+    out = p
+
+# A one-row table whose name holds a formatted string.
+out = Row(n)
+    out = [
+      : name
+        "row-n"
+    ]

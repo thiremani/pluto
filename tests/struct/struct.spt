@@ -14,3 +14,59 @@ p, 99
 # caller must not free them.
 copied, copiedTag = Copy(p)
 copied.name, copiedTag
+
+# A range under a field read's receiver drives the read, which keeps the
+# last element's field.
+i = 0:9
+a = Pick(i).age
+"a: -a"
+
+# An operation over the read iterates it too.
+d = Pick(i).age + 0
+"d: -d"
+
+# So does a range a format width in the receiver names.
+k = 1:4
+n = 1
+e = Label("-n%(-k)d").age
+"e: -e"
+
+# A collector over the read gathers each element's field.
+c = [Pick(0:9).age]
+c
+
+# A column read off a ranged call is the last call's column.
+t = Row(i).name
+"t: -t"
+
+# A read that fails in one element keeps the previous element's field.
+v = [1 7 3]
+j = 0:5
+o = Pick(v[j]).age
+"o: -o"
+
+# A collector in the receiver collects its own range once, before the read
+# iterates.
+w = Pick([j][2] + j).age
+"w: -w"
+
+# A range with no element leaves the destination as it was.
+none = 0:0
+kept = 5
+kept = Pick(none).age
+"kept: -kept"
+
+# Each element's read sees the destination as the previous one left it.
+run = 0
+two = 0:2
+run = Pick(run + two).age
+"run: -run"
+
+# A failed condition in the receiver's argument skips that element: the
+# elements after 6 fail.
+g = Pick((9:0:-1) > 5).age
+"g: -g"
+
+# A receiver gated with && iterates a range literal in its call.
+h = (n > 0 && Pick(0:9)).age
+"h: -h"

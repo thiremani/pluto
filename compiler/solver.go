@@ -116,7 +116,7 @@ func (info *ExprInfo) HasCondExpr() bool {
 // HasRangeDrivers reports whether a range drives the expression. HandleRanges
 // records in Ranges, once the root is typed, every driver under a node it
 // visits, a format width's included; HasRanges, which typing sets, also marks
-// one where it does not go: under a dot, or in a block literal's cells.
+// one where it does not go: in a block literal's cells.
 func (info *ExprInfo) HasRangeDrivers() bool {
 	return info.HasRanges || len(info.Ranges) > 0
 }
@@ -324,6 +324,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandleInfixRanges(t)
 	case *ast.PrefixExpression:
 		return ts.HandlePrefixRanges(t)
+	case *ast.DotExpression:
+		return ts.HandleDotRanges(t)
 	case *ast.CallExpression:
 		return ts.HandleCallRanges(t)
 	case *ast.Identifier:
@@ -499,6 +501,28 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 	}
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+	info.Ranges = ranges
+	info.Rewrite = rew
+	return
+}
+
+// HandleDotRanges walks a field read's receiver as HandlePrefixRanges walks
+// its operand: the receiver's ranges drive the read.
+func (ts *TypeSolver) HandleDotRanges(dot *ast.DotExpression) (ranges []*RangeInfo, rew ast.Expression) {
+	ranges, left := ts.HandleRanges(dot.Left)
+	info := ts.ExprCache[key(ts.FuncNameMangled, dot)]
+
+	rew = dot
+	if left != dot.Left {
+		cp := *dot
+		cp.Left = left
+		rew = &cp
+		ts.ExprCache[key(ts.FuncNameMangled, rew)] = &ExprInfo{
+			OutTypes: append([]Type(nil), info.OutTypes...),
+			ExprLen:  info.ExprLen,
+		}
+	}
+
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
@@ -2176,7 +2200,7 @@ func (ts *TypeSolver) validateTestedAnds(expr ast.Expression, tested bool) {
 // in it, the only range that can drive it: a collector consumes its own, and
 // range discovery does not enter a block literal's cells. HasRanges marks such
 // a read, but marks one a format width names only where HandleRanges walks:
-// not under a dot, nor in a block literal's cell, where expr itself can sit.
+// not in a block literal's cell, where expr itself can sit.
 func (ts *TypeSolver) readsRange(expr ast.Expression) bool {
 	if ts.ExprCache[key(ts.FuncNameMangled, expr)].HasRanges {
 		return true

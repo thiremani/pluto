@@ -1577,6 +1577,27 @@ x`
 	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for staged conditional local range IR")
 }
 
+// A field read's loop versions on its rewritten receiver, whose index reads
+// the range literal's iterator.
+func TestAffineDotReceiverUsesVersionedLoop(t *testing.T) {
+	code := `p = Person
+  : age
+    28
+
+out = Pick(n)
+    _ = n
+    out = p
+`
+	script := `arr = [10 20 30 40 50]
+x = Pick(arr[0:4]).age
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_dot_emit", code, script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in dot receiver IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for dot receiver IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for dot receiver IR")
+}
+
 func TestAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
 	code := `out = pick(arr, i)
     t = arr[i + 1]

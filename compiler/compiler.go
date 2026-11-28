@@ -1463,7 +1463,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.ArrayRangeExpression:
 		return c.compileArrayRangeExpression(e, dest)
 	case *ast.DotExpression:
-		return c.compileDotExpression(e)
+		return c.compileDotExpression(e, dest)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -1666,18 +1666,78 @@ func (c *Compiler) compileStringLiteralExpression(lit *ast.StringLiteral, dest [
 	return c.loadOutputValues(outputs, "format_range_final")
 }
 
-func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
-	leftSym := c.compileExpression(expr.Left, nil)[0]
-	leftSym = c.derefIfPointer(leftSym, "dot_left")
+func (c *Compiler) compileDotExpression(expr *ast.DotExpression, dest []*ast.Identifier) []*Symbol {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return c.compileDotRanges(info, dest)
+	}
+	// With its ranges bound, the dot compiles as written, as the enclosing
+	// extraction keyed it; each receiver node reads its own rewrite.
+	return c.compileDotBasic(expr)
+}
 
+// compileDotRanges reads the field once per driver yield and retains the
+// last read, as compilePrefixRanges does for its operation.
+func (c *Compiler) compileDotRanges(info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
+	output := outputs[0]
+
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.DotExpression), info.Ranges, nil, nil, func(prepared *ast.DotExpression) {
+		c.pushBoundsGuard("dot_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
+		c.compileCondExprValue(prepared, func() {
+			leftSym := c.derefIfPointer(c.compileExpression(prepared.Left, nil)[0], "dot_left")
+			c.compileRangeDotSlot(prepared, leftSym, output)
+
+			// Range-loop receiver is temporary per iteration (except identifiers).
+			c.freeTemporary(prepared.Left, []*Symbol{leftSym})
+		})
+	})
+
+	return c.loadOutputValues(outputs, "final")
+}
+
+func (c *Compiler) compileRangeDotSlot(expr *ast.DotExpression, leftSym *Symbol, output *Symbol) {
+	run := func() {
+		field := c.compileFieldRead(expr, leftSym)
+		c.storeRangedOutput(output, field.Val, field.Type)
+	}
+
+	if !c.withStmtBoundsGuard(
+		"dot_bounds_ok",
+		"dot_bounds_run",
+		"dot_bounds_skip",
+		"dot_bounds_cont",
+		run,
+		nil,
+	) {
+		run()
+	}
+}
+
+func (c *Compiler) compileDotBasic(expr *ast.DotExpression) []*Symbol {
+	leftSym := c.derefIfPointer(c.compileExpression(expr.Left, nil)[0], "dot_left")
+	field := c.compileFieldRead(expr, leftSym)
+	c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})
+	return []*Symbol{field}
+}
+
+// compileFieldRead reads expr's field off its compiled receiver. A column is
+// copied, so the receiver stays the caller's to release.
+func (c *Compiler) compileFieldRead(expr *ast.DotExpression, leftSym *Symbol) *Symbol {
 	switch leftType := leftSym.Type.(type) {
 	case Struct:
 		for i, field := range leftType.Fields {
 			if field.Name == expr.Field {
-				return []*Symbol{{
+				return &Symbol{
 					Type: field.Type,
 					Val:  c.builder.CreateExtractValue(leftSym.Val, i, expr.Field),
-				}}
+				}
 			}
 		}
 		c.Errors = append(c.Errors, &token.CompileError{
@@ -1697,13 +1757,10 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 				}
 			}
 
-			columnValue := c.copyArray(c.tableColumnValue(leftSym.Val, i), column.ElemType)
-			c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})
-
-			return []*Symbol{{
+			return &Symbol{
 				Type: columnType,
-				Val:  columnValue,
-			}}
+				Val:  c.copyArray(c.tableColumnValue(leftSym.Val, i), column.ElemType),
+			}
 		}
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: expr.Token,
@@ -1715,7 +1772,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 			Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftSym.Type.String()),
 		})
 	}
-	return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
+	return &Symbol{Type: I64, Val: c.ConstI64(0)}
 }
 
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
